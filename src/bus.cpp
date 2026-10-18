@@ -3,6 +3,34 @@
 #include <sstream>
 
 namespace oldbox {
+namespace {
+// Debug watch tracing is line-capped: an unbounded log once filled /tmp.
+u64 g_watch_lines = 0;
+constexpr u64 kWatchLineLimit = 2'000'000;
+bool watch_on() {
+    static const bool enabled = std::getenv("OLDBOX_WATCH") != nullptr;
+    return enabled;
+}
+bool watch_addr(u32 addr) {
+    static const bool only_vga = std::getenv("OLDBOX_WATCH_VGA") != nullptr;
+    if (only_vga)
+        return (addr >= 0xa0000 && addr < 0xc0000) || (addr >= 0xe0000000 && addr < 0xe0200000);
+    return (addr >= 0x10000 && addr < 0x30000) || (addr >= 0x400 && addr < 0x500) ||
+           (addr >= 0xc8000 && addr < 0x100000) || (addr >= 0xa0000 && addr < 0xc0000) ||
+           (addr >= 0xe0000000 && addr < 0xe0200000);
+}
+bool watch_line() {
+    if (g_watch_lines >= kWatchLineLimit) {
+        if (g_watch_lines == kWatchLineLimit) {
+            std::fprintf(stderr, "WATCH line limit reached; tracing suppressed\n");
+            ++g_watch_lines;
+        }
+        return false;
+    }
+    ++g_watch_lines;
+    return true;
+}
+} // namespace
 
 Bus::Bus(u32 ram_size) : ram_size_(ram_size), ram_(ram_size, 0) {
     io_.assign(65536, nullptr);
@@ -84,8 +112,7 @@ u8 Bus::read8(u32 addr) {
         if (r->device) v = r->device->read8(addr - r->base);
         else v = r->ram[addr - r->base];
     } else v = 0xff;
-    if (getenv("OLDBOX_WATCH") && ((addr >= 0x10000 && addr < 0x30000) ||
-                                   (addr >= 0x400 && addr < 0x500))) {
+    if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x read8 %05x = %02x\n", watch_cs_, watch_ip_, addr, v);
     }
     return v;
@@ -105,8 +132,7 @@ u32 Bus::read32(u32 addr) {
         if (r->device) v = r->device->read32(addr - r->base);
         else v = le32(r->ram + addr - r->base);
     } else v = u32(read16(addr)) | (u32(read16(addr + 2)) << 16);
-    if (getenv("OLDBOX_WATCH") && ((addr >= 0x10000 && addr < 0x30000) ||
-                                   (addr >= 0x400 && addr < 0x500))) {
+    if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x read32 %05x = %08x\n", watch_cs_, watch_ip_, addr, v);
     }
     return v;
@@ -115,9 +141,7 @@ u64 Bus::read64(u32 addr) { return u64(read32(addr)) | (u64(read32(addr + 4)) <<
 
 void Bus::write8(u32 addr, u8 value) {
     if (!a20_) addr &= ~(1u << 20);
-    if (getenv("OLDBOX_WATCH") && ((addr >= 0x10000 && addr < 0x30000) ||
-                                   (addr >= 0x400 && addr < 0x500) ||
-                                   (addr >= 0xc8000 && addr < 0x100000))) {
+    if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write8 %05x = %02x\n", watch_cs_, watch_ip_, addr, value);
     }
     if (auto* r = find_region(addr)) {
@@ -128,8 +152,7 @@ void Bus::write8(u32 addr, u8 value) {
 }
 void Bus::write16(u32 addr, u16 value) {
     if (!a20_) addr &= ~(1u << 20);
-    if (getenv("OLDBOX_WATCH") && ((addr >= 0x10000 && addr < 0x30000) ||
-                                   (addr >= 0x400 && addr < 0x500))) {
+    if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write16 %05x = %04x\n", watch_cs_, watch_ip_, addr, value);
     }
     if (auto* r = find_region(addr, 2)) {
@@ -141,7 +164,7 @@ void Bus::write16(u32 addr, u16 value) {
 }
 void Bus::write32(u32 addr, u32 value) {
     if (!a20_) addr &= ~(1u << 20);
-    if (getenv("OLDBOX_WATCH") && addr >= 0x10000 && addr < 0x30000) {
+    if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write32 %05x = %08x\n", watch_cs_, watch_ip_, addr, value);
     }
     if (auto* r = find_region(addr, 4)) {

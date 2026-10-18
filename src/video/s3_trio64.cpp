@@ -6,6 +6,8 @@
 #include "oldbox/s3_trio64.hpp"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -827,6 +829,10 @@ void S3Trio64::update_timing() const {
         m.bpp = 4;
     }
     m.planar = !m.text && m.bpp == 4;
+    if (std::getenv("OLDBOX_S3_TRACE"))
+        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x\n",
+                     int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.chain4),
+                     pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67]);
 
     const u32 sw = display_start_word();
     m.start = (m.enhanced && !m.planar && !m.text) ? sw * 8u : sw * 2u;
@@ -1197,6 +1203,13 @@ void S3Trio64::render_hw_cursor() {
 }
 
 void S3Trio64::render_frame() {
+    if (std::getenv("OLDBOX_S3_TRACE")) {
+        static u64 n = 0;
+        if ((++n % 60) == 1)
+            std::fprintf(stderr, "S3 render: text=%d %dx%d bpp=%d planar=%d start=%05x pitch=%d cols=%d rows=%d\n",
+                         int(mode_.text), mode_.hde, mode_.vde, mode_.bpp, int(mode_.planar),
+                         mode_.start, mode_.pitch, mode_.cols, mode_.rows);
+    }
     update_timing();
     const int w = width_, h = height_;
     frame_.resize(std::size_t(w) * std::size_t(h));
