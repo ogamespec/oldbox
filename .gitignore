@@ -1,0 +1,15 @@
+/build/
+/build-prebuilt/
+/assets/bios/
+/assets/vga/
+/assets/hdd/
+/assets/floppy/
+/assets/cdrom/
+*.img
+*.raw
+*.bin
+*.rom
+!src/bios/*.inc
+compile_commands.json
+
+*.ppm

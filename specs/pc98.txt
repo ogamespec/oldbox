@@ -1,0 +1,8 @@
+Pentium II 233MHz, 333MHz
+AGP
+3dfx Voodoo
+Diamond Monster 3D
+Creative AWE 64 Gold
+32-64 MB SDRAM
+i440BX Chipset
+S3 Trio64
