@@ -549,12 +549,21 @@ TEST(cpu_imul_three_operand_destination_and_flags) {
                             h.set_r(src_reg, a);
                         }
                         const u8 modrm = u8(0xC0u | (u32(dest) << 3) | u32(src_reg));
-                        // 6Bh takes an imm8, 69h an imm16/imm32; both are
+                        // 6Bh takes an imm8, 69h an immediate of the
+                        // operand size (imm16 with the 66h prefix); both are
                         // sign-extended to the operand size.
                         const i32 imm_eff = imm32 ? (size == 2 ? i32(i16(u16(imm))) : imm)
                                                   : i32(i8(u8(imm)));
-                        if (imm32) { h.emit(0x69); h.emit(modrm); h.emit32(u32(imm_eff)); }
-                        else { h.emit(0x6b); h.emit(modrm); h.emit(u8(imm_eff)); }
+                        if (imm32) {
+                            h.emit(0x69);
+                            h.emit(modrm);
+                            if (size == 2) h.emit16(u16(imm_eff));
+                            else h.emit32(u32(imm_eff));
+                        } else {
+                            h.emit(0x6b);
+                            h.emit(modrm);
+                            h.emit(u8(imm_eff));
+                        }
                         h.halt(); h.run(4);
                         const i64 product = i64(i32(a)) * i64(imm_eff);
                         const u32 expected = u32(product) & mask;
@@ -562,7 +571,7 @@ TEST(cpu_imul_three_operand_destination_and_flags) {
                         CHECK_EQ(got, expected);
                         // Every other register must be untouched.
                         for (int i = 0; i < 8; ++i) {
-                            if (i == dest) continue;
+                            if (i == dest || i == src_reg) continue;
                             const u32 other = size == 2 ? h.r16(i) : h.r(i);
                             CHECK_EQ(other, sentinel);
                         }
@@ -639,13 +648,12 @@ TEST(cpu_shrd_shld_imm8_and_memory) {
     {
         CpuHarness h;
         h.set_r(6, 0x0007FFFFu); // esi
-        h.set_r(7, 0x00010000u); // edi
+        h.set_r(7, 0xABCD1234u); // edi: low 12 bits shift into esi bits 31..20
         h.emit(0x0f); h.emit(0xac); h.emit(0xfe); h.emit(0x0c);
         h.halt(); h.run(3);
-        // esi = (0x7FFFF >> 12) | (0x10000 << 20) = 0x7F | 0x10000000
-        CHECK_EQ(h.r(6), 0x1000007Fu);
-        CHECK_EQ(h.flag(CF), 0u); // bit 11 of the old esi was 1
-        // hmm: bit 11 of 0x7FFFF is 1 -> CF = 1
+        // esi = (0x7FFFF >> 12) | ((0xABCD1234 & 0xFFF) << 20) = 0x7F | 0x23400000
+        CHECK_EQ(h.r(6), 0x2340007Fu);
+        CHECK_EQ(h.flag(CF), 1u); // last bit shifted out: bit 11 of 0x7FFFF
     }
     // Memory destination form: shrd dword [0x2000], eax, 4.
     {
@@ -654,7 +662,7 @@ TEST(cpu_shrd_shld_imm8_and_memory) {
         h.set_r(0, 0x0000F000u);
         h.emit(0x0f); h.emit(0xac); h.emit(0x05); h.emit32(0x2000); h.emit(0x04);
         h.halt(); h.run(3);
-        // (0xABCD1234 >> 4) | (0xF000 << 28) = 0x0ABCD123 | 0x00000000 = 0x0ABCD123
+        // (0xABCD1234 >> 4) | ((0xF000 & 0xF) << 28) = 0x0ABCD123 | 0x00000000
         CHECK_EQ(h.bus.read32(0x2000), 0x0ABCD123u);
     }
 }
@@ -689,10 +697,10 @@ TEST(cpu_cwde_cdq_sign_extension) {
 // Scaled-index addressing: [base + index*scale + disp] as used heavily by
 // the memtest86+ map walk ([edx+ecx*8+0xc] etc.).
 TEST(cpu_sib_scaled_addressing) {
-    // mov eax, [edx + ecx*8 + 0xC] with edx=0x2000, ecx=2 -> [0x2014]
+    // mov eax, [edx + ecx*8 + 0xC] with edx=0x2000, ecx=2 -> 0x201C
     {
         CpuHarness h;
-        h.bus.write32(0x2014, 0x13579BDFu);
+        h.bus.write32(0x201C, 0x13579BDFu);
         h.set_r(2, 0x2000); h.set_r(1, 2);
         h.emit(0x8b); h.emit(0x44); h.emit(0xca); h.emit(0x0c);
         h.halt(); h.run(3);

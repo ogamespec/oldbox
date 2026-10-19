@@ -1261,6 +1261,10 @@ u32 Cpu::ioport_read(int size) {
     const u16 port = u16(state_.gpr[2]);
     check_io_privilege(port, u32(size));
     state_.io_reads++;
+    // Port I/O reaches the ISA bus through the PIIX4 bridge; a cycle to an
+    // ISA device takes roughly a microsecond even on a fast host CPU, which
+    // guest timing loops (AdLib detection waits, BIOS POST polls) rely on.
+    cycles_ += 16 + 8 * size;
     if (size == 1) return bus_.io_read8(port);
     if (size == 2) return bus_.io_read16(port);
     return bus_.io_read32(port);
@@ -1269,6 +1273,7 @@ void Cpu::ioport_write(int size, u32 v) {
     const u16 port = u16(state_.gpr[2]);
     check_io_privilege(port, u32(size));
     state_.io_writes++;
+    cycles_ += 16 + 8 * size;
     if (size == 1) bus_.io_write8(port, u8(v));
     else if (size == 2) bus_.io_write16(port, u16(v));
     else bus_.io_write32(port, v);
@@ -1741,10 +1746,10 @@ void Cpu::execute_one() {
     case 0xe1: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0 && get_flag(ZF)) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
     case 0xe2: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
     case 0xe3: { const i8 d = i8(fetch8()); const u32 c = addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu); if (c == 0) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
-    case 0xe4: { const u16 p = fetch8(); check_io_privilege(p, 1); set_reg8(0, bus_.io_read8(p)); break; }
-    case 0xe5: { const u16 port = fetch8(); const int sz = opsize32_ ? 4 : 2; check_io_privilege(port, u32(sz)); if (sz == 4) set_reg(0, bus_.io_read32(port)); else set_reg16(0, bus_.io_read16(port)); break; }
-    case 0xe6: { const u16 p = fetch8(); check_io_privilege(p, 1); bus_.io_write8(p, reg8(0)); break; }
-    case 0xe7: { const u16 port = fetch8(); const int sz = opsize32_ ? 4 : 2; check_io_privilege(port, u32(sz)); if (sz == 4) bus_.io_write32(port, state_.gpr[0]); else bus_.io_write16(port, reg16(0)); break; }
+    case 0xe4: { const u16 p = fetch8(); check_io_privilege(p, 1); set_reg8(0, bus_.io_read8(p)); cycles_ += 24; break; }
+    case 0xe5: { const u16 port = fetch8(); const int sz = opsize32_ ? 4 : 2; check_io_privilege(port, u32(sz)); if (sz == 4) set_reg(0, bus_.io_read32(port)); else set_reg16(0, bus_.io_read16(port)); cycles_ += 16 + 8 * sz; break; }
+    case 0xe6: { const u16 p = fetch8(); check_io_privilege(p, 1); bus_.io_write8(p, reg8(0)); cycles_ += 24; break; }
+    case 0xe7: { const u16 port = fetch8(); const int sz = opsize32_ ? 4 : 2; check_io_privilege(port, u32(sz)); if (sz == 4) bus_.io_write32(port, state_.gpr[0]); else bus_.io_write16(port, reg16(0)); cycles_ += 16 + 8 * sz; break; }
     case 0xe8: { const i32 rel = fetch_simm(); const u32 target = near_ip(state_.eip + u32(rel)); trace_control("CALL", target, stack_pointer()); push_value(state_.eip, opsize()); state_.eip = target; break; }
     case 0xe9: { const i32 rel = fetch_simm(); const u32 target = near_ip(state_.eip + u32(rel)); trace_control("JMP", target); state_.eip = target; break; }
     case 0xea: { const u32 off = fetch_imm(); const u16 sel = u16(fetch16()); trace_control("JMPF", off); do_far_jump(sel, off); break; }

@@ -978,9 +978,13 @@ u8 S3Trio64::legacy_read(u32 off) const {
         return vram_[addr];
     };
     if (seq_[0x04] & 0x08) {
-        const u32 group = eff & ~3u;
-        for (int p = 0; p < 4; ++p) latch_[std::size_t(p)] = read_plane(p, group);
-        return read_plane(int(eff & 3), eff);
+        // Chain-4: CPU address bits A1-A0 select the plane and the rest is
+        // the byte address inside the plane.  The VRAM image is stored
+        // interleaved (one CPU byte per element), so the read is the direct
+        // byte and the latch captures the four bytes of the group.
+        const u32 base = cpu_base() + (eff & ~3u);
+        for (int p = 0; p < 4; ++p) latch_[std::size_t(p)] = vram_[(base + u32(p)) & mask];
+        return vram_[(cpu_base() + eff) & mask];
     }
     const bool odd_even = !(seq_[0x04] & 0x0C);
     const u32 poff = odd_even ? ((eff >> 1) & 0x7FFFu) : (eff & 0xFFFFu);

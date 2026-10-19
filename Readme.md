@@ -106,7 +106,12 @@ F1 захватывает/отпускает мышь, F11 — fullscreen, F12 �
   mip/bilinear, LFB и swapbuffer. Это именно растровый софтверный конвейер,
   без Glide/OpenGL и без перехвата вызовов.
 - AWE64: reset/version DSP, mixer, single/auto-init DMA, MPU-401 UART,
-  EMU8000 (32 голоса), OPL3 fallback, SDL audio.
+  EMU8000 (32 голоса), OPL3 fallback с таймерами/статус-регистром OPL2
+  (YM3812: период (256−N)×80.8 мкс, RST/ST, флаги FT1/FT2/IRQ), SDL audio.
+- 8042: PS/2-мышь по IBM PS/2 HITR (статус 64h, командный байт, команды
+  контроллера и устройства, 3-байтовые пакеты, IRQ12); в гостевой FreeDOS
+  на `freedos-games.img` грузится штатный Microsoft `MMOUSE.COM`
+  (INT 33h), собирается `tools/make_games_floppy.py`.
 - ATA/ATAPI и FDC: PIO-команды, IDENTIFY, ISO9660 CD, 1.44M floppy + DMA2.
 - I/O: полная 64K-карта портов, 8/16/32-битные доступы, разбиение при
   пересечении границ устройств, IOPL/CPL и I/O permission bitmap в TSS.

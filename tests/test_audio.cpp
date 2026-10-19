@@ -168,6 +168,54 @@ TEST(audio_emu8000_register_interface) {
     CHECK_EQ(emu.read_data(), 0x8000);
 }
 
+TEST(audio_opl3_adlib_detection_sequence) {
+    // The exact probe Mindscape Megafortress runs at startup (identical in
+    // CHKSYS.EXE and MEGA.EXE): after masking and resetting the timers the
+    // status must read 00h; after programming timer 1 to 0FFh, starting it
+    // and waiting about half a millisecond it must read C0h (IRQ + FT1).
+    // 0FFh overflows after a single 80.8 us tick, i.e. (256 - 0FFh) ticks.
+    Rig rig;
+    auto fm_write = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    fm_write(0x01, 0x00);
+    fm_write(0x04, 0x60); // mask timer 1 and 2
+    fm_write(0x04, 0x80); // reset flags
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+
+    fm_write(0x02, 0xFF); // timer 1 preset: one tick to overflow
+    fm_write(0x04, 0x21); // unmask + start timer 1
+    rig.card.tick(2000);  // 2000 cycles at 233 MHz = 8.6 us: no overflow yet
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+    rig.card.tick(20000); // + 86 us: the single 80.8 us tick has fired
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+
+    // Timer 2 uses the 323.1 us tick: 0FEh overflows after two ticks.
+    fm_write(0x04, 0x80); // reset flags again
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+    fm_write(0x03, 0xFE);
+    fm_write(0x04, 0x22);
+    rig.card.tick(76000); // 326 us: only one tick elapsed so far
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+    rig.card.tick(76000); // 652 us: two ticks elapsed
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xA0); // IRQ + FT2
+
+    // Stopping a timer freezes its counter; restarting reloads the preset.
+    fm_write(0x04, 0x80);
+    fm_write(0x02, 0xFF);
+    fm_write(0x04, 0x21);
+    rig.card.tick(20000);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+    fm_write(0x04, 0x20); // stop timer 1
+    fm_write(0x04, 0x80);
+    rig.card.tick(100000);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00); // stopped: no overflow
+    fm_write(0x04, 0x21); // restart
+    rig.card.tick(20000);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+}
+
 TEST(audio_opl3_note_is_audible) {
     Rig rig;
     auto fm_write = [&](u8 reg, u8 value) {

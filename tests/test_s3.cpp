@@ -315,6 +315,15 @@ TEST(s3_mode13h) {
     f.bus.write8(0xA0000 + 20 * 320 + 10, 5);
     CHECK_EQ(f.s3.read_vram8(20 * 320 + 10), 5);
     CHECK_EQ(f.s3.pixel(10, 20), 0x00FF0000u);
+    // Chain-4 reads through the aperture return the same byte that was
+    // written: CPU address bits A1-A0 select the plane, the rest address
+    // the byte inside the plane.
+    f.bus.write8(0xA0000 + 20 * 320 + 10, 6);
+    CHECK_EQ(f.bus.read8(0xA0000 + 20 * 320 + 10), 6);
+    f.bus.write8(0xA0000 + 20 * 320 + 11, 5);
+    CHECK_EQ(f.bus.read8(0xA0000 + 20 * 320 + 10), 6);
+    CHECK_EQ(f.bus.read8(0xA0000 + 20 * 320 + 11), 5);
+    f.bus.write8(0xA0000 + 20 * 320 + 10, 5);
     f.s3.put_pixel(11, 20, 0x0000FF);
     CHECK_EQ(f.s3.pixel(11, 20), 0x0000FFu);
     f.bus.write16(0xA0000 + 30 * 320 + 20, 0x0605);

@@ -23,6 +23,7 @@ set "FLOPPY=assets\floppy\freedos1440.img"
 set "GAMEFLOPPY=assets\floppy\freedos-games.img"
 set "GAMEDISK=assets\floppy\Megafortress_3.5_Disk.IMA"
 set "MEMTEST=assets\floppy\MEMTEST.IMG"
+set "DD2FLOPPY=assets\floppy\dd2.img"
 set "HDD=assets\hdd\oldbox-hdd-500mb.img"
 
 echo ==============================================================
@@ -38,8 +39,9 @@ echo       ^(install/run the game: B:INSTALL^)
 echo   [6] Boot the Memtest86+ floppy
 echo   [7] Headless smoke test 40 s, print text screen to console
 echo   [8] Headless: auto-enter Setup and save setup.ppm
+echo   [9] Boot Dangerous Dave 2 (FreeDOS + DD2 on one floppy)
 echo.
-set /p CHOICE=Choice [1-8]: 
+set /p CHOICE=Choice [1-9]: 
 
 if "%CHOICE%"=="1" goto :win
 if "%CHOICE%"=="2" goto :win_del
@@ -49,6 +51,7 @@ if "%CHOICE%"=="5" goto :win_game
 if "%CHOICE%"=="6" goto :win_memtest
 if "%CHOICE%"=="7" goto :headless
 if "%CHOICE%"=="8" goto :headless_shot
+if "%CHOICE%"=="9" goto :win_dd2
 echo Unknown choice.
 pause
 exit /b 1
@@ -80,6 +83,20 @@ goto :eof
 
 :win_memtest
 "%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%MEMTEST%"
+goto :eof
+
+:win_dd2
+echo.
+echo   Boots A: = FreeDOS + Dangerous Dave 2, AUTOEXEC starts DAVE2.EXE.
+echo   The game files (C:\Games\DD2) live on the same floppy in A:\.
+echo.
+if not exist "%DD2FLOPPY%" (
+    echo [ERROR] %DD2FLOPPY% not found. Build it with:
+    echo         python tools/make_dd2_floppy.py
+    pause
+    exit /b 1
+)
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%DD2FLOPPY%"
 goto :eof
 
 :headless

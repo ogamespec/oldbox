@@ -72,6 +72,22 @@ def read_file(img: bytearray, fat: bytearray, root_start: int, root_entries: int
     raise SystemExit(f"base image does not contain {name!r}")
 
 
+def dos83_name(name: str, path: Path) -> bytes:
+    """Validate a DOS 8.3 name and return its 11-byte padded form."""
+    if "." in name:
+        base, ext = name.rsplit(".", 1)
+    else:
+        base, ext = name, ""
+    base = base.upper()
+    ext = ext.upper()
+    if not base or len(base) > 8 or len(ext) > 3:
+        raise SystemExit(f"{path}: {name!r} does not fit DOS 8.3")
+    for part in (base, ext):
+        if any(not (c.isalnum() or c in "_-$~!#%&'()@^`{}") for c in part):
+            raise SystemExit(f"{path}: {name!r} is not a valid DOS 8.3 name")
+    return base.encode().ljust(8) + ext.encode().ljust(3)
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", type=Path, default=Path("assets/floppy/awardflash1440.img"))
@@ -79,6 +95,12 @@ def main() -> None:
     ap.add_argument("--autoexec", type=Path, default=None,
                     help="optional AUTOEXEC.BAT to install (default: @ECHO OFF + PROMPT)")
     ap.add_argument("--no-autoexec", action="store_true")
+    ap.add_argument("--dir", action="append", default=[], metavar="PATH",
+                    help="copy every file from this directory into the image "
+                         "root, keeping its 8.3 name (repeatable)")
+    ap.add_argument("--file", action="append", default=[], metavar="NAME=PATH",
+                    help="copy an additional file into the image root (repeatable); "
+                         "NAME is the 8.3 name without a dot, e.g. MOUSE=COM")
     args = ap.parse_args()
 
     base = bytearray(args.base.read_bytes())
@@ -118,6 +140,22 @@ def main() -> None:
         return chain[0]
 
     files = [(b"KERNEL  SYS", kernel), (b"COMMAND COM", command)]
+    for spec in args.file:
+        if "=" not in spec:
+            raise SystemExit("--file expects NAME=PATH")
+        name, path = spec.split("=", 1)
+        if len(name) > 8 or not name or any(not (c.isalnum() or c in "_-") for c in name):
+            raise SystemExit(f"bad 8.3 name {name!r}")
+        name_b = name.encode().upper().ljust(8)
+        ext = Path(path).suffix.lstrip(".").upper().encode()
+        if len(ext) > 3:
+            raise SystemExit(f"bad extension for {path}")
+        files.append((name_b + ext.ljust(3), Path(path).read_bytes()))
+    for directory in args.dir:
+        for path in sorted(p for p in Path(directory).iterdir() if p.is_file()):
+            if path.name.upper() in ("KERNEL.SYS", "COMMAND.COM", "AUTOEXEC.BAT"):
+                continue
+            files.append((dos83_name(path.name, path), path.read_bytes()))
     if not args.no_autoexec:
         autoexec = args.autoexec.read_bytes() if args.autoexec else AUTOEXEC
         files.append((b"AUTOEXECBAT", autoexec))

@@ -282,6 +282,25 @@ private:
     std::array<FmChannel, 18> fm_ch_{};
     u32 fm_noise_ = 0x1f123bb5u;
 
+    // OPL2/OPL3 timers (YM3812/YMF262 register 02h/03h/04h).  The counter
+    // counts UP from the preset with an 80.8 us (timer 1) / 323.1 us
+    // (timer 2) tick; on wrap the corresponding flag in the status register
+    // is set and the preset is reloaded, so the period between wraps is
+    // (256 - preset) ticks.  RST (bit 7 of register 04h) clears the flags;
+    // ST1/ST2 start the timer and load the preset, and when clear the
+    // counter simply stops.  The mask bits gate only the interrupt line,
+    // never the flags.
+    u8 fm_t1_count_ = 0, fm_t2_count_ = 0;
+    bool fm_t1_running_ = false, fm_t2_running_ = false;
+    bool fm_t1_start_ = false, fm_t2_start_ = false;
+    u8 fm_status_ = 0; // D7 IRQ (T1|T2), D6 FT1, D5 FT2
+    u64 fm_t1_acc_ = 0, fm_t2_acc_ = 0;
+    u64 fm_t1_period_ = 0, fm_t2_period_ = 0; // host cycles per timer tick
+
+    void fm_tick_timers(u64 cpu_cycles);
+    void fm_write_timer_control(u8 value);
+    [[nodiscard]] u8 fm_status_read() const;
+
     // Internal 44100 Hz mix ring and resampler.
     std::array<i16, mix_ring_size * 2> mix_ring_{};
     u64 mix_generated_ = 0;

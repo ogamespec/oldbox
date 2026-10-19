@@ -67,3 +67,40 @@ TEST(freedos_boots_to_command_prompt_with_reference_bios) {
     }
     CHECK(text.find("FreeDOS kernel") != std::string::npos);
 }
+
+// The SDL frontend drives the machine with run_frame() (fixed cycles per
+// video frame) while the headless/CLI paths use run_slice().  Both must
+// advance the CPU and the ticked devices identically: run_frame() used to
+// drop the sub-512-cycle remainder of the device ticks at every frame
+// boundary, so PIT/RTC/FDC/ATA slowly fell behind the CPU clock and the
+// Award POST eventually derailed into the compressed BIOS module.
+TEST(run_frame_and_run_slice_advance_identically) {
+    const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
+    if (bios.empty()) {
+        std::printf("[ SKIP ] run_frame integration: assets/bios/EP-ZXA.bin missing\n");
+        return;
+    }
+    SystemConfig cfg;
+    cfg.firmware.bios_path = bios;
+    cfg.headless = true;
+    cfg.no_sdl_audio = true;
+    cfg.audio.enabled = false;
+    cfg.video.voodoo_enabled = false;
+
+    Machine frame_machine(cfg);
+    Machine slice_machine(cfg);
+    frame_machine.reset();
+    slice_machine.reset();
+    for (int i = 0; i < 420; ++i) {
+        frame_machine.run_frame();
+        slice_machine.run_slice(1.0 / 60.0);
+    }
+    const CpuState& a = frame_machine.cpu().state();
+    const CpuState& b = slice_machine.cpu().state();
+    CHECK_EQ(a.cycles, b.cycles);
+    CHECK_EQ(frame_machine.cpu().instruction_count(), slice_machine.cpu().instruction_count());
+    CHECK_EQ(u32(a.seg[1].selector), u32(b.seg[1].selector));
+    CHECK_EQ(a.eip, b.eip);
+    // Both paths must also present the same text screen.
+    CHECK_EQ(screen_text(frame_machine), screen_text(slice_machine));
+}

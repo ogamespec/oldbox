@@ -424,6 +424,16 @@ void Machine::run_frame() {
         }
         if (cpu_.state().shutdown) break;
     }
+    const u64 d = cpu_.state().cycles - last_tick;
+    if (d) {
+        piix4_.tick(d);
+        s3_.tick(d);
+        if (voodoo_) voodoo_->tick(d);
+        ata_.tick(d);
+        floppy_.tick(d);
+        if (apic_) apic_->tick(d);
+        if (audio_) audio_->tick(d);
+    }
     ++frames_;
     last_frame_cycles_ = cpu_.state().cycles;
 }

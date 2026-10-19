@@ -170,6 +170,14 @@ void Awe64::reset() {
     fm_addr_ = 0;
     fm_secondary_ = false;
     fm_noise_ = 0x1f123bb5u;
+    fm_t1_count_ = fm_t2_count_ = 0;
+    fm_t1_running_ = fm_t2_running_ = false;
+    fm_t1_start_ = fm_t2_start_ = false;
+    fm_status_ = 0;
+    fm_t1_acc_ = fm_t2_acc_ = 0;
+    // YM3812/YMF262 timer tick rates: 80.8 us and 323.1 us.
+    fm_t1_period_ = u64(cpu_mhz_) * 808u / 10u;
+    fm_t2_period_ = u64(cpu_mhz_) * 3231u / 10u;
     tick_acc_ = 0;
     mix_ring_.fill(0);
     mix_generated_ = 0;
@@ -709,6 +717,69 @@ void Awe64::fm_write_addr(bool secondary, u8 value) {
     fm_secondary_ = secondary;
 }
 
+void Awe64::fm_tick_timers(u64 cpu_cycles) {
+    // Timer 1: 80.8 us per tick, timer 2: 323.1 us per tick.  The counters
+    // run UP from the preset loaded at start; when a counter wraps past 255
+    // the flag is set and the preset is reloaded, so the flag period is
+    // (256 - preset) ticks.  See the YM3812 datasheet timer section.
+    if (fm_t1_period_) {
+        fm_t1_acc_ += cpu_cycles;
+        while (fm_t1_acc_ >= fm_t1_period_) {
+            fm_t1_acc_ -= fm_t1_period_;
+            if (fm_t1_running_) {
+                ++fm_t1_count_;
+                if (fm_t1_count_ == 0) {
+                    fm_t1_count_ = fm_regs_[0x02];
+                    fm_status_ |= 0x40;
+                }
+            }
+        }
+    }
+    if (fm_t2_period_) {
+        fm_t2_acc_ += cpu_cycles;
+        while (fm_t2_acc_ >= fm_t2_period_) {
+            fm_t2_acc_ -= fm_t2_period_;
+            if (fm_t2_running_) {
+                ++fm_t2_count_;
+                if (fm_t2_count_ == 0) {
+                    fm_t2_count_ = fm_regs_[0x03];
+                    fm_status_ |= 0x20;
+                }
+            }
+        }
+    }
+    if (fm_status_ & 0x60) fm_status_ |= 0x80;
+    else fm_status_ &= ~0x80;
+}
+
+void Awe64::fm_write_timer_control(u8 value) {
+    // D7 RST: clear the timer and IRQ flags; per the datasheet the other
+    // bits are ignored when RST is set.
+    if (value & 0x80) {
+        fm_status_ &= ~0xE0;
+        return;
+    }
+    // ST1/ST2 start on the 0 -> 1 edge and load the preset; a cleared bit
+    // stops the counter where it is.  The mask bits gate only the interrupt
+    // output line, never the flags.
+    if ((value & 0x01) && !fm_t1_start_) {
+        fm_t1_count_ = fm_regs_[0x02];
+        fm_t1_running_ = true;
+    }
+    fm_t1_start_ = (value & 0x01) != 0;
+    if (!fm_t1_start_) fm_t1_running_ = false;
+    if ((value & 0x02) && !fm_t2_start_) {
+        fm_t2_count_ = fm_regs_[0x03];
+        fm_t2_running_ = true;
+    }
+    fm_t2_start_ = (value & 0x02) != 0;
+    if (!fm_t2_start_) fm_t2_running_ = false;
+}
+
+u8 Awe64::fm_status_read() const {
+    return fm_status_ & 0xE0;
+}
+
 void Awe64::fm_refresh_operator(unsigned index) {
     FmOperator& op = fm_ops_[index % 36];
     const float at = 0.002f * std::exp2(15.0f - float(op.ar));
@@ -726,6 +797,15 @@ void Awe64::fm_write_data(bool secondary, u8 value) {
     fm_regs_[index] = value;
     const u8 reg = fm_addr_;
 
+    if (!secondary && (reg == 0x02 || reg == 0x03)) {
+        // Timer presets: stored above; they are loaded when the timer is
+        // (re)started, not immediately.
+        return;
+    }
+    if (!secondary && reg == 0x04) {
+        fm_write_timer_control(value);
+        return;
+    }
     if (reg >= 0x20 && reg <= 0x35) {
         const unsigned local = reg - 0x20;
         if (local < 18) {
@@ -935,6 +1015,7 @@ void Awe64::mix_internal(u32 frames) {
 void Awe64::tick(u64 cpu_cycles) {
     const u64 cycles_per_second = u64(cpu_mhz_) * 1000000ull;
     if (cycles_per_second == 0) return;
+    fm_tick_timers(cpu_cycles);
     tick_acc_ += cpu_cycles;
     const u64 per_sample = std::max<u64>(1, cycles_per_second / 44100ull);
     u64 samples = tick_acc_ / per_sample;
@@ -1020,7 +1101,7 @@ u8 Awe64::io_read8(u16 port) {
         return mpu_rx_pos_ < mpu_rx_.size() ? 0x00 : 0x80;
     }
     if (port_in_range(port, 0x388, 4)) {
-        return (port == 0x388 || port == 0x38a) ? 0x00 : 0xff;
+        return (port == 0x388 || port == 0x38a) ? fm_status_read() : 0xff;
     }
     return 0xff;
 }
