@@ -1573,22 +1573,30 @@ void Cpu::execute_one() {
     }
     case 0x68: push_value(fetch_imm(), opsize()); break;
     case 0x69: {
+        // IMUL r, r/m, imm: the destination is the ModRM reg field, NOT
+        // always EAX.  The memtest86+ loader does "imul edx, edx, 0x14"
+        // whose result must land in EDX.
         const ModRm m = decode_modrm(opsize());
         const u32 a = read_rm(m, opsize());
         const i32 b = opsize32_ ? i32(fetch32()) : i32(i16(fetch16()));
         const i64 r = (opsize32_ ? i64(i32(a)) : i64(i16(u16(a)))) * b;
-        if (opsize32_) { state_.gpr[0] = u32(r); set_flag(CF, r != i64(i32(u32(r)))); set_flag(OF, r != i64(i32(u32(r)))); }
-        else { set_reg16(0, u16(r)); set_flag(CF, r != i64(i16(u16(r)))); set_flag(OF, r != i64(i16(u16(r)))); }
+        write_reg_field(m, u32(r), opsize());
+        const bool ov = r != (opsize32_ ? i64(i32(u32(r))) : i64(i16(u16(r))));
+        set_flag(CF, ov); set_flag(OF, ov);
         break;
     }
     case 0x6a: push_value(u32(i32(i8(fetch8()))), opsize()); break;
     case 0x6b: {
+        // IMUL r, r/m, imm8: the destination is the ModRM reg field, NOT
+        // always EAX.  The memtest86+ loader does "imul edx, edx, 0x14"
+        // whose result must land in EDX.
         const ModRm m = decode_modrm(opsize());
         const u32 a = read_rm(m, opsize());
         const i32 b = i32(i8(fetch8()));
         const i64 r = (opsize32_ ? i64(i32(a)) : i64(i16(u16(a)))) * b;
-        if (opsize32_) { state_.gpr[0] = u32(r); set_flag(CF, r != i64(i32(u32(r)))); set_flag(OF, r != i64(i32(u32(r)))); }
-        else { set_reg16(0, u16(r)); set_flag(CF, r != i64(i16(u16(r)))); set_flag(OF, r != i64(i16(u16(r)))); }
+        write_reg_field(m, u32(r), opsize());
+        const bool ov = r != (opsize32_ ? i64(i32(u32(r))) : i64(i16(u16(r))));
+        set_flag(CF, ov); set_flag(OF, ov);
         break;
     }
     case 0x6c: case 0x6d: case 0x6e: case 0x6f: { // INS/OUTS

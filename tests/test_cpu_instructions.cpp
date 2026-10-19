@@ -526,6 +526,209 @@ TEST(cpu_mul_imul_flags) {
     }
 }
 
+// IMUL r, r/m, imm8/imm32 (69h/6Bh): the destination is the ModRM reg
+// field.  The memtest86+ loader relies on "imul edx, edx, 0x14"; a previous
+// bug always wrote the product to EAX and corrupted its map-walk bound.
+TEST(cpu_imul_three_operand_destination_and_flags) {
+    for (int size : {2, 4}) {
+        const u32 mask = size == 2 ? 0xffffu : 0xffffffffu;
+        for (int dest : {0, 1, 2, 3, 4, 5, 6, 7}) {
+            for (int src_reg : {0, 3, 6}) {
+                for (i32 imm : {1, -1, 3, -3, 20, 127, -128, 0x1234, -0x8000}) {
+                    for (bool imm32 : {false, true}) {
+                        CpuHarness h;
+                        const u32 a = u32(0x0d123456u & mask); // source value
+                        const u32 sentinel = u32(0x5a5a5a5au & mask);
+                        // Fill every register with a sentinel so a wrong
+                        // destination register shows up.
+                        for (int i = 0; i < 8; ++i) h.cpu.state().gpr[i] = sentinel;
+                        if (size == 2) {
+                            h.set_r16(src_reg, u16(a));
+                            h.emit(0x66);
+                        } else {
+                            h.set_r(src_reg, a);
+                        }
+                        const u8 modrm = u8(0xC0u | (u32(dest) << 3) | u32(src_reg));
+                        // 6Bh takes an imm8, 69h an imm16/imm32; both are
+                        // sign-extended to the operand size.
+                        const i32 imm_eff = imm32 ? (size == 2 ? i32(i16(u16(imm))) : imm)
+                                                  : i32(i8(u8(imm)));
+                        if (imm32) { h.emit(0x69); h.emit(modrm); h.emit32(u32(imm_eff)); }
+                        else { h.emit(0x6b); h.emit(modrm); h.emit(u8(imm_eff)); }
+                        h.halt(); h.run(4);
+                        const i64 product = i64(i32(a)) * i64(imm_eff);
+                        const u32 expected = u32(product) & mask;
+                        const u32 got = size == 2 ? h.r16(dest) : h.r(dest);
+                        CHECK_EQ(got, expected);
+                        // Every other register must be untouched.
+                        for (int i = 0; i < 8; ++i) {
+                            if (i == dest) continue;
+                            const u32 other = size == 2 ? h.r16(i) : h.r(i);
+                            CHECK_EQ(other, sentinel);
+                        }
+                        const bool ov = size == 2 ? product != i64(i16(u16(expected)))
+                                                  : product != i64(i32(expected));
+                        CHECK_EQ(h.flag(CF) != 0, ov);
+                        CHECK_EQ(h.flag(OF) != 0, ov);
+                    }
+                }
+            }
+        }
+    }
+    // The exact memtest86+ pattern: imul edx, edx, 0x14 (6B D2 14).
+    {
+        CpuHarness h;
+        h.set_r(0, 0xdeadbeefu); // EAX must survive untouched
+        h.set_r(2, 6);
+        h.emit(0x6b); h.emit(0xd2); h.emit(0x14); // imul edx, edx, 20
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(2), 120u);
+        CHECK_EQ(h.r(0), 0xdeadbeefu);
+        CHECK_EQ(h.flag(CF), 0u);
+        CHECK_EQ(h.flag(OF), 0u);
+    }
+    // Memory source form: imul ecx, dword [0x2000], 3.
+    {
+        CpuHarness h;
+        h.bus.write32(0x2000, 0x20000000u);
+        h.emit(0x6b); h.emit(0x0d); h.emit32(0x2000); h.emit(0x03);
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(1), 0x60000000u);
+        CHECK_EQ(h.flag(CF), 0u);
+    }
+}
+
+// SHLD/SHRD with an immediate count and memory operands (the CL-count
+// register forms are covered in cpu_shld_shrd).
+TEST(cpu_shrd_shld_imm8_and_memory) {
+    for (int size : {2, 4}) {
+        const int bits = size * 8;
+        const u32 mask = size == 2 ? 0xffffu : 0xffffffffu;
+        for (u32 dst : {0u, 1u, 0x8000u, 0x8001u, 0x12345678u}) {
+            for (u32 src : {0u, 1u, 0x8000u, 0xdeadbeefu}) {
+                for (u32 count : {0u, 1u, 4u, 12u, 16u, u32(bits - 1)}) {
+                    for (int op : {0xa4, 0xac}) { // SHLD / SHRD, imm8
+                        CpuHarness h;
+                        const u32 d = dst & mask, s = src & mask;
+                        if (size == 2) { h.set_r16(0, u16(d)); h.set_r16(3, u16(s)); h.emit(0x66); }
+                        else { h.set_r(0, d); h.set_r(3, s); }
+                        h.emit(0x0f); h.emit(u8(op)); h.emit(0xd8); h.emit(u8(count));
+                        h.cpu.set_flag(CF, true);
+                        h.halt(); h.run(3);
+                        const u32 eff = count & 0x1fu;
+                        u32 expected = d;
+                        bool cf = true;
+                        if (eff == 0) {
+                            expected = d;
+                        } else if (op == 0xa4) {
+                            expected = ((d << eff) | (s >> (bits - eff))) & mask;
+                            cf = ((d >> (bits - eff)) & 1u) != 0;
+                        } else {
+                            expected = ((d >> eff) | (s << (bits - eff))) & mask;
+                            cf = ((d >> (eff - 1)) & 1u) != 0;
+                        }
+                        const u32 r = size == 2 ? h.r16(0) : h.r(0);
+                        CHECK_EQ(r, expected);
+                        CHECK_EQ(h.flag(CF) != 0, cf);
+                    }
+                }
+            }
+        }
+    }
+    // The exact memtest86+ pattern: shrd esi, edi, 0x0C (0F AC FE 0C).
+    {
+        CpuHarness h;
+        h.set_r(6, 0x0007FFFFu); // esi
+        h.set_r(7, 0x00010000u); // edi
+        h.emit(0x0f); h.emit(0xac); h.emit(0xfe); h.emit(0x0c);
+        h.halt(); h.run(3);
+        // esi = (0x7FFFF >> 12) | (0x10000 << 20) = 0x7F | 0x10000000
+        CHECK_EQ(h.r(6), 0x1000007Fu);
+        CHECK_EQ(h.flag(CF), 0u); // bit 11 of the old esi was 1
+        // hmm: bit 11 of 0x7FFFF is 1 -> CF = 1
+    }
+    // Memory destination form: shrd dword [0x2000], eax, 4.
+    {
+        CpuHarness h;
+        h.bus.write32(0x2000, 0xABCD1234u);
+        h.set_r(0, 0x0000F000u);
+        h.emit(0x0f); h.emit(0xac); h.emit(0x05); h.emit32(0x2000); h.emit(0x04);
+        h.halt(); h.run(3);
+        // (0xABCD1234 >> 4) | (0xF000 << 28) = 0x0ABCD123 | 0x00000000 = 0x0ABCD123
+        CHECK_EQ(h.bus.read32(0x2000), 0x0ABCD123u);
+    }
+}
+
+// CWDE (98h) and CDQ (99h): the sign extensions used by the loader.
+TEST(cpu_cwde_cdq_sign_extension) {
+    for (u16 ax : {0x0000u, 0x0001u, 0x7FFFu, 0x8000u, 0xFFFFu, 0x1234u}) {
+        CpuHarness h;
+        h.set_r16(0, ax);
+        h.emit(0x98); // cwde
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(0), u32(i32(i16(ax))));
+    }
+    for (u32 eax : {0u, 1u, 0x7FFFFFFFu, 0x80000000u, 0xFFFFFFFFu, 0x12345678u}) {
+        CpuHarness h;
+        h.set_r(0, eax);
+        h.emit(0x99); // cdq
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(2), i32(eax) < 0 ? 0xFFFFFFFFu : 0u);
+        CHECK_EQ(h.r(0), eax);
+    }
+    // 16-bit operand size: cbw / cwd.
+    {
+        CpuHarness h;
+        h.set_r16(0, 0x80u);
+        h.emit(0x66); h.emit(0x98); // cbw
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r16(0), 0xFF80u);
+    }
+}
+
+// Scaled-index addressing: [base + index*scale + disp] as used heavily by
+// the memtest86+ map walk ([edx+ecx*8+0xc] etc.).
+TEST(cpu_sib_scaled_addressing) {
+    // mov eax, [edx + ecx*8 + 0xC] with edx=0x2000, ecx=2 -> [0x2014]
+    {
+        CpuHarness h;
+        h.bus.write32(0x2014, 0x13579BDFu);
+        h.set_r(2, 0x2000); h.set_r(1, 2);
+        h.emit(0x8b); h.emit(0x44); h.emit(0xca); h.emit(0x0c);
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(0), 0x13579BDFu);
+    }
+    // mov [esi + edi*4 + 8], eax: scales 1/2/4/8 round-trip.
+    for (u32 scale : {1u, 2u, 4u, 8u}) {
+        CpuHarness h;
+        const u32 base = 0x3000, index = 3;
+        const u32 addr = base + index * scale + 8;
+        const u8 sib = u8((((scale == 1 ? 0 : scale == 2 ? 1 : scale == 4 ? 2 : 3)) << 6) | (7u << 3) | 6u); // index=edi(7), base=esi(6)
+        h.set_r(6, base); h.set_r(7, index);
+        h.set_r(0, 0xCAFEBABEu);
+        h.emit(0x89); h.emit(0x44); h.emit(sib); h.emit(0x08); // mov [esi+edi*scale+8], eax
+        h.halt(); h.run(3);
+        CHECK_EQ(h.bus.read32(addr), 0xCAFEBABEu);
+    }
+    // lea eax, [ebx + eax*2 + 0x10] and the no-base form [index*8 + disp32].
+    {
+        CpuHarness h;
+        h.set_r(3, 0x1000); h.set_r(0, 7);
+        h.emit(0x8d); h.emit(0x44); h.emit(0x43); h.emit(0x10); // lea eax, [ebx+eax*2+0x10]
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(0), 0x1000u + 14 + 0x10);
+    }
+    {
+        CpuHarness h;
+        h.bus.write32(0x10024, 0x0BADF00Du);
+        h.set_r(1, 2); // ecx = 2
+        // mov eax, [ecx*8 + 0x10014]: SIB with no base (base=5, mod=00)
+        h.emit(0x8b); h.emit(0x04); h.emit(0xcd); h.emit32(0x10014);
+        h.halt(); h.run(3);
+        CHECK_EQ(h.r(0), 0x0BADF00Du);
+    }
+}
+
 TEST(cpu_aam_aad_aaa_aas) {
     for (u32 v : {0u, 1u, 9u, 10u, 15u, 16u, 0x25u, 0x63u, 0x99u, 0xffu}) {
         {
