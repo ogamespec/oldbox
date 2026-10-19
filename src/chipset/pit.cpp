@@ -32,26 +32,108 @@ u64 Pit::cycles_to_pit_ticks(u64 cycles) {
     return ticks;
 }
 
+u64 Pit::period(const Counter& c) const {
+    // A programmed count of zero means 65536 on an 8253/8254 (10000 in BCD).
+    if (c.bcd) {
+        u64 v = 0;
+        for (u8 d : {u8(c.reload >> 12), u8((c.reload >> 8) & 0xf), u8((c.reload >> 4) & 0xf), u8(c.reload & 0xf)})
+            v = v * 10 + d;
+        return v ? v : 10000;
+    }
+    return c.reload ? u64(c.reload) : 0x10000ull;
+}
+
+u16 Pit::remaining(const Counter& c) const {
+    const u64 p = period(c);
+    u64 rem;
+    switch (c.mode) {
+    case 2: case 3: rem = p - (c.ticks % p); if (c.ticks % p == 0 && c.ticks != 0) rem = 0; break;
+    case 0: case 1: case 4: case 5: rem = c.ticks >= p ? 0 : p - c.ticks; break;
+    default: rem = p - (c.ticks % p); break;
+    }
+    if (c.bcd) return u16((rem / 1000 % 10) << 12 | (rem / 100 % 10) << 8 | (rem / 10 % 10) << 4 | (rem % 10));
+    return u16(rem);
+}
+
 void Pit::tick_counter(int index, u64 pit_ticks) {
     Counter& c = counters_[index];
-    // A programmed count of zero means 65536 on an 8253/8254.
-    const u64 reload = c.reload ? u64(c.reload) : 0x10000ull;
     if (!c.running || pit_ticks == 0) return;
+    const u64 p = period(c);
     c.ticks += pit_ticks;
-    u64 n = c.ticks;
-    while (n >= reload) {
-        n -= reload;
-        c.output = !c.output;
-        if (index == 0) {
-            if (c.mode == 0 || c.mode == 1) { c.output = false; c.running = (c.mode != 0); }
-            if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; }
-            if (c.mode == 0) { c.running = false; break; }
+    switch (c.mode) {
+    case 2: { // rate generator: high except a one-tick low pulse at the end
+        while (c.ticks >= p) {
+            c.ticks -= p;
+            c.output = true;
+            if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
         }
-        if (c.mode == 0 || c.mode == 1) c.running = false;
+        c.output = c.ticks < p - 1;
+        break;
     }
-    c.ticks = n;
-    if (c.mode == 2 || c.mode == 3) {
-        if (n <= reload) c.count = u16((reload - n) & 0xffffu);
+    case 3: { // square wave: high (P+1)/2 ticks, low P/2 ticks
+        const u64 half_hi = (p + 1) / 2;
+        u64 phase = c.ticks % p;
+        while (c.ticks >= p) {
+            c.ticks -= p;
+            phase = c.ticks % p;
+            if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
+        }
+        c.output = phase < half_hi;
+        break;
+    }
+    case 0: { // interrupt on terminal count: OUT low while counting, high at TC
+        if (c.ticks >= p) {
+            c.ticks = p;
+            c.output = true;
+            c.running = false;
+            if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
+        } else {
+            c.output = false;
+        }
+        break;
+    }
+    case 1: { // hardware retriggerable one-shot
+        if (c.triggered) {
+            if (c.ticks >= p) {
+                c.ticks = p;
+                c.output = true;
+                c.triggered = false;
+                if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
+            } else {
+                c.output = false;
+            }
+        } else {
+            c.output = true;
+        }
+        break;
+    }
+    case 4: { // software triggered strobe: low pulse at TC
+        if (c.ticks >= p) {
+            c.ticks = p;
+            c.output = false;
+            c.running = false;
+            if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
+        } else {
+            c.output = true;
+        }
+        break;
+    }
+    case 5: // hardware triggered strobe: like mode 1 with a low output pulse
+        if (c.triggered) {
+            if (c.ticks >= p) {
+                c.ticks = p;
+                c.output = true;
+                c.triggered = false;
+                if (index == 0) { if (irq0_) { irq0_(true); irq0_(false); ++irq0_count_; } }
+            } else {
+                c.output = false;
+            }
+        } else {
+            c.output = true;
+        }
+        break;
+    default:
+        break;
     }
 }
 
@@ -78,29 +160,40 @@ void Pit::write_control(u8 value) {
         // Read-back command: latch selected counters/status.
         for (int i = 0; i < 3; ++i) {
             if (!(value & (1u << (1 + i)))) continue;
-            if (value & 0x20) counters_[i].latch = u16((counters_[i].control << 8) | 0);
-            else counters_[i].latched = true;
+            if (value & 0x20) {
+                // Status byte: bit 7 = OUT, bit 6 = null count, bits 5:0 = programmed mode.
+                const u8 null_count = (counters_[i].mode == 0 || counters_[i].mode == 1) &&
+                                      counters_[i].ticks == 0 && !counters_[i].triggered ? 0x40 : 0;
+                counters_[i].latch = u16(((counters_[i].control & 0x3f) | (counters_[i].output ? 0x80 : 0) | null_count) << 8);
+                counters_[i].status_latched = true;
+            } else {
+                counters_[i].latched = true;
+            }
         }
         return;
     }
     Counter& c = counters_[ch];
-    c.control = value;
     const u8 access = (value >> 4) & 3;
     if (access == 0) {
         // Counter latch command: only freezes the output latch; the
         // programmed read/write mode, mode and BCD settings stay as they
-        // were.  The Award POST's 8254 self-test relies on this: it latches
-        // a counter, writes a byte and reads it back expecting the same
-        // value (the write follows through into the output latch).
+        // were (the control word itself is not modified).  The Award POST's
+        // 8254 self-test relies on this: it latches a counter, writes a byte
+        // and reads it back expecting the same value (the write follows
+        // through into the output latch).
         c.latched = true;
         return;
     }
+    c.control = value;
     c.access = access;
     c.mode = (value >> 1) & 7;
     c.bcd = (value & 1) != 0;
     c.write_high = false;
     c.read_high = false;
     c.latched = false;
+    // The reference Award POST's 8254 self-test expects the control word to
+    // arm the counter immediately (gate modelling is deferred until the
+    // count write on real silicon); keep that behaviour.
     c.running = true;
     c.output = false;
 }
@@ -136,8 +229,20 @@ void Pit::write_counter(int index, u8 value) {
 u8 Pit::read_counter(int index) {
     Counter& c = counters_[index];
     u16 v;
-    if (c.latched) { c.latched = false; c.latch = c.count; v = c.count; c.count = c.latch; }
-    else v = c.count;
+    if (c.status_latched) {
+        c.status_latched = false;
+        v = u16(c.latch >> 8);
+        c.latched = false;
+        return u8(v);
+    }
+    if (c.latched) {
+        c.latched = false;
+        c.latch = remaining(c);
+        v = c.latch;
+        c.count = c.latch;
+    } else {
+        v = remaining(c);
+    }
     switch (c.access) {
     case 1: return u8(v);
     case 2: return u8(v >> 8);
@@ -156,7 +261,12 @@ u8 Pit::io_read8(u16 port) {
     case 0x41: return read_counter(1);
     case 0x42: return read_counter(2);
     case 0x43: return 0;
-    case 0x61: return u8((speaker_port_ & ~0x10u) | (refresh_bit_ ? 0x10u : 0u));
+    case 0x61: {
+        u8 v = u8(speaker_port_ & 0x03);
+        if (refresh_bit_) v |= 0x10;
+        if (counters_[2].output) v |= 0x20;
+        return v;
+    }
     default: return 0xff;
     }
 }
@@ -167,7 +277,10 @@ void Pit::io_write8(u16 port, u8 value) {
     case 0x41: write_counter(1, value); break;
     case 0x42: write_counter(2, value); break;
     case 0x43: write_control(value); break;
-    case 0x61: speaker_port_ = u8(value & ~0x10u); break;
+    case 0x61:
+        speaker_port_ = u8(value & 0x0f);
+        set_gate(2, (value & 0x01) != 0);
+        break;
     default: break;
     }
     (void)bus_;

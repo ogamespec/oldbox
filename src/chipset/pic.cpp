@@ -20,16 +20,25 @@ void Pic::set_line(int irq, bool level) {
     if (irq < 0 || irq > 15) return;
     Controller& c = irq < 8 ? master_ : slave_;
     const u8 bit = u8(1u << (irq & 7));
-    if (level) {
-        // 8259 edge-triggered input: latch the request even while the same
-        // line is in service.  This lets a device that has more data (the
-        // 8042 output buffer, the PIT) request another interrupt after EOI.
-        if (!line_[irq]) {
-            line_[irq] = true;
-            c.irr |= bit;
-        }
+    // Level-sensitive lines (ELCR): the request follows the line.  IRQ0, 1, 2,
+    // 8 and 13 are hardwired edge-triggered.
+    const bool level_sensitive = (irq & 7) >= 3 && (c.elcr & bit) != 0;
+    if (level_sensitive) {
+        line_[irq] = level;
+        if (level) c.irr |= bit;
+        else c.irr &= u8(~bit);
     } else {
-        line_[irq] = false;
+        if (level) {
+            // Edge-triggered input: latch the request only on a rising edge;
+            // the device may request again while the line is still asserted
+            // after an EOI.
+            if (!line_[irq]) {
+                line_[irq] = true;
+                c.irr |= bit;
+            }
+        } else {
+            line_[irq] = false;
+        }
     }
     update_irq();
 }
@@ -39,18 +48,37 @@ int Pic::highest_priority(const Controller& c) const {
     if (!pending) return -1;
     for (int i = 0; i < 8; ++i) {
         const int bit = (c.priority_add + i) & 7;
-        if (pending & (1u << bit)) return bit;
+        if (!(pending & (1u << bit))) continue;
+        // In fully nested mode an in-service interrupt blocks interrupts of
+        // equal or lower priority (same or smaller (bit - priority_add) mod 8).
+        // Special mask mode ignores the ISR entirely.
+        if (!c.special_mask) {
+            bool blocked = false;
+            for (int j = 0; j < 8; ++j) {
+                if (!(c.isr & (1u << j))) continue;
+                const int pos_j = (j - c.priority_add) & 7;
+                const int pos_i = (bit - c.priority_add) & 7;
+                if (pos_j <= pos_i) { blocked = true; break; }
+            }
+            if (blocked) continue;
+        }
+        return bit;
     }
     return -1;
 }
 
 bool Pic::pending() const {
-    return highest_priority(master_) >= 0 || highest_priority(slave_) >= 0;
+    // A slave request is only CPU-visible when the master's cascade line
+    // (IRQ2) is unmasked, which highest_priority already accounts for.
+    return highest_priority(master_) >= 0;
 }
 
 void Pic::update_irq() {
-    bool slave_int = highest_priority(slave_) >= 0;
-    if (!(slave_.imr & 0x04) && slave_int) master_.irr |= 0x04;
+    // The slave's INT output feeds the master's cascade input (IRQ2).  Only
+    // the master's own IRQ2 mask gates the cascaded requests (the slave's
+    // IRQ2 is an unused line).
+    const bool slave_int = highest_priority(slave_) >= 0;
+    if (slave_int) master_.irr |= 0x04;
     else master_.irr &= u8(~0x04);
 }
 
@@ -61,19 +89,28 @@ int Pic::acknowledge() {
     if (m == 2) {
         const int s = highest_priority(slave_);
         if (s < 0) {
+            // The cascade line was deasserted between the request and the
+            // acknowledge; the slave responds with its own spurious vector.
             master_.isr |= 0x04;
-            return master_.vector_base + 7;
+            master_.irr &= u8(~0x04);
+            return slave_.vector_base + 7;
         }
-        master_.isr |= 0x04;
         master_.irr &= u8(~0x04);
-        slave_.isr |= u8(1u << s);
         slave_.irr &= u8(~(1u << s));
-        if (!slave_.auto_eoi) { /* EOI required */ }
+        if (slave_.auto_eoi) {
+            if (slave_.rotate_on_eoi) slave_.priority_add = u8((slave_.priority_add + 1) & 7);
+        } else {
+            master_.isr |= 0x04;
+            slave_.isr |= u8(1u << s);
+        }
         return slave_.vector_base + s;
     }
-    master_.isr |= u8(1u << m);
     master_.irr &= u8(~(1u << m));
-    if (!master_.auto_eoi) { /* EOI required */ }
+    if (master_.auto_eoi) {
+        if (master_.rotate_on_eoi) master_.priority_add = u8((master_.priority_add + 1) & 7);
+    } else {
+        master_.isr |= u8(1u << m);
+    }
     return master_.vector_base + m;
 }
 
@@ -92,7 +129,9 @@ void Pic::write_command(Controller& c, u8 value) {
     }
     if (value & 0x08) { // OCW3
         if (value & 0x02) c.read_isr = (value & 0x01) != 0;
-        if (value & 0x04) { /* poll command: nothing until read */ }
+        if (value & 0x04) { // poll command: the next read returns the poll word
+            c.poll = true;
+        }
         if (value & 0x40) c.special_mask = (value & 0x20) != 0;
         return;
     }
@@ -123,10 +162,30 @@ void Pic::write_command(Controller& c, u8 value) {
         }
         break;
     }
-    case 0x80: c.priority_add = u8((c.priority_add + 1) & 7); break;
-    case 0xa0: c.priority_add = u8((c.priority_add + 1) & 7); break;
-    case 0xc0: c.priority_add = 0; break;
-    case 0xe0: c.priority_add = 0; break;
+    case 0x00: // rotate in AEOI mode: clear
+        c.rotate_on_eoi = false;
+        break;
+    case 0x80: // rotate in AEOI mode: set
+        c.rotate_on_eoi = true;
+        break;
+    case 0xa0: { // rotate on non-specific EOI: EOI + rotate
+        if (c.isr) {
+            int bit = 7;
+            while (bit >= 0 && !(c.isr & (1u << bit))) --bit;
+            if (bit >= 0) c.isr &= u8(~(1u << bit));
+        }
+        c.priority_add = u8((c.priority_add + 1) & 7);
+        break;
+    }
+    case 0xc0: // set priority: lowest priority = L2-L0
+        c.priority_add = u8((value + 1) & 7);
+        break;
+    case 0xe0: { // rotate on specific EOI
+        const int level = value & 7;
+        c.isr &= u8(~(1u << level));
+        c.priority_add = u8((level + 1) & 7);
+        break;
+    }
     default: break;
     }
     update_irq();
@@ -150,6 +209,14 @@ void Pic::write_data(Controller& c, u8 value) {
 
 u8 Pic::read_data(Controller& c) {
     if (c.init) return 0;
+    if (c.poll) {
+        c.poll = false;
+        const int bit = highest_priority(c);
+        if (bit < 0) return 0x00;
+        c.isr |= u8(1u << bit);
+        c.irr &= u8(~(1u << bit));
+        return u8(0x80 | bit);
+    }
     if (c.read_isr) return c.isr;
     return c.irr;
 }
@@ -172,8 +239,8 @@ void Pic::io_write8(u16 port, u8 value) {
     case 0x21: write_data(master_, value); break;
     case 0xa0: write_command(slave_, value); break;
     case 0xa1: write_data(slave_, value); break;
-    case 0x4d0: master_.elcr = value; break;
-    case 0x4d1: slave_.elcr = value; break;
+    case 0x4d0: master_.elcr = value; if (std::getenv("OLDBOX_PIC_TRACE")) std::fprintf(stderr, "ELCR1 <- %02x\n", value); break;
+    case 0x4d1: slave_.elcr = value; if (std::getenv("OLDBOX_PIC_TRACE")) std::fprintf(stderr, "ELCR2 <- %02x\n", value); break;
     default: break;
     }
 }

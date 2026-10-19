@@ -113,7 +113,7 @@ private:
         u16 pix_cntl = 0xA000;
         u16 multi_misc = 0xE000;
         u16 multi_misc2 = 0xD000;
-        u16 read_sel = 0;
+        mutable u16 read_sel = 0; // auto-increments on BEE8 reads
         u16 pat_x = 0, pat_y = 0;
         u8 be_index = 0;
         // CPU->engine pixel / mask stream for image transfers and textured lines.
@@ -171,7 +171,7 @@ private:
     bool cfg_unlocked_ = false;     // CR39 = A5 -> CR36/37/68
     bool exseq_unlocked_ = false;   // SR8 key -> SR9-SR18
     u16 adv_func_ = 0;              // 4AE8 advanced function control
-    u16 subsystem_status_ = 0x0400; // 42E8: engine idle, FIFO empty
+    u16 subsystem_status_ = 0x0000; // 42E8: SUBSYS_STAT, power-on default 0000h
     u8 video_enable_ = 0;           // 46E8
 
     // PCI window bookkeeping.

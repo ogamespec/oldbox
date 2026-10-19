@@ -4,6 +4,7 @@
 #include "oldbox/pci.hpp"
 #include "oldbox/cpu.hpp"
 #include "oldbox/chipset.hpp"
+#include "oldbox/w83877tf.hpp"
 #include "oldbox/cpu_apic.hpp"
 #include "oldbox/s3_trio64.hpp"
 #include "oldbox/voodoo.hpp"
@@ -90,11 +91,15 @@ private:
     std::unique_ptr<Awe64> audio_;
     AtaController ata_;
     FloppyController floppy_;
+    W83877TF superio_;
     UsbController usb_;
     Lm78 lm78_;
     std::unique_ptr<SmbusPci> smbus_pci_;
 
     bool running_ = true;
+    // Set by the chipset (port 92h FAST_INIT, port CF9h RCPU, 8042 reset
+    // pulse); the run loops perform the actual reset at a safe point.
+    bool pending_reset_ = false;
     // Queued text for type_text(): delivered one character at a time from
     // run_slice() so the guest sees individual make/break pairs.
     std::deque<u8> type_codes_;

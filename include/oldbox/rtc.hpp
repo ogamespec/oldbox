@@ -47,7 +47,10 @@ private:
     [[nodiscard]] u8 status_c();
     [[nodiscard]] u8 to_bcd(u8 v) const { return u8(((v / 10) << 4) | (v % 10)); }
     [[nodiscard]] u8 from_bcd(u8 v) const { return u8(((v >> 4) * 10) + (v & 0x0f)); }
+    [[nodiscard]] bool alarm_matches() const;
+    void update_irqf();
     void raise_irq();
+    void lower_irq8();
 };
 
 } // namespace oldbox

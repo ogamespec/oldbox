@@ -33,6 +33,8 @@ private:
         bool read_isr = false;
         bool special_mask = false;
         bool auto_eoi = false;
+        bool rotate_on_eoi = false;
+        bool poll = false;
         bool level_mode = false;
         u8 icw4 = 0;
         u8 last_isr = 0;

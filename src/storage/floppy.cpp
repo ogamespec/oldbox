@@ -309,13 +309,14 @@ void FloppyController::clear_irq() {
 // DMA
 // ---------------------------------------------------------------------------
 
-void FloppyController::dma_read(u32 start_lba, u32 count) {
+void FloppyController::dma_read(u32 start_lba, u32 count, bool drive_b) {
     dma_ok_ = true;
     const u32 bytes = count * 512;
+    std::vector<u8>& disk = drive_b ? disk_b_ : disk_;
     dma_.set_dreq(kFdcDma, true);
     for (u32 i = 0; i < bytes; ++i) {
         const size_t off = size_t(start_lba) * 512u + i;
-        const u8 value = off < disk_.size() ? disk_[off] : 0xFF;
+        const u8 value = off < disk.size() ? disk[off] : 0xFF;
         if (!dma_.write_byte(kFdcDma, value)) {
             dma_ok_ = false;
             break;
@@ -324,13 +325,14 @@ void FloppyController::dma_read(u32 start_lba, u32 count) {
     dma_.set_dreq(kFdcDma, false);
 }
 
-void FloppyController::dma_write(u32 start_lba, u32 count) {
+void FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
     dma_ok_ = true;
-    if (write_protect_) {
+    if (drive_b ? write_protect_b_ : write_protect_) {
         dma_ok_ = false;
         return;
     }
     const u32 bytes = count * 512;
+    std::vector<u8>& disk = drive_b ? disk_b_ : disk_;
     dma_.set_dreq(kFdcDma, true);
     for (u32 i = 0; i < bytes; ++i) {
         const auto value = dma_.read_byte(kFdcDma);
@@ -339,8 +341,8 @@ void FloppyController::dma_write(u32 start_lba, u32 count) {
             break;
         }
         const size_t off = size_t(start_lba) * 512u + i;
-        if (off >= disk_.size()) disk_.resize(off + 1, 0);
-        disk_[off] = *value;
+        if (off >= disk.size()) disk.resize(off + 1, 0);
+        disk[off] = *value;
     }
     dma_.set_dreq(kFdcDma, false);
     if (dma_ok_) dirty_ = true;
@@ -354,10 +356,16 @@ void FloppyController::execute() {
     const u8 cmd = command_[0];
     if (std::getenv("OLDBOX_FDC_TRACE")) std::fprintf(stderr, "FDC cmd %02x\n", cmd);
     const u8 ds = command_[1] & 0x01;
+    const bool drive_b = ds != 0;
     // The real drive keeps spinning for a while after the motor line drops;
     // the Award boot block sends READ ID with the motor off, so treat the
     // disk as present whenever media is inserted.
-    const bool media = present_;
+    const bool media = drive_b ? present_b_ : present_;
+    int& cylinder = drive_b ? cylinder_b_ : cylinder_;
+    int& head = drive_b ? head_b_ : head_;
+    int& sector = drive_b ? sector_b_ : sector_;
+    const Geometry& geo = drive_b ? geo_b_ : geo_;
+    const bool wp = drive_b ? write_protect_b_ : write_protect_;
 
     command_len_ = 0;
     command_pos_ = 0;
@@ -373,21 +381,21 @@ void FloppyController::execute() {
         specify_[1] = command_[2];
         break;
 
-    case 0x04: { // SENSE DRIVE STATUS (ST3 per the SMC FDC37C669, table 17)
+    case 0x04: { // SENSE DRIVE STATUS (ST3, 82077AA section 6.4)
         u8 st3 = u8(ds & 1);        // bits 1-0: DS1,0
         st3 |= 0x08;                // bit 3: always 1
         st3 |= 0x20;                // bit 5: always 1
-        if (head_) st3 |= 0x04;     // bit 2: HD (head address)
-        if (cylinder_ == 0) st3 |= 0x10; // bit 4: T0 (track 0)
-        if (write_protect_) st3 |= 0x40; // bit 6: WP
+        if (head) st3 |= 0x04;      // bit 2: HD (head address)
+        if (cylinder == 0) st3 |= 0x10; // bit 4: T0 (track 0)
+        if (wp) st3 |= 0x40;        // bit 6: WP
         set_result({st3});
         break;
     }
 
     case 0x07: // RECALIBRATE
-        cylinder_ = 0;
-        head_ = 0;
-        sector_ = 1;
+        cylinder = 0;
+        head = 0;
+        sector = 1;
         pending_st0_ = u8(0x20 | ds);
         pending_pcn_ = 0;
         seek_pending_ = true;
@@ -397,22 +405,22 @@ void FloppyController::execute() {
     case 0x08: { // SENSE INTERRUPT STATUS
         if (seek_pending_ || !result_.empty()) {
             const u8 st0 = seek_pending_ ? pending_st0_ : u8(0x20 | ds);
-            const u8 pcn = seek_pending_ ? pending_pcn_ : u8(cylinder_);
+            const u8 pcn = seek_pending_ ? pending_pcn_ : u8(cylinder);
             seek_pending_ = false;
             set_result({st0, pcn});
         } else {
-            set_result({0x80, u8(cylinder_)});
+            set_result({0x80, u8(cylinder)});
         }
         break;
     }
 
     case 0x0A: { // READ ID
         if (!media) {
-            fail(0x08, 0x04, 0x00, u8(cylinder_), u8(head_), u8(sector_), 0x02);
+            fail(0x08, 0x04, 0x00, u8(cylinder), u8(head), u8(sector), 0x02);
             break;
         }
-        defer_result({u8(ds | (head_ << 2)), 0x00, 0x00,
-                      u8(cylinder_), u8(head_), u8(sector_), 0x02});
+        defer_result({u8(ds | (head << 2)), 0x00, 0x00,
+                      u8(cylinder), u8(head), u8(sector), 0x02});
         break;
     }
 
@@ -423,27 +431,27 @@ void FloppyController::execute() {
         const u8 r = command_[4];
         const u8 n = command_[5];
         const u8 eot = command_[6];
-        if (!media || ds != 0) {
+        if (!media) {
             fail(0x08, 0x04, 0x00, c, h, r, n);
             break;
         }
-        if (h >= geo_.heads || c >= geo_.tracks || r < 1 || r > geo_.spt || n != 2) {
+        if (h >= geo.heads || c >= geo.tracks || r < 1 || r > geo.spt || n != 2) {
             fail(0x04, 0x04, 0x00, c, h, r, n);
             break;
         }
         u32 sectors = 1;
         if (eot >= r) sectors = u32(eot - r + 1);
-        sectors = std::min<u32>(sectors, geo_.spt - r + 1);
-        const u32 start = (u32(c) * geo_.heads + h) * geo_.spt + (r - 1);
-        dma_read(start, sectors);
+        sectors = std::min<u32>(sectors, geo.spt - r + 1);
+        const u32 start = (u32(c) * geo.heads + h) * geo.spt + (r - 1);
+        dma_read(start, sectors, drive_b);
         if (!dma_ok_) {
             fail(0x08, 0x04, 0x00, c, h, r, n);
             break;
         }
         const u32 end = start + sectors;
-        cylinder_ = int(end / (geo_.heads * geo_.spt));
-        head_ = int((end / geo_.spt) % geo_.heads);
-        sector_ = int(end % geo_.spt) + 1;
+        cylinder = int(end / (geo.heads * geo.spt));
+        head = int((end / geo.spt) % geo.heads);
+        sector = int(end % geo.spt) + 1;
         defer_result({u8(ds | (h << 2)), 0x00, 0x00, c, h, u8(r + sectors - 1), n});
         break;
     }
@@ -455,31 +463,31 @@ void FloppyController::execute() {
         const u8 r = command_[4];
         const u8 n = command_[5];
         const u8 eot = command_[6];
-        if (!media || ds != 0) {
+        if (!media) {
             fail(0x08, 0x04, 0x00, c, h, r, n);
             break;
         }
-        if (write_protect_) {
+        if (wp) {
             fail(0x08, 0x02, 0x00, c, h, r, n);
             break;
         }
-        if (h >= geo_.heads || c >= geo_.tracks || r < 1 || r > geo_.spt || n != 2) {
+        if (h >= geo.heads || c >= geo.tracks || r < 1 || r > geo.spt || n != 2) {
             fail(0x04, 0x04, 0x00, c, h, r, n);
             break;
         }
         u32 sectors = 1;
         if (eot >= r) sectors = u32(eot - r + 1);
-        sectors = std::min<u32>(sectors, geo_.spt - r + 1);
-        const u32 start = (u32(c) * geo_.heads + h) * geo_.spt + (r - 1);
-        dma_write(start, sectors);
+        sectors = std::min<u32>(sectors, geo.spt - r + 1);
+        const u32 start = (u32(c) * geo.heads + h) * geo.spt + (r - 1);
+        dma_write(start, sectors, drive_b);
         if (!dma_ok_) {
             fail(0x08, 0x04, 0x02, c, h, r, n);
             break;
         }
         const u32 end = start + sectors;
-        cylinder_ = int(end / (geo_.heads * geo_.spt));
-        head_ = int((end / geo_.spt) % geo_.heads);
-        sector_ = int(end % geo_.spt) + 1;
+        cylinder = int(end / (geo.heads * geo.spt));
+        head = int((end / geo.spt) % geo.heads);
+        sector = int(end % geo.spt) + 1;
         defer_result({u8(ds | (h << 2)), 0x00, 0x00, c, h, u8(r + sectors - 1), n});
         break;
     }
@@ -488,37 +496,38 @@ void FloppyController::execute() {
         const u8 n = command_[2];
         const u8 sc = command_[3];
         const u8 fill = command_[5];
-        const u8 count = sc ? sc : u8(geo_.spt);
+        const u8 count = sc ? sc : u8(geo.spt);
         if (!media) {
-            fail(0x08, 0x04, 0x00, u8(cylinder_), u8(head_), 1, n);
+            fail(0x08, 0x04, 0x00, u8(cylinder), u8(head), 1, n);
             break;
         }
-        if (write_protect_) {
-            fail(0x08, 0x02, 0x00, u8(cylinder_), u8(head_), 1, n);
+        if (wp) {
+            fail(0x08, 0x02, 0x00, u8(cylinder), u8(head), 1, n);
             break;
         }
-        const size_t start = size_t((u32(cylinder_) * geo_.heads + head_) * geo_.spt) * 512u;
+        std::vector<u8>& disk = drive_b ? disk_b_ : disk_;
+        const size_t start = size_t((u32(cylinder) * geo.heads + head) * geo.spt) * 512u;
         const size_t bytes = size_t(count) * 512u;
-        if (disk_.size() < start + bytes) disk_.resize(start + bytes, fill);
-        std::fill(disk_.begin() + std::ptrdiff_t(start),
-                  disk_.begin() + std::ptrdiff_t(start + bytes), fill);
+        if (disk.size() < start + bytes) disk.resize(start + bytes, fill);
+        std::fill(disk.begin() + std::ptrdiff_t(start),
+                  disk.begin() + std::ptrdiff_t(start + bytes), fill);
         dirty_ = true;
-        defer_result({u8(ds | (head_ << 2)), 0x00, 0x00,
-                      u8(cylinder_), u8(head_), count, n});
+        defer_result({u8(ds | (head << 2)), 0x00, 0x00,
+                      u8(cylinder), u8(head), count, n});
         break;
     }
 
-    case 0x0E: { // DUMPREG
-        dump_[0] = u8(cylinder_);
-        dump_[1] = u8((head_ << 2) | (dor_ & 0x01));
-        dump_[2] = specify_[0];
-        dump_[3] = specify_[1];
-        dump_[4] = u8(geo_.spt);
-        dump_[5] = 0x1B;
-        dump_[6] = 0xFF;
-        dump_[7] = dcr_;
-        dump_[8] = dsr_;
-        dump_[9] = 0x00;
+    case 0x0E: { // DUMPREG: the ten bytes of Table 5-1 in order
+        dump_[0] = u8(cylinder_);   // PCN drive 0
+        dump_[1] = u8(cylinder_b_); // PCN drive 1
+        dump_[2] = 0x00;            // PCN drive 2
+        dump_[3] = 0x00;            // PCN drive 3
+        dump_[4] = specify_[0];     // SRT | HUT
+        dump_[5] = specify_[1];     // HLT | ND
+        dump_[6] = 0x02;            // SC/EOT
+        dump_[7] = u8((lock_ ? 0x80 : 0) | ((dor_ & 0x03) << 4)); // LOCK, D3-D0, GAP, WGATE
+        dump_[8] = u8(config_[0] & 0x7f); // EIS, EFIFO, POLL, FIFOTHR
+        dump_[9] = config_[1];      // PRETRK
         dumped_ = true;
         set_result({dump_[0], dump_[1], dump_[2], dump_[3], dump_[4],
                     dump_[5], dump_[6], dump_[7], dump_[8], dump_[9]});
@@ -528,23 +537,26 @@ void FloppyController::execute() {
     case 0x4D: // RESTORE register set (non-standard extension used by some)
         if (dumped_) {
             cylinder_ = dump_[0];
-            head_ = (dump_[1] >> 2) & 0x01;
-            specify_[0] = dump_[2];
-            specify_[1] = dump_[3];
-            dcr_ = dump_[7];
-            dsr_ = dump_[8];
+            cylinder_b_ = dump_[1];
+            specify_[0] = dump_[4];
+            specify_[1] = dump_[5];
+            lock_ = (dump_[7] & 0x80) != 0;
+            config_[0] = u8(dump_[8] & 0x7f);
+            config_[1] = dump_[9];
         }
         break;
 
     case 0x0F: { // SEEK
         const u8 c = command_[2];
-        if (!present_) {
+        if (!media) {
             pending_st0_ = u8(0x48 | ds);
-            pending_pcn_ = u8(cylinder_);
+            pending_pcn_ = u8(cylinder);
         } else {
-            cylinder_ = c;
-            sector_ = 1;
-            pending_st0_ = u8(0x20 | (head_ << 2) | ds);
+            cylinder = c;
+            sector = 1;
+            // The H bit always returns 0 in the SEEK result phase (82077AA
+            // section 5.2.4).
+            pending_st0_ = u8(0x20 | ds);
             pending_pcn_ = c;
         }
         seek_pending_ = true;
@@ -556,8 +568,8 @@ void FloppyController::execute() {
         set_result({version_});
         break;
 
-    case 0x12: // PERPENDICULAR MODE
-        dcr_ = u8((dcr_ & 0x3F) | ((command_[1] & 0x03) << 6));
+    case 0x12: // PERPENDICULAR MODE: GAP/WGATE selects only
+        gap_wgate_ = command_[1] & 0x03;
         break;
 
     case 0x13: // CONFIGURE
@@ -580,16 +592,17 @@ void FloppyController::execute() {
     case 0x17: // SCAN HIGH OR EQUAL
     case 0x02: // READ TRACK
         if (!media) {
-            fail(0x08, 0x04, 0x00, 0, u8(head_), u8(sector_), 2);
+            fail(0x08, 0x04, 0x00, 0, u8(head), u8(sector), 2);
         } else {
-            defer_result({u8(ds | (head_ << 2)), 0x00, 0x00,
-                          u8(cylinder_), u8(head_), u8(sector_), 0x02});
+            defer_result({u8(ds | (head << 2)), 0x00, 0x00,
+                          u8(cylinder), u8(head), u8(sector), 0x02});
         }
         break;
 
     default:
-        // Invalid command: interrupt code 10 (invalid command) in ST0.
-        set_result({0x80, 0x00, 0x00, u8(cylinder_), u8(head_), u8(sector_), 0x02});
+        // Invalid command: the result phase is a single ST0 byte with the
+        // invalid-command interrupt code (82077AA table 5-1).
+        set_result({0x80});
         raise_irq();
         break;
     }
@@ -622,7 +635,12 @@ u8 FloppyController::io_read8(u16 port) {
     case 0x3F3: // Tape drive register, unused
         return 0xFF;
     case 0x3F4: { // Main status register
-        u8 v = MSR_RQM | MSR_NDMA;
+        // RQM is clear while the controller is executing, so the host is not
+        // permitted to transfer; NDMA stays 0 because all data phases here
+        // run in DMA mode; bits 1:0 are the per-drive busy flags (no seek in
+        // progress in this synchronous model).
+        u8 v = 0;
+        if (exec_cycles_left_ == 0) v |= MSR_RQM;
         if (result_pos_ < int(result_.size())) v |= MSR_DIO;
         if (command_pos_ > 0 && command_pos_ < command_len_) v |= MSR_CB;
         // The 82077 keeps the busy bit set until the result FIFO is drained
@@ -630,9 +648,8 @@ u8 FloppyController::io_read8(u16 port) {
         // CB is asserted and would leave stray FIFO bytes behind otherwise.
         if (result_pos_ < int(result_.size())) v |= MSR_CB;
         if (exec_cycles_left_ > 0) v |= MSR_CB;
-        v |= u8(dor_ & 0x03);
         if (std::getenv("OLDBOX_FDC_TRACE") && std::getenv("OLDBOX_FDC_VAL"))
-            std::fprintf(stderr, "FDC msr=%02x result=%zu/%zu pos=%d len=%d\n", v, result_pos_, result_.size(), command_pos_, command_len_);
+            std::fprintf(stderr, "FDC msr=%02x result=%d/%zu pos=%d len=%d\n", v, result_pos_, result_.size(), command_pos_, command_len_);
         return v;
     }
     case 0x3F5: { // Data / result FIFO
@@ -669,14 +686,12 @@ void FloppyController::io_write8(u16 port, u8 value) {
             dor_ = value;
             motor_ = false;
             ready_ = false;
-            // A real 82077AA raises a reset interrupt.  BIOS reset code
-            // follows it with SENSE INTERRUPT STATUS and expects ST0=0x20.
+            // A real 82077AA raises a reset interrupt; the BIOS follows the
+            // reset with SENSE INTERRUPT STATUS and expects ST0=0xC0 first
+            // (polling), then 0x80+PCN (82077AA section 7.4).
             seek_pending_ = true;
             pending_st0_ = 0xC0;
             pending_pcn_ = 0;
-            // The BIOS polls SENSE INTERRUPT after reset; do not route this
-            // internal reset condition through IRQ6 (there is no installed
-            // floppy IRQ handler at this early POST stage).
             irq_pending_ = true;
             if (irq_) irq_(kFdcIrq, true);
             return;
@@ -695,6 +710,7 @@ void FloppyController::io_write8(u16 port, u8 value) {
         break;
     case 0x3F5: { // Command / parameter FIFO
         if (result_pos_ < int(result_.size())) return;
+        if (exec_cycles_left_ > 0) return; // RQM = 0 during the execution phase
         if (command_len_ == 0 || command_pos_ >= command_len_) {
             command_[0] = value;
             command_pos_ = 1;

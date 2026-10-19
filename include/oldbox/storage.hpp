@@ -250,13 +250,16 @@ private:
     // relies on this window when it sends back-to-back commands.
     std::vector<u8> exec_result_;
     u64 exec_cycles_left_ = 0;
-    int cylinder_ = 0, head_ = 0, sector_ = 1;
+    int cylinder_ = 0, head_ = 0, sector_ = 1;      // drive A position
+    int cylinder_b_ = 0, head_b_ = 0, sector_b_ = 1; // drive B position
+    bool write_protect_b_ = false;
     bool ready_ = false;
     Geometry geo_;
 
     u8 data_rate_ = 0;
     u8 dsr_ = 0;
     u8 dcr_ = 0;
+    u8 gap_wgate_ = 0;  // PERPENDICULAR MODE command result (GAP/WGATE)
     u8 specify_[3]{};
     u8 config_[4]{};
     u8 dump_[10]{};
@@ -272,8 +275,8 @@ private:
     u8 version_ = 0x90;
 
     void execute();
-    void dma_read(u32 lba, u32 count);
-    void dma_write(u32 lba, u32 count);
+    void dma_read(u32 lba, u32 count, bool drive_b);
+    void dma_write(u32 lba, u32 count, bool drive_b);
     void set_result(std::initializer_list<u8> bytes);
     void set_result(const std::vector<u8>& bytes);
     void defer_result(std::initializer_list<u8> bytes);

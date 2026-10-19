@@ -137,7 +137,7 @@ void S3Trio64::reset() {
     feature_control_ = 0;
     s3_unlocked_ = sys_unlocked_ = cfg_unlocked_ = exseq_unlocked_ = false;
     adv_func_ = 0;
-    subsystem_status_ = 0x0400;
+    subsystem_status_ = 0x0000; // 42E8 power-on default (datasheet 18-1)
     video_enable_ = 0;
     linear_enabled_ = false;
     mmio_enabled_ = false;
@@ -818,7 +818,7 @@ void S3Trio64::update_timing() const {
         // CR50 pixel length is authoritative: 4 bytes/pixel can be paired with
         // the 24-bit DAC mode with the fourth byte unused.
         if (pl == 3) m.bpp = 32;
-        else if (cm == 9) m.bpp = 15;
+        else if (cm == 3) m.bpp = 15; // CR67 color mode 0011 = "Mode 9" = 15-bit
         else if (cm == 5) m.bpp = 16;
         else if (cm == 0xD || cm == 0x7) m.bpp = 24;
         else if (pl == 1) m.bpp = 16;
@@ -835,7 +835,11 @@ void S3Trio64::update_timing() const {
                      pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67]);
 
     const u32 sw = display_start_word();
-    m.start = (m.enhanced && !m.planar && !m.text) ? sw * 8u : sw * 2u;
+    // Chain-4 (mode 13h) addressing occupies A17-A2, so the word start scales
+    // by 4 bytes; planar/text modes by 2, enhanced linear modes by 8.
+    m.start = (m.enhanced && !m.planar && !m.text) ? sw * 8u
+            : m.chain4 ? sw * 4u
+            : sw * 2u;
     if (m.text || m.planar) m.pitch = pitch_reg * 2u;
     else m.pitch = pitch_reg * 8u;
     if (m.pitch < 1) m.pitch = 1;
@@ -1880,6 +1884,8 @@ void S3Trio64::engine_execute(u16 cmd) {
         engine_line(cmd);
         break;
     case 2:
+    case 0xA: // CMD bit 11 is written as a don't-care by the datasheet's own
+              // image-transfer example (0x5571); decode both encodings.
         if (cmd & 0x0100) engine_image_transfer(cmd);
         else engine_fill_rect(cmd);
         break;
@@ -1900,7 +1906,17 @@ void S3Trio64::engine_execute(u16 cmd) {
 void S3Trio64::engine_store(u16 base, u16 value) {
     switch (base) {
     case 0x42E8:
-        if (value & 0x000F) subsystem_status_ = 0x0400;
+        // SUBSYS_CNTL (datasheet 18-2): bits 3:0 clear the interrupt statuses,
+        // bits 11:8 enable them, bits 15:14 are the GE reset control.
+        subsystem_status_ &= u8(~(value & 0x000F));
+        if (value & 0x4000) { // GE reset
+            eng_.pending = false;
+            eng_.xfer_pos = 0;
+            eng_.stream.clear();
+            eng_.stream_pos = 0;
+            eng_.bit_cnt = 0;
+            eng_.bit_buf = 0;
+        }
         break;
     case 0x46E8:
         video_enable_ = u8(value);
@@ -1992,7 +2008,11 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
     }
     u32 v = 0;
     switch (base) {
-    case 0x42E8: v = subsystem_status_; break;
+    case 0x42E8:
+        // SUBSYS_STAT (datasheet 18-1): interrupt statuses in bits 3:0,
+        // bit 7 = pixel length (0 = 4-bit, 1 = 8-bit).
+        v = (subsystem_status_ & 0x000Fu) | ((adv_func_ & 0x04) ? 0x0000u : 0x0080u);
+        break;
     case 0x46E8: v = video_enable_; break;
     case 0x4AE8: v = adv_func_; break;
     case 0x82E8: v = eng_.cur_y; break;
@@ -2024,8 +2044,13 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
     case 0xB2EA: v = (eng_.color_cmp >> 16) & 0xFFFFu; break;
     case 0xB6E8: v = eng_.mix_bg; break;
     case 0xBAE8: v = eng_.mix_fg; break;
-    case 0xBEE8:
-        switch (eng_.read_sel & 0x7u) {
+    case 0xBEE8: {
+        // Read-Register-Data (datasheet 18-19/18-24): the read index
+        // increments after every read; index 7 returns 9AE8 with bits 15:13
+        // forced 0.
+        const u16 sel = eng_.read_sel & 0x7u;
+        eng_.read_sel = u16((eng_.read_sel & ~0x7u) | ((sel + 1) & 0x7u));
+        switch (sel) {
         case 0: v = eng_.min; break;
         case 1: v = eng_.clip_t; break;
         case 2: v = eng_.clip_l; break;
@@ -2033,10 +2058,11 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
         case 4: v = eng_.clip_r; break;
         case 5: v = eng_.pix_cntl; break;
         case 6: v = eng_.multi_misc; break;
-        case 7: v = eng_.cmd; break;
+        case 7: v = (0x0400u | (eng_.pending ? 0x0200u : 0)) & 0x1FFFu; break;
         default: v = 0; break;
         }
         break;
+    }
     case 0xE2E8:
     case 0xE2EA:
         v = 0xFFFF;

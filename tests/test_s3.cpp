@@ -70,7 +70,7 @@ struct Fix {
         u8 pl = 0, cm = 0;
         switch (bpp) {
         case 8:  pitch = 640;  pl = 0; cm = 0x0; break;
-        case 15: pitch = 1280; pl = 0; cm = 0x9; break;
+        case 15: pitch = 1280; pl = 0; cm = 0x3; break; // CR67 color mode 0011
         case 16: pitch = 1280; pl = 0; cm = 0x5; break;
         case 24: pitch = 1920; pl = 0; cm = 0xD; break;
         case 32: pitch = 2560; pl = 3; cm = 0xD; break;

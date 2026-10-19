@@ -74,7 +74,7 @@ Machine::Machine(SystemConfig cfg)
       pci_(),
       cpu_(bus_, sched_mhz_, cfg_.cpu == CpuModel::pentium2_333),
       northbridge_(bus_, cfg_.memory.size_mb),
-      piix4_(bus_, sched_mhz_, cfg_.memory.size_mb),
+      piix4_(bus_, sched_mhz_, cfg_.memory.size_mb, [this]() { pending_reset_ = true; }),
       s3_(bus_, cfg_.video.s3_memory_mb, sched_mhz_),
       voodoo_(cfg_.video.voodoo_enabled ? std::make_unique<Voodoo>(bus_, cfg_.video.voodoo_memory_mb) : nullptr),
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
@@ -469,7 +469,7 @@ void Machine::setup_pci() {
     pci_.add_device(&piix4_, 7, 0);
     pci_.add_device(&ata_, 7, 1);
     pci_.add_device(&usb_, 7, 2);
-    smbus_pci_ = std::make_unique<SmbusPci>(bus_, piix4_.smbus());
+    smbus_pci_ = std::make_unique<SmbusPci>(bus_, piix4_.smbus(), &piix4_);
     pci_.add_device(smbus_pci_.get(), 7, 3);
     s3_.set_multifunction(false);
     pci_.add_device(&s3_, 10, 0);
@@ -492,8 +492,13 @@ void Machine::map_devices() {
     bus_.map_io(0x3f6, 1, &ata_, "ATA primary ctrl");
     bus_.map_io(0x170, 8, &ata_, "ATA secondary");
     bus_.map_io(0x376, 1, &ata_, "ATA secondary ctrl");
-    bus_.map_io(0x3f0, 6, &floppy_, "FDC");
-    bus_.map_io(0x3f7, 1, &floppy_, "FDC");
+    // The SuperIO owns 3F0h/3F1h (config-mode index/data) and 250-252h; the
+    // FDC proper decodes 3F2h-3F5h + 3F7h in AT mode.
+    bus_.map_io(0x3f0, 2, &superio_, "W83877TF config");
+    bus_.map_io(0x250, 3, &superio_, "W83877TF config alt");
+    bus_.map_io(0x3f2, 2, &floppy_, "FDC DOR/TDR");
+    bus_.map_io(0x3f4, 2, &floppy_, "FDC MSR/data");
+    bus_.map_io(0x3f7, 1, &floppy_, "FDC DIR/CCR");
     if (audio_) {
         bus_.map_io(cfg_.audio.sb_base, 0x10, audio_.get(), "AWE64 DSP");
         bus_.map_io(cfg_.audio.mpu_base, 2, audio_.get(), "AWE64 MPU-401");
@@ -528,18 +533,18 @@ void Machine::map_bios() {
     bus_.map_ram(0x000000, 0x0a0000, bus_.ram_data());
     legacy_vga_ = std::make_unique<S3Trio64::Window>(s3_, S3Trio64::Window::legacy);
     bus_.map_mmio(0x0a0000, 0x20000, legacy_vga_.get(), "S3 legacy VGA aperture");
-    if (!vga_bios_.empty()) {
-        bus_.map_rom(0x0c0000, 0x8000, vga_bios_.data(), "S3 option ROM");
-    } else {
-        bus_.map_ram(0x0c0000, 0x8000, bus_.ram_data() + 0x0c0000);
-    }
     apic_ = std::make_unique<LocalApic>([this](int v) { cpu_.request_apic(v); });
     bus_.map_mmio(0xfee00000, 0x1000, apic_.get(), "Local APIC");
     const u32 rom_size = flash_ ? flash_->size() : u32(bios_.size());
     const u8* rom_data = flash_ ? flash_->data() : bios_.data();
+    // The whole C0000-FFFFF BIOS area is served through the PAM window: the
+    // system flash behind C8000-FFFFF and the S3 option ROM behind C0000-C7FFF,
+    // with PAM1-PAM6 shadowing to DRAM as the firmware requests it.
     pam_window_ = std::make_unique<PamWindow>(northbridge_, bus_.ram_data(), rom_data, rom_size,
-        [this]() { return (piix4_.config_read8(0x4e) & 0x40u) != 0; }, flash_.get());
-    bus_.map_mmio(0x0c8000, 0x38000, pam_window_.get(), "PAM BIOS shadow");
+        [this]() { return (piix4_.config_read8(0x4e) & 0x40u) != 0; }, flash_.get(),
+        vga_bios_.empty() ? nullptr : vga_bios_.data(),
+        vga_bios_.empty() ? 0 : u32(vga_bios_.size()));
+    bus_.map_mmio(0x0c0000, 0x40000, pam_window_.get(), "PAM BIOS shadow");
     if (ram_mb_ > 1)
         bus_.map_ram(0x100000, ram_mb_ * megabyte - 0x100000, bus_.ram_data() + 0x100000);
     const u32 top = 0x100000000ull - rom_size;
@@ -562,6 +567,7 @@ void Machine::reset() {
     post_text_.clear();
     bus_.reset();
     piix4_.reset();
+    superio_.reset();
     // Award treats CMOS[0x12] high nibble 0xF as "auto-detect the primary
     // master"; without a configured drive the POST halts with
     // "Hard disk(s) Diagnosis fail", so mirror the real drive configuration
@@ -608,6 +614,7 @@ void Machine::run_slice(double seconds) {
     u64 last_tick = cpu_.state().cycles;
     while (running_ && cpu_.state().cycles < target) {
         cpu_.step();
+        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
         const u64 now = cpu_.state().cycles;
         if (now - last_tick >= 512) {
             const u64 d = now - last_tick;
@@ -649,6 +656,7 @@ void Machine::run_instructions(u64 count) {
     const u64 end = cpu_.instruction_count() + count;
     while (running_ && cpu_.instruction_count() < end) {
         cpu_.step();
+        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
         if (cpu_.state().shutdown) break;
     }
 }
@@ -658,6 +666,7 @@ void Machine::run_frame() {
     u64 last_tick = cpu_.state().cycles;
     while (running_ && cpu_.state().cycles < end) {
         cpu_.step();
+        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
         const u64 now = cpu_.state().cycles;
         if (now - last_tick >= 512) {
             const u64 d = now - last_tick;

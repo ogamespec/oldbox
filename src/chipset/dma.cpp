@@ -7,6 +7,11 @@ Dma::Dma(Bus& bus) : bus_(bus) { reset(); }
 
 void Dma::reset() {
     for (auto& c : channels_) c = Channel{};
+    // DMA Channel 4 cascades the two controllers and defaults to cascade
+    // mode (PIIX4 datasheet 8.4); in cascade mode its mask bit does not
+    // gate channels 0-3.
+    channels_[4].mode = 0xC0;
+    channels_[4].masked = false;
     command_ = 0;
     status_ = 0;
     flip_flop_[0] = flip_flop_[1] = false;
@@ -14,7 +19,17 @@ void Dma::reset() {
     current_ = -1;
 }
 
-bool Dma::masked(int channel) const { return channels_[channel & 7].masked; }
+bool Dma::masked(int channel) const {
+    // Channels 0-3 are cascaded through channel 4.  Only when channel 4 is
+    // NOT in cascade mode does its mask gate 0-3; disabling controller 2
+    // (command register bit 2) blocks channels 4-7 and therefore 0-3 too.
+    channel &= 7;
+    if (channel < 4) {
+        const bool ch4_cascade = (channels_[4].mode & 0xc0) == 0xc0;
+        if ((!ch4_cascade && channels_[4].masked) || dma_disabled_) return true;
+    }
+    return channels_[channel].masked;
+}
 bool Dma::terminal_count(int channel) const { return channels_[channel & 7].tc; }
 u32 Dma::address(int channel) const { return physical(channel) + channels_[channel & 7].count_cur * 0; }
 u32 Dma::count(int channel) const { return channels_[channel & 7].count_cur; }
@@ -28,25 +43,28 @@ u32 Dma::physical(int channel) const {
 void Dma::set_mask(int channel, bool m) {
     if (channel < 0 || channel > 7) return;
     channels_[channel].masked = m;
+    if (m) channels_[channel].active = false; // a masked channel cannot service
 }
 
 void Dma::set_dreq(int channel, bool level) {
     if (channel < 0 || channel > 7) return;
     channels_[channel].request = level ? 1 : 0;
-    if (level && !channels_[channel].masked) channels_[channel].active = true;
+    if (level && !masked(channel)) channels_[channel].active = true;
 }
 
 void Dma::set_tc(int channel, bool v) { channels_[channel & 7].tc = v; }
 
 std::optional<u8> Dma::read_byte(int channel) {
     Channel& c = channels_[channel & 7];
-    if (c.masked) return std::nullopt;
+    if (masked(channel) || dma_disabled_) return std::nullopt;
     const u32 addr = physical(channel);
     const u8 v = bus_.read8(addr);
     c.active = true;
     ++c.base_cur;
     if (--c.count_cur == 0xffffu) {
         c.tc = true;
+        c.request = 0;
+        status_ |= u8(1u << (channel & 7));
         if (c.auto_init) { c.base_cur = c.base; c.count_cur = c.count; }
         else { c.active = false; c.masked = true; }
     }
@@ -55,13 +73,15 @@ std::optional<u8> Dma::read_byte(int channel) {
 
 bool Dma::write_byte(int channel, u8 value) {
     Channel& c = channels_[channel & 7];
-    if (c.masked) return false;
+    if (masked(channel) || dma_disabled_) return false;
     const u32 addr = physical(channel);
     bus_.write8(addr, value);
     c.active = true;
     ++c.base_cur;
     if (--c.count_cur == 0xffffu) {
         c.tc = true;
+        c.request = 0;
+        status_ |= u8(1u << (channel & 7));
         if (c.auto_init) { c.base_cur = c.base; c.count_cur = c.count; }
         else { c.active = false; c.masked = true; }
     }
@@ -74,6 +94,8 @@ bool Dma::advance(int channel, u32 bytes) {
     c.count_cur = u16(c.count_cur - bytes);
     if (c.count_cur == 0xffffu) {
         c.tc = true;
+        c.request = 0;
+        status_ |= u8(1u << (channel & 7));
         if (c.auto_init) { c.base_cur = c.base; c.count_cur = c.count; }
         else { c.active = false; c.masked = true; }
         return true;
@@ -99,35 +121,49 @@ u8 Dma::io_read8(u16 port) {
     if (port <= 0x0f || (port >= 0xc0 && port <= 0xdf)) {
         const bool slave = port >= 0xc0;
         const u16 base = slave ? 0xc0 : 0x00;
-        const u8 r = u8((port - base) & 0xf);
-        if (r < 8) {
-            const int ch = (slave ? 4 : 0) + (r / 2);
+        // Controller 2 (the slave) decodes its registers at even ports only;
+        // odd ports alias the preceding even register (ISA byte lane 0).
+        const u8 r = u8((port - base) & (slave ? 0x1e : 0xf));
+        const bool flip_hi = flip_flop_[slave ? 1 : 0];
+        const u8 cmd = slave ? u8((r - 16) / 2) : u8(r - 8);
+        if (cmd >= 8) {
+            const int ch = slave ? 4 + (r / 4) : (r / 2);
             Channel& chn = channels_[ch];
-            const bool high = (r & 1) != 0;
+            const bool high = slave ? ((r / 2) & 1) != 0 : (r & 1) != 0;
             if (!high) {
-                if (!flip_flop_[slave ? 1 : 0]) {
+                if (!flip_hi) {
                     flip_flop_[slave ? 1 : 0] = true;
                     return u8(chn.base_cur);
                 }
                 flip_flop_[slave ? 1 : 0] = false;
                 return u8(chn.base_cur >> 8);
             }
-            if (!flip_flop_[slave ? 1 : 0]) {
+            if (!flip_hi) {
                 flip_flop_[slave ? 1 : 0] = true;
                 return u8(chn.count_cur);
             }
             flip_flop_[slave ? 1 : 0] = false;
             return u8(chn.count_cur >> 8);
         }
-        switch (r) {
-        case 8: return status_;
-        case 9: return 0;
-        case 10: return u8((c.masked ? 1 : 0) << 2) | u8((port - base) & 3);
-        case 11: return c.mode;
-        case 12: return 0;
-        case 13: return 0;
-        case 14: return 0;
-        case 15: return 0;
+        switch (cmd) {
+        case 0: { // status register: TC bits, cleared by the read
+            const u8 v = status_;
+            status_ = 0;
+            return v;
+        }
+        case 1: return 0; // request register: write-only
+        case 2: return u8((c.masked ? 1 : 0) << 2) | u8((port - base) & 3);
+        case 3: return c.mode;
+        case 4: return 0; // clear byte pointer: write-only
+        case 5: return 0; // master clear: write-only
+        case 6: return 0; // clear mask: write-only
+        case 7: { // read/write all mask bits
+            u8 v = 0;
+            const int first = slave ? 4 : 0;
+            for (int i = 0; i < 4; ++i)
+                if (channels_[first + i].masked) v |= u8(1u << i);
+            return v;
+        }
         }
         return 0xff;
     }
@@ -150,11 +186,12 @@ void Dma::io_write8(u16 port, u8 value) {
     if (port <= 0x0f || (port >= 0xc0 && port <= 0xdf)) {
         const bool slave = port >= 0xc0;
         const u16 base = slave ? 0xc0 : 0x00;
-        const u8 r = u8((port - base) & 0xf);
-        if (r < 8) {
-            const int ch = (slave ? 4 : 0) + (r / 2);
+        const u8 r = u8((port - base) & (slave ? 0x1e : 0xf));
+        const u8 cmd = slave ? u8((r - 16) / 2) : u8(r - 8);
+        if (cmd >= 8) {
+            const int ch = slave ? 4 + (r / 4) : (r / 2);
             Channel& c = channels_[ch];
-            const bool high = (r & 1) != 0;
+            const bool high = slave ? ((r / 2) & 1) != 0 : (r & 1) != 0;
             const bool& ff = flip_flop_[slave ? 1 : 0];
             if (!high) {
                 if (!ff) { c.base = u16((c.base & 0xff00u) | value); c.base_cur = c.base; flip_flop_[slave ? 1 : 0] = true; }
@@ -165,28 +202,34 @@ void Dma::io_write8(u16 port, u8 value) {
             }
             return;
         }
-        switch (r) {
-        case 8: command_ = value; dma_disabled_ = (value & 0x04) != 0; break;
-        case 9: break;
-        case 10: {
-            const int ch = value & 3;
-            channels_[ch].masked = (value & 4) != 0;
+        switch (cmd) {
+        case 0: command_ = value; dma_disabled_ = (value & 0x04) != 0; break;
+        case 1: { // request register: software-initiated DMA service request
+            const int ch = (slave ? 4 : 0) + (value & 3);
+            channels_[ch].request = 1;
+            if (!masked(ch)) channels_[ch].active = true;
             break;
         }
-        case 11: {
-            const int ch = value & 3;
+        case 2: {
+            const int ch = (slave ? 4 : 0) + (value & 3);
+            set_mask(ch, (value & 4) != 0);
+            break;
+        }
+        case 3: {
+            const int ch = (slave ? 4 : 0) + (value & 3);
             channels_[ch].mode = value;
             channels_[ch].auto_init = (value & 0x10) != 0;
             channels_[ch].direction = (value & 0x08) == 0;
             channels_[ch].masked = false;
             break;
         }
-        case 12: flip_flop_[slave ? 1 : 0] = false; break;
-        case 13: reset(); break;
-        case 14: for (auto& c : channels_) c.masked = false; break;
-        case 15: {
-            const int ch = value & 3;
-            channels_[ch].masked = (value & 4) != 0;
+        case 4: flip_flop_[slave ? 1 : 0] = false; break;
+        case 5: reset(); break;
+        case 6: for (auto& c : channels_) c.masked = false; break;
+        case 7: { // write all mask bits: four channels at once
+            const int first = slave ? 4 : 0;
+            for (int i = 0; i < 4; ++i)
+                channels_[first + i].masked = (value & (1u << i)) != 0;
             break;
         }
         }
@@ -206,6 +249,7 @@ void Dma::io_write8(u16 port, u8 value) {
         }
     }
 }
+
 
 std::string Dma::status() const {
     std::ostringstream o;

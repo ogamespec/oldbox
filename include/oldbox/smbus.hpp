@@ -2,6 +2,7 @@
 #include "oldbox/bus.hpp"
 #include "oldbox/lm78.hpp"
 #include <array>
+#include <functional>
 
 namespace oldbox {
 
@@ -19,6 +20,8 @@ public:
     void set_spd(int slot, std::span<const u8> spd);
     void generate_spd(u32 size_mb, int rank = 1);
     void set_lm78(Lm78* lm) { lm78_ = lm; }
+    // IRQ9 (level) asserted on transaction completion when INTEREN is set.
+    void set_irq(std::function<void(bool)> irq) { irq_ = std::move(irq); }
     [[nodiscard]] u8 read8(u32 reg);
     void write8(u32 reg, u8 v);
 
@@ -28,6 +31,7 @@ public:
 private:
     Bus& bus_;
     u16 base_ = 0;
+    std::function<void(bool)> irq_;
     std::array<std::array<u8, 256>, 4> spd_{};
     std::array<int, 4> spd_size_{};
     Lm78* lm78_ = nullptr;
@@ -37,9 +41,11 @@ private:
     u8 host_address_ = 0;
     u8 host_data0_ = 0;
     u8 host_data1_ = 0;
-    u8 slave_status_ = 0;
-    u8 slave_address_ = 0;
-    u8 slave_data0_ = 0;
+    u8 slave_status_ = 0;   // SMBSLVSTS (01h): W1C bits 5:2, SLV_BSY bit 0
+    u8 slave_cntl_ = 0;     // SMBSLVCNT (08h)
+    u8 slave_shadow_cmd_ = 0; // SMBSHDWCMD (09h), RO
+    u16 slave_event_ = 0;   // SMBSLVEVT (0Ah-0Bh), W1C
+    u16 slave_data_ = 0;    // SMBSLVDAT (0Ch-0Dh), RO
     std::array<u8, 32> block_data_{};
     u8 block_count_ = 0;
     // ICS9248-95 configuration latches (byte 0..5).  Byte 0 bits [2,6:4] =

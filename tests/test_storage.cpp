@@ -553,3 +553,39 @@ TEST(floppy_read_chs_reads_sector) {
     CHECK_EQ(sector[0], 0u);
     CHECK(!fdc.read_chs(80, 0, 1, sector));
 }
+
+TEST(floppy_drive_b_media_commands) {
+    Bus bus(4u * 1024 * 1024);
+    Dma dma(bus);
+    IrqLog irq;
+    FloppyController fdc(bus, dma, irq.fdc());
+    // Build a tiny 720K B: image with a pattern in its first sector.
+    const std::string path = make_image("fdc_b", 737280);
+    {
+        auto disk = read_file(path);
+        for (int i = 0; i < 512; ++i) disk[size_t(i)] = u8(i ^ 0x33);
+        write_file(path, disk);
+    }
+    CHECK(fdc.attach_b(path));
+
+    constexpr u32 buf = 0x10000;
+    program_dma2(dma, buf, 512 - 1);
+    bus.io_write8(0x3F2, 0x1D); // motor A on, DMA enable, nRESET, drive 1
+    fdc_command(bus, {0x03, 0xDF, 0x02}); // SPECIFY
+    fdc_command(bus, {0x07, 0x01});       // RECALIBRATE drive 1
+    CHECK_EQ(irq.last_line, 6);
+    fdc_command(bus, {0x08});             // SENSE INTERRUPT STATUS
+    const auto sense = fdc_result(bus, 2);
+    CHECK_EQ(int(sense[0]) & 0x21, 0x21); // SE + DS1
+    // READ DATA on drive 1 transfers B:'s media through DMA.
+    fdc_command(bus, {0x06, 0x01, 0x00, 0x00, 0x01, 0x02, 0x01, 0x1B, 0xFF});
+    fdc.tick(1'000'000);
+    const auto result = fdc_result(bus, 7);
+    CHECK_EQ(int(result[0]) & 0xC0, 0x00); // normal termination
+    CHECK_EQ(int(result[0]) & 0x01, 0x01); // DS1
+    for (int i = 0; i < 512; ++i) {
+        CHECK_EQ(int(bus.read8(buf + u32(i))), int(u8(i ^ 0x33)));
+    }
+    CHECK(dma.terminal_count(2));
+    drop(path);
+}

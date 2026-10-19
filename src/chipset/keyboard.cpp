@@ -5,13 +5,15 @@
 
 namespace oldbox {
 
-Keyboard::Keyboard(Bus& bus, IrqFn irq, A20Fn a20)
-    : bus_(bus), irq_(std::move(irq)), a20_(std::move(a20)) { reset(); }
+Keyboard::Keyboard(Bus& bus, IrqFn irq, A20Fn a20, ResetFn reset_cb)
+    : bus_(bus), irq_(std::move(irq)), a20_(std::move(a20)), reset_(std::move(reset_cb)) { reset(); }
 
 void Keyboard::reset() {
     status_ = 0x14;
     output_ = 0;
     command_ = 0;
+    command_byte_ = 0x45;
+    cmd_data_ = false;
     keyboard_queue_.clear();
     mouse_queue_.clear();
     response_.clear();
@@ -33,6 +35,8 @@ void Keyboard::update_status() {
     if (!mouse_queue_.empty()) status_ |= 0x01;
     // 8042 status bit 4: 1 = keyboard enabled (not inhibited), 0 = locked.
     if (keyboard_enabled_) status_ |= 0x10;
+    // Bit 3: 1 = the last host write to the input buffer was a command.
+    if (cmd_data_) status_ |= 0x08;
 }
 
 void Keyboard::queue_keyboard(u8 v) {
@@ -40,7 +44,7 @@ void Keyboard::queue_keyboard(u8 v) {
         std::fprintf(stderr, "KBD queue %02x (len %zu)\n", v, keyboard_queue_.size());
     keyboard_queue_.push_back(v);
     update_status();
-    if (irq_) irq_(1, true);
+    if (irq_ && (command_byte_ & 0x01)) irq_(1, true);
 }
 
 void Keyboard::queue_mouse(u8 v) {
@@ -135,24 +139,34 @@ void Keyboard::io_write8(u16 port, u8 value) {
         }
         if (command_ == 0xd1) { // write output port
             command_ = 0;
+            if (std::getenv("OLDBOX_KBC_TRACE"))
+                std::fprintf(stderr, "KBC d1 data = %02x\n", value);
             output_port_ = value;
             const bool new_a20 = (value & 0x02) != 0;
             if (a20_) a20_(new_a20);
+            // Output port bit 0 is the system reset line: a 0 pulses it.
+            if ((value & 0x01) == 0 && reset_) reset_();
             return;
         }
-        if (command_ == 0x60) { command_ = 0; return; } // write config byte
+        if (command_ == 0x60) { // write command byte
+            command_ = 0;
+            command_byte_ = value;
+            return;
+        }
         if (command_ == 0xd2) { command_ = 0; if (keyboard_enabled_) queue_keyboard(value); return; }
         if (command_ == 0xd3) { command_ = 0; queue_mouse(value); return; }
+        cmd_data_ = false;
         handle_command(value);
         return;
     }
     if (port != 0x64) return;
     command_ = value;
+    cmd_data_ = true;
     switch (value) {
-    case 0x20: // read config
-        response_.push_back(0x45);
+    case 0x20: // read command byte
+        response_.push_back(command_byte_);
         break;
-    case 0x60: // write config, next data byte
+    case 0x60: // write command byte, next data byte
         break;
     case 0xca: // Award BIOS keyboard interface probe: the main POST sends this
         // before the self-test and only requires the response to have the
@@ -176,8 +190,9 @@ void Keyboard::io_write8(u16 port, u8 value) {
     case 0xa8: mouse_enabled_ = true; break;
     case 0xd0: response_.push_back(output_port_); break;
     case 0xd1: case 0xd2: case 0xd3: case 0xd4: break;
-    case 0xfe: // pulse reset line
+    case 0xfe: // pulse the system reset line
         response_.push_back(0xfa);
+        if (reset_) reset_();
         break;
     case 0xe0: response_.push_back(0xff); break;
     case 0xf0: case 0xf1: case 0xf2: case 0xfc: case 0xfd: response_.push_back(0x00); break;

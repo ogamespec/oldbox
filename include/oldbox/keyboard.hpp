@@ -9,7 +9,8 @@ class Keyboard : public IoDevice {
 public:
     using IrqFn = std::function<void(int, bool)>;
     using A20Fn = std::function<void(bool)>;
-    Keyboard(Bus& bus, IrqFn irq, A20Fn a20);
+    using ResetFn = std::function<void()>;
+    Keyboard(Bus& bus, IrqFn irq, A20Fn a20, ResetFn reset = {});
     void reset();
     void tick(u64 cpu_cycles);
     void key_event(u8 scancode, bool down);
@@ -24,7 +25,10 @@ private:
     Bus& bus_;
     IrqFn irq_;
     A20Fn a20_;
+    ResetFn reset_;
     u8 status_ = 0x14;
+    u8 command_byte_ = 0x45; // KIRQ | SYS | XLAT
+    bool cmd_data_ = false;   // status bit 3: last host write was a command
     u8 output_ = 0;
     u8 command_ = 0;
     std::deque<u8> keyboard_queue_;

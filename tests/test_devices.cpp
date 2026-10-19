@@ -67,7 +67,7 @@ TEST(pam_shadow_window_read_write_attributes) {
     std::vector<u8> rom(0x20000, 0x00);
     rom[0x10000] = 0x5a; // ROM byte mapped at F0000
     PamWindow pam(nb, bus.ram_data(), rom.data(), u32(rom.size()));
-    bus.map_mmio(0xc8000, 0x38000, &pam, "PAM");
+    bus.map_mmio(0xc0000, 0x40000, &pam, "PAM");
     bus.ram_data()[0xf0000] = 0x11;
     // PAM0 default is 0: reads come from the ROM, writes are discarded.
     CHECK_EQ(bus.read8(0xf0000), 0x5au);

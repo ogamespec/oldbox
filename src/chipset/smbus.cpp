@@ -26,6 +26,10 @@ void Smbus::reset() {
     host_address_ = 0;
     host_data0_ = host_data1_ = 0;
     slave_status_ = 0;
+    slave_cntl_ = 0;
+    slave_shadow_cmd_ = 0;
+    slave_event_ = 0;
+    slave_data_ = 0;
     block_data_.fill(0);
     block_count_ = 0;
     block_index_ = 0;
@@ -100,6 +104,10 @@ void Smbus::start_transaction(u8 control) {
     if (slot >= 0 && slot < 4 && spd_size_[slot] > 0) {
         const u8 cmd = host_command_;
         switch (protocol) {
+        case 0x01: // byte
+            if (read) host_data0_ = spd_[slot][cmd];
+            else if (cmd < 0x80) spd_[slot][cmd] = host_data0_;
+            break;
         case 0x02: // byte data
             if (read) host_data0_ = spd_[slot][cmd];
             else if (cmd < 0x80) spd_[slot][cmd] = host_data0_;
@@ -119,6 +127,7 @@ void Smbus::start_transaction(u8 control) {
             if (read) {
                 for (u8 i = 0; i < n; ++i) block_data_[i] = spd_[slot][u8(cmd + i)];
                 block_count_ = n;
+                host_data0_ = n; // received count is stored in SMBHSTDAT0
             } else {
                 for (u8 i = 0; i < n && u8(cmd + i) < 0x80; ++i)
                     spd_[slot][u8(cmd + i)] = block_data_[i];
@@ -130,11 +139,13 @@ void Smbus::start_transaction(u8 control) {
             break;
         }
         if (host_status_ == 0) host_status_ = kStatusInter;
+        if (irq_ && (control & 0x01)) irq_(true);
         return;
     }
     if (addr7 == 0x2d && lm78_) { // LM78 hardware monitor
         const u8 cmd = host_command_;
         switch (protocol) {
+        case 0x01: // byte
         case 0x02:
             if (read) host_data0_ = lm78_->reg_read(cmd);
             else lm78_->reg_write(cmd, host_data0_);
@@ -153,6 +164,7 @@ void Smbus::start_transaction(u8 control) {
             break;
         }
         if (host_status_ == 0) host_status_ = kStatusInter;
+        if (irq_ && (control & 0x01)) irq_(true);
         return;
     }
     if (addr7 == 0x69 || addr7 == 0x4c) { // ICS9248-95 clock generator (SMBus addresses 0x69 and 0x4C)
@@ -160,11 +172,12 @@ void Smbus::start_transaction(u8 control) {
         case 0x02: // byte data: the command code is a dummy; ignore the write
             host_status_ = kStatusInter;
             break;
-        case 0x05: // block: write latches the 6 config bytes, read returns them
+        case 0x05: { // block: write latches the 6 config bytes, read returns them
             if (read) {
                 block_data_[0] = 6; // byte count announced by the device
                 for (u8 i = 0; i < 6; ++i) block_data_[i + 1] = ics_[i];
                 block_count_ = 7;
+                host_data0_ = 6;
             } else {
                 // The ICS write stream starts with a dummy command code and a
                 // dummy byte count; the six configuration bytes follow.
@@ -172,6 +185,7 @@ void Smbus::start_transaction(u8 control) {
             }
             host_status_ = kStatusInter;
             break;
+        }
         case 0x03: // word data: the first two configuration bytes
             if (read) {
                 // The Award speed table is indexed by the raw 4-bit frequency
@@ -191,10 +205,12 @@ void Smbus::start_transaction(u8 control) {
             host_status_ = kStatusInter | kStatusDevErr;
             break;
         }
+        if (irq_ && (control & 0x01)) irq_(true);
         return;
     }
     // Unclaimed cycle.
     host_status_ = kStatusInter | kStatusDevErr;
+    if (irq_ && (control & 0x01)) irq_(true);
 }
 
 u8 Smbus::read8(u32 reg) {
@@ -202,7 +218,7 @@ u8 Smbus::read8(u32 reg) {
         std::fprintf(stderr, "SMB st=%02x\n", host_status_);
     switch (reg & 0x0f) {
     case 0x00: return host_status_;
-    case 0x01: return 0;
+    case 0x01: return u8(slave_status_ & 0x3f); // SLV_BSY bit 0, W1C bits 5:2
     case 0x02:
         block_index_ = 0; // reading SMBHSTCNT resets the block index
         return host_control_;
@@ -215,11 +231,12 @@ u8 Smbus::read8(u32 reg) {
         if (block_index_ < block_count_) ++block_index_;
         return v;
     }
-    case 0x08: return slave_status_;
-    case 0x09: return 0;
-    case 0x0a: return slave_address_;
-    case 0x0b: return slave_data0_;
-    case 0x0c: return host_data1_;
+    case 0x08: return slave_cntl_;
+    case 0x09: return slave_shadow_cmd_;
+    case 0x0a: return u8(slave_event_);
+    case 0x0b: return u8(slave_event_ >> 8);
+    case 0x0c: return u8(slave_data_);
+    case 0x0d: return u8(slave_data_ >> 8);
     default: return 0;
     }
 }
@@ -227,16 +244,24 @@ u8 Smbus::read8(u32 reg) {
 void Smbus::write8(u32 reg, u8 v) {
     if (std::getenv("OLDBOX_SMBUS_TRACE")) std::fprintf(stderr, "SMB wr %02x = %02x\n", u32(reg & 0x0f), v);
     switch (reg & 0x0f) {
-    case 0x00:
+    case 0x00: {
+        const bool was = (host_status_ & kStatusInter) != 0;
         host_status_ &= u8(~(v & kStatusW1C));
+        if (was && (v & kStatusInter) && irq_) irq_(false);
+        break;
+    }
+    case 0x01:
+        slave_status_ &= u8(~(v & 0x3c));
         break;
     case 0x02: {
         if (v & kCntlStart) {
             busy_ = true;
+            block_index_ = 0; // each transaction starts at block index 0
             start_transaction(v);
             busy_ = false;
         } else if (v & kCntlKill) {
             host_status_ = kStatusFailed | kStatusInter;
+            if (irq_ && (v & 0x01)) irq_(true);
         }
         host_control_ = v & 0x1fu; // START reads 0; KILL/protocol/INTEREN kept
         break;
@@ -248,9 +273,9 @@ void Smbus::write8(u32 reg, u8 v) {
     case 0x07:
         if (block_index_ < 32) block_data_[block_index_++] = v;
         break;
-    case 0x08: slave_status_ &= u8(~(v & kStatusW1C)); break;
-    case 0x0a: slave_address_ = v; break;
-    case 0x0b: slave_data0_ = v; break;
+    case 0x08: slave_cntl_ = v & 0x0f; break;
+    case 0x0a: slave_event_ = u16((slave_event_ & 0xff00) | v); break;
+    case 0x0b: slave_event_ = u16((slave_event_ & 0x00ff) | (u16(v) << 8)); break;
     default: break;
     }
 }

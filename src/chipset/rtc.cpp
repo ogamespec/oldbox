@@ -109,44 +109,80 @@ void Rtc::tick(u64 cpu_cycles) {
     tick_acc_ = scaled % cpu_mhz_;
     second_acc_ += ns;
     periodic_acc_ += ns;
-    if (second_acc_ >= 1'000'000'000ull) {
+
+    const bool set = (reg_b_ & 0x80) != 0;
+    if (!set && second_acc_ >= 1'000'000'000ull) {
         second_acc_ -= 1'000'000'000ull;
+        // Update cycle: UIP was set 244 us earlier; the update itself takes
+        // no more than 1984 us (PIIX4 datasheet 8.9.2).
         tick_second();
+        reg_c_ |= 0x10; // UF
+        if (reg_b_ & 0x10) raise_irq();
+        // The alarm is checked during the update.
+        if (reg_b_ & 0x20) {
+            if (alarm_matches()) {
+                reg_c_ |= 0x20; // AF
+                raise_irq();
+            }
+        }
     }
-    const bool uip = second_acc_ >= 997'000'000ull;
+    // UIP: 1 from 244 us before the update until the update completes.
+    const bool uip = !set && second_acc_ >= 1'000'000'000ull - 244'000ull &&
+                     second_acc_ < 1'000'000'000ull + 1'984'000ull;
     if (uip != update_in_progress_) {
         update_in_progress_ = uip;
         if (uip) cmos_[0x0a] = u8(reg_a_ | 0x80);
         else cmos_[0x0a] = reg_a_;
     }
     if ((reg_b_ & 0x40) && periodic_divider_ > 0) {
-        const u64 hz = 32768ull >> periodic_divider_;
-        if (hz > 0) {
-            const u64 period_ns = 1'000'000'000ull / hz;
-            if (periodic_acc_ >= period_ns) {
-                periodic_acc_ %= period_ns;
-                reg_c_ |= 0x40;
-                raise_irq();
-            }
+        // REGA RS selects one of 13 divider taps (datasheet 8.9.1.1 table):
+        // RS=1 -> 256 Hz (divisor 128), RS=2 -> 128 Hz (256), RS>=3 -> 2^(RS-1).
+        const u64 divisor = periodic_divider_ == 1 ? 128ull
+                          : periodic_divider_ == 2 ? 256ull
+                          : (4ull << (periodic_divider_ - 3));
+        const u64 period_ns = 1'000'000'000ull * divisor / 32768ull;
+        if (periodic_acc_ >= period_ns) {
+            periodic_acc_ %= period_ns;
+            reg_c_ |= 0x40; // PF
+            raise_irq();
         }
     }
-    if ((reg_b_ & 0x20) && cmos_[0x01] != 0) {
-        // Alarm is checked at whole-second boundaries.
-        if (second_acc_ < 1'000'000ull) {
-            const u8 sec = from_bcd(cmos_[0x00]);
-            const u8 min = from_bcd(cmos_[0x02]);
-            const u8 hour = from_bcd(cmos_[0x04]);
-            if (sec == from_bcd(cmos_[0x01]) && min == from_bcd(cmos_[0x03]) && hour == from_bcd(cmos_[0x05])) {
-                reg_c_ |= 0x20;
-                raise_irq();
-            }
-        }
-    }
+    update_irqf();
+}
+
+bool Rtc::alarm_matches() const {
+    // Alarm bytes C0h-FFh mean "don't care" (datasheet 8.9.1); the date alarm
+    // lives in REGD bits 5:0 and 0 means don't care (datasheet 8.9.1.4).
+    const auto match = [](u8 current, u8 alarm) {
+        return (alarm & 0xc0) != 0 || current == alarm;
+    };
+    const u8 sec = cmos_[0x00], min = cmos_[0x02], hour = cmos_[0x04];
+    if (!match(sec, cmos_[0x01])) return false;
+    if (!match(min, cmos_[0x03])) return false;
+    if (!match(hour, cmos_[0x05])) return false;
+    const u8 date_alarm = u8(cmos_[0x0d] & 0x3f);
+    if (date_alarm != 0 && cmos_[0x07] != date_alarm) return false;
+    return true;
+}
+
+void Rtc::update_irqf() {
+    // REGC bit 7: IRQF = PF*PIE + AF*AIE + UF*UIE (datasheet 8.9.1.3).
+    const bool irqf = ((reg_c_ & 0x40) && (reg_b_ & 0x40)) ||
+                      ((reg_c_ & 0x20) && (reg_b_ & 0x20)) ||
+                      ((reg_c_ & 0x10) && (reg_b_ & 0x10));
+    if (irqf) reg_c_ |= 0x80;
+    else reg_c_ &= u8(~0x80);
 }
 
 void Rtc::raise_irq() {
+    update_irqf();
     irq_pending_ = true;
     if (irq8_) irq8_(true);
+}
+
+void Rtc::lower_irq8() {
+    irq_pending_ = false;
+    if (irq8_) irq8_(false);
 }
 
 u8 Rtc::status_a() const { return u8(reg_a_ | (update_in_progress_ ? 0x80 : 0)); }
@@ -154,11 +190,18 @@ u8 Rtc::status_b() const { return reg_b_; }
 u8 Rtc::status_c() {
     const u8 v = reg_c_;
     reg_c_ = 0;
+    // Reading register C also deasserts the RTC interrupt line, so the next
+    // event produces a fresh rising edge on IRQ8.
+    lower_irq8();
     return v;
 }
 
 void Rtc::set_cmos(u8 index, u8 value) {
     if (index < 0x0a) {
+        // Time/date bytes are disconnected from the bus during the update
+        // cycle (datasheet 8.9.2): writes in that window are ignored.
+        if (update_in_progress_) return;
+        cmos_[index] = value; // alarm bytes (01h/03h/05h) and day-of-week are raw storage
         switch (index) {
         case 0x00: now_.tm_sec = from_bcd(value); break;
         case 0x02: now_.tm_min = from_bcd(value); break;
@@ -172,8 +215,13 @@ void Rtc::set_cmos(u8 index, u8 value) {
         return;
     }
     if (index == 0x0a) { reg_a_ = value & 0x7f; periodic_divider_ = value & 0x0f; }
-    if (index == 0x0b) reg_b_ = value;
-    if (index == 0x0c) { reg_c_ = 0; return; }
+    if (index == 0x0b) {
+        const bool was_set = (reg_b_ & 0x80) != 0;
+        reg_b_ = value;
+        // Clearing SET resumes the update cycles from a fresh second.
+        if (was_set && !(value & 0x80)) second_acc_ = 0;
+    }
+    if (index == 0x0c) return; // register C flags clear on read only
     cmos_[index & 0x7f] = value;
 }
 

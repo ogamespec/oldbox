@@ -68,6 +68,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_system.cpp
     src/machine.cpp
     src/chipset/i440bx.cpp
+    src/chipset/piix4.cpp
     src/chipset/pic.cpp
     src/chipset/pit.cpp
     src/chipset/rtc.cpp
@@ -75,6 +76,7 @@ add_library(oldbox_core STATIC
     src/chipset/keyboard.cpp
     src/chipset/smbus.cpp
     src/chipset/lm78.cpp
+    src/chipset/w83877tf.cpp
     src/cpu/apic.cpp
     src/video/s3_trio64.cpp
     src/video/voodoo.cpp
@@ -133,6 +135,7 @@ if(OLDBOX_BUILD_TESTS)
     enable_testing()
     add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_io.cpp tests/test_voodoo.cpp
         tests/test_s3.cpp tests/test_audio.cpp tests/test_storage.cpp tests/test_devices.cpp
+        tests/test_chipset.cpp
         tests/test_keyboard.cpp tests/test_machine.cpp)
     target_link_libraries(oldbox_tests PRIVATE oldbox_core)
     target_include_directories(oldbox_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

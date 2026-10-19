@@ -19,9 +19,11 @@ PciDevice::PciDevice(u16 vendor, u16 device, u8 class_code, u8 subclass, u8 prog
 
 void PciDevice::attach(PciBus& bus, int dev, int fn) {
     (void)bus;
-    device_number_ = dev; function_number_ = fn;
-    cfg_[13] = u8(dev);
-    cfg_[14] = u8(fn);
+    device_number_ = dev;
+    function_number_ = fn;
+    // Note: 0x0D/0x0E of the config space are MLT and Header Type — device/function
+    // numbers are selected by the configuration address lines and do not live in
+    // the device's own config space.
 }
 
 u8 PciDevice::config_read8(u8 off) { return cfg_[off]; }
@@ -109,12 +111,8 @@ PciBus::PciBus() = default;
 
 void PciBus::add_device(PciDevice* dev, int dev_num, int fn) {
     dev->attach(*this, dev_num, fn);
-    if (fn == 0) {
-        const bool multifunction = false;
-        dev->set_multifunction(multifunction);
-    } else {
-        dev->set_multifunction(true);
-    }
+    // The header type (including the multifunction bit at 0x0E) belongs to the
+    // device's own reset value; devices set it in their constructors.
     devs_[0][dev_num][fn] = dev;
 }
 

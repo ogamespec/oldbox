@@ -34,7 +34,9 @@ private:
         bool bcd = false;
         bool running = false;
         bool latched = false;
+        bool status_latched = false;
         bool output = false;
+        bool triggered = false;
         u64 ticks = 0;
         u64 frac = 0;
         bool read_high = false;
@@ -58,6 +60,8 @@ private:
     [[nodiscard]] u8 read_counter(int index);
     void write_counter(int index, u8 value);
     [[nodiscard]] u64 cycles_to_pit_ticks(u64 cycles);
+    [[nodiscard]] u64 period(const Counter& c) const;
+    [[nodiscard]] u16 remaining(const Counter& c) const;
 };
 
 } // namespace oldbox
