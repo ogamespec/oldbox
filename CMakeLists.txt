@@ -10,41 +10,8 @@ option(OLDBOX_WITH_SDL "Build the SDL3 frontend" ON)
 option(OLDBOX_BUILD_TESTS "Build unit and integration tests" ON)
 option(OLDBOX_FETCH_SDL "Fetch SDL3 when no system package is found" ON)
 
-if(WIN32)
-    set(_oldbox_prebuilt_default ON)
-else()
-    set(_oldbox_prebuilt_default OFF)
-endif()
-option(OLDBOX_PREBUILT_FIRMWARE
-    "Use the checked-in src/bios/fallback_bios.inc instead of assembling it (default on Windows)"
-    ${_oldbox_prebuilt_default})
-
-if(OLDBOX_PREBUILT_FIRMWARE)
-    set(OLDBOX_FW_DIR ${CMAKE_CURRENT_SOURCE_DIR}/src/bios)
-    if(NOT EXISTS ${OLDBOX_FW_DIR}/fallback_bios.inc)
-        message(FATAL_ERROR "OLDBOX_PREBUILT_FIRMWARE=ON but ${OLDBOX_FW_DIR}/fallback_bios.inc is missing")
-    endif()
-    add_custom_target(fallback_firmware)
-else()
-    find_package(Python3 COMPONENTS Interpreter REQUIRED)
-    find_program(OLDBOX_AS as REQUIRED)
-    find_program(OLDBOX_LD ld REQUIRED)
-    set(OLDBOX_FW_DIR ${CMAKE_BINARY_DIR}/firmware)
-    file(MAKE_DIRECTORY ${OLDBOX_FW_DIR})
-    add_custom_command(
-        OUTPUT ${OLDBOX_FW_DIR}/fallback_bios.bin
-        COMMAND ${OLDBOX_AS} --32 -o ${OLDBOX_FW_DIR}/fallback_bios.o ${CMAKE_CURRENT_SOURCE_DIR}/src/bios/fallback_bios.S
-        COMMAND ${OLDBOX_LD} -m elf_i386 -Ttext 0 --oformat binary -o ${OLDBOX_FW_DIR}/fallback_bios.bin ${OLDBOX_FW_DIR}/fallback_bios.o
-        DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/bios/fallback_bios.S
-        COMMENT "Assembling OldBox fallback firmware")
-    add_custom_command(
-        OUTPUT ${OLDBOX_FW_DIR}/fallback_bios.inc
-        COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tools/bin2c.py ${OLDBOX_FW_DIR}/fallback_bios.bin ${OLDBOX_FW_DIR}/fallback_bios.inc fallback_bios_data
-        DEPENDS ${OLDBOX_FW_DIR}/fallback_bios.bin ${CMAKE_CURRENT_SOURCE_DIR}/tools/bin2c.py
-        COMMENT "Embedding fallback firmware")
-    add_custom_target(fallback_firmware DEPENDS ${OLDBOX_FW_DIR}/fallback_bios.inc)
-endif()
-
+# No built-in or fallback firmware: OldBox runs a REAL Award BIOS dump
+# (assets/bios/EP-ZXA.bin) provided via --bios / assets.
 function(oldbox_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /bigobj)
@@ -84,11 +51,8 @@ add_library(oldbox_core STATIC
     src/audio/emu8000.cpp
     src/storage/ata.cpp
     src/storage/floppy.cpp
-    src/bios/fallback_bios.cpp
 )
 target_include_directories(oldbox_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
-target_include_directories(oldbox_core PRIVATE ${OLDBOX_FW_DIR})
-add_dependencies(oldbox_core fallback_firmware)
 target_compile_definitions(oldbox_core PUBLIC OLDBOX_VERSION="${PROJECT_VERSION}")
 oldbox_warnings(oldbox_core)
 

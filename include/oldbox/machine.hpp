@@ -13,7 +13,6 @@
 #include "oldbox/lm78.hpp"
 #include <memory>
 #include <deque>
-#include "oldbox/firmware.hpp"
 #include "oldbox/flash.hpp"
 
 namespace oldbox {
@@ -75,7 +74,6 @@ private:
     u32 ram_mb_;
     std::vector<u8> bios_;
     std::vector<u8> vga_bios_;
-    std::vector<u8> fallback_rom_;
     std::unique_ptr<Flash> flash_;
 
     Bus bus_;
@@ -116,8 +114,6 @@ private:
     std::deque<std::string> control_history_;
     std::vector<std::string> instr_history_;
 
-    bool bios_int13();
-    bool bios_int1a();
     void load_firmware();
     void attach_storage();
     void map_bios();

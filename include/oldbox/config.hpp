@@ -37,7 +37,6 @@ struct FirmwareConfig {
     std::string bios_path;
     std::string vga_bios_path;
     std::string flash_path;
-    bool builtin_bios = true;
 };
 
 struct SystemConfig {

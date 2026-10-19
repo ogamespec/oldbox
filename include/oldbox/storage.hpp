@@ -254,6 +254,9 @@ private:
     int cylinder_b_ = 0, head_b_ = 0, sector_b_ = 1; // drive B position
     bool write_protect_b_ = false;
     bool ready_ = false;
+    // DSKCHG (disk-change) pin state: active until the head steps.  The DIR
+    // bit 7 reflects the OPPOSITE of this pin (82077AA section 2.1.8a).
+    bool disk_changed_ = true;
     Geometry geo_;
 
     u8 data_rate_ = 0;
@@ -275,8 +278,8 @@ private:
     u8 version_ = 0x90;
 
     void execute();
-    void dma_read(u32 lba, u32 count, bool drive_b);
-    void dma_write(u32 lba, u32 count, bool drive_b);
+    u32 dma_read(u32 lba, u32 count, bool drive_b);
+    u32 dma_write(u32 lba, u32 count, bool drive_b);
     void set_result(std::initializer_list<u8> bytes);
     void set_result(const std::vector<u8>& bytes);
     void defer_result(std::initializer_list<u8> bytes);

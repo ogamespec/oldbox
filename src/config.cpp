@@ -39,16 +39,9 @@ CommandLine parse_command_line(int argc, char** argv) {
         }
         else if (a == "--memory" || a == "--ram") c.memory.size_mb = parse_u32(need(a), "memory size");
         else if (a == "--bios") {
+            // The path must point at a real Award BIOS dump (no built-in
+            // or fallback firmware exists).
             c.firmware.bios_path = need(a);
-            if (c.firmware.bios_path == "builtin" || c.firmware.bios_path == "fallback") {
-                c.firmware.bios_path.clear();
-                c.firmware.builtin_bios = true;
-            } else c.firmware.builtin_bios = false;
-        }
-        else if (a == "--firmware") {
-            const auto v = need(a);
-            if (v == "builtin" || v == "fallback") { c.firmware.bios_path.clear(); c.firmware.builtin_bios = true; }
-            else throw Error("unknown firmware: " + v);
         }
         else if (a == "--vga-bios") c.firmware.vga_bios_path = need(a);
         else if (a == "--flash") c.firmware.flash_path = need(a);
@@ -96,7 +89,6 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--demo") c.demo = need(a);
         else if (a == "--list-devices") out.list_devices = true;
         else if (a == "--selftest") out.selftest = true;
-        else if (a == "--no-builtin-bios") c.firmware.builtin_bios = false;
         else throw Error("unknown option: " + a);
     }
     if (c.memory.size_mb < 8 || c.memory.size_mb > 512 || (c.memory.size_mb & (c.memory.size_mb - 1)) != 0)

@@ -55,6 +55,7 @@ void FloppyController::reset_state() {
 
 void FloppyController::reset() {
     reset_state();
+    disk_changed_ = true; // no steps yet: the change line is active
     dor_ = 0;
     motor_ = false;
     ready_ = false;
@@ -184,6 +185,7 @@ bool FloppyController::attach(const std::string& path) {
     dirty_ = false;
     determine_geometry();
     reset();
+    disk_changed_ = true; // freshly inserted media latches the change line
     return true;
 }
 
@@ -236,6 +238,7 @@ std::string FloppyController::status() const {
 }
 
 int FloppyController::command_size(u8 cmd) {
+    cmd = u8(cmd & 0x1F); // the MT/MFM/SK flags do not change the command
     switch (cmd) {
     case 0x02: // READ TRACK
     case 0x05: // WRITE DATA
@@ -262,7 +265,6 @@ int FloppyController::command_size(u8 cmd) {
     case 0x0E: // DUMPREG
     case 0x10: // VERSION
     case 0x14: // LOCK
-    case 0x4D: // RESTORE (register restore extension)
         return 1;
     case 0x0F: // SEEK
         return 3;
@@ -296,12 +298,16 @@ void FloppyController::defer_result(std::initializer_list<u8> bytes) {
 
 void FloppyController::raise_irq() {
     irq_pending_ = true;
+    if (std::getenv("OLDBOX_FDC_IRQ"))
+        std::fprintf(stderr, "FDC raise irq6 cyc=%llu\n", (unsigned long long)total_cycles_);
     if (irq_) irq_(kFdcIrq, true);
 }
 
 void FloppyController::clear_irq() {
     if (!irq_pending_) return;
     irq_pending_ = false;
+    if (std::getenv("OLDBOX_FDC_IRQ"))
+        std::fprintf(stderr, "FDC clear irq6 cyc=%llu\n", (unsigned long long)total_cycles_);
     if (irq_) irq_(kFdcIrq, false);
 }
 
@@ -309,29 +315,39 @@ void FloppyController::clear_irq() {
 // DMA
 // ---------------------------------------------------------------------------
 
-void FloppyController::dma_read(u32 start_lba, u32 count, bool drive_b) {
+u32 FloppyController::dma_read(u32 start_lba, u32 count, bool drive_b) {
     dma_ok_ = true;
-    const u32 bytes = count * 512;
+    // The host programmes the DMA count register with (bytes - 1); the
+    // transfer must stop there: the terminal count ends the FDC transfer
+    // normally (82077AA section 4.2.5), so never run past it.
+    const u32 bytes = std::min(count * 512, dma_.count(kFdcDma) + 1);
     std::vector<u8>& disk = drive_b ? disk_b_ : disk_;
     dma_.set_dreq(kFdcDma, true);
+    if (std::getenv("OLDBOX_FDC_DMA"))
+        std::fprintf(stderr, "FDC dma_read start=%u count=%u bytes=%u ch2 mask=%d mode=%02x addr=%04x cnt=%04x page=%02x\n",
+                     start_lba, count, bytes, int(dma_.masked(kFdcDma)), dma_.mode(kFdcDma),
+                     dma_.address(kFdcDma), dma_.count(kFdcDma), dma_.page(kFdcDma));
     for (u32 i = 0; i < bytes; ++i) {
         const size_t off = size_t(start_lba) * 512u + i;
         const u8 value = off < disk.size() ? disk[off] : 0xFF;
         if (!dma_.write_byte(kFdcDma, value)) {
             dma_ok_ = false;
-            break;
+            if (std::getenv("OLDBOX_FDC_DMA"))
+                std::fprintf(stderr, "FDC dma_read FAILED at byte %u\n", i);
+            return i;
         }
     }
     dma_.set_dreq(kFdcDma, false);
+    return bytes;
 }
 
-void FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
+u32 FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
     dma_ok_ = true;
     if (drive_b ? write_protect_b_ : write_protect_) {
         dma_ok_ = false;
-        return;
+        return 0;
     }
-    const u32 bytes = count * 512;
+    const u32 bytes = std::min(count * 512, dma_.count(kFdcDma) + 1);
     std::vector<u8>& disk = drive_b ? disk_b_ : disk_;
     dma_.set_dreq(kFdcDma, true);
     for (u32 i = 0; i < bytes; ++i) {
@@ -346,6 +362,7 @@ void FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
     }
     dma_.set_dreq(kFdcDma, false);
     if (dma_ok_) dirty_ = true;
+    return bytes;
 }
 
 // ---------------------------------------------------------------------------
@@ -353,7 +370,10 @@ void FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
 // ---------------------------------------------------------------------------
 
 void FloppyController::execute() {
-    const u8 cmd = command_[0];
+    // Bits 7-5 of the data-transfer commands carry the MT/MFM/SK flags
+    // (e.g. the Award boot block issues READ ID as 4Ah and READ DATA as
+    // A6h); the command itself is bits 4:0 (82077AA section 5.1).
+    const u8 cmd = u8(command_[0] & 0x1F);
     if (std::getenv("OLDBOX_FDC_TRACE")) std::fprintf(stderr, "FDC cmd %02x\n", cmd);
     const u8 ds = command_[1] & 0x01;
     const bool drive_b = ds != 0;
@@ -399,6 +419,7 @@ void FloppyController::execute() {
         pending_st0_ = u8(0x20 | ds);
         pending_pcn_ = 0;
         seek_pending_ = true;
+        disk_changed_ = false; // the head step clears the drive's change line
         raise_irq();
         break;
 
@@ -408,6 +429,16 @@ void FloppyController::execute() {
             const u8 pcn = seek_pending_ ? pending_pcn_ : u8(cylinder);
             seek_pending_ = false;
             set_result({st0, pcn});
+            // A DOR reset raises TWO interrupts: the reset itself
+            // (ST0=C0h) and the following completion (ST0=80h + PCN)
+            // (82077AA section 7.4).  Queue the second one now so the
+            // host's next wait gets its interrupt.
+            if (st0 == 0xC0) {
+                seek_pending_ = true;
+                pending_st0_ = 0x80;
+                pending_pcn_ = u8(cylinder);
+                raise_irq();
+            }
         } else {
             set_result({0x80, u8(cylinder)});
         }
@@ -443,11 +474,13 @@ void FloppyController::execute() {
         if (eot >= r) sectors = u32(eot - r + 1);
         sectors = std::min<u32>(sectors, geo.spt - r + 1);
         const u32 start = (u32(c) * geo.heads + h) * geo.spt + (r - 1);
-        dma_read(start, sectors, drive_b);
+        const u32 done = dma_read(start, sectors, drive_b);
         if (!dma_ok_) {
             fail(0x08, 0x04, 0x00, c, h, r, n);
             break;
         }
+        // The DMA terminal count may end the transfer mid-request.
+        sectors = (done + 511) / 512;
         const u32 end = start + sectors;
         cylinder = int(end / (geo.heads * geo.spt));
         head = int((end / geo.spt) % geo.heads);
@@ -534,17 +567,6 @@ void FloppyController::execute() {
         break;
     }
 
-    case 0x4D: // RESTORE register set (non-standard extension used by some)
-        if (dumped_) {
-            cylinder_ = dump_[0];
-            cylinder_b_ = dump_[1];
-            specify_[0] = dump_[4];
-            specify_[1] = dump_[5];
-            lock_ = (dump_[7] & 0x80) != 0;
-            config_[0] = u8(dump_[8] & 0x7f);
-            config_[1] = dump_[9];
-        }
-        break;
 
     case 0x0F: { // SEEK
         const u8 c = command_[2];
@@ -554,6 +576,7 @@ void FloppyController::execute() {
         } else {
             cylinder = c;
             sector = 1;
+            disk_changed_ = false; // the head step clears the drive's change line
             // The H bit always returns 0 in the SEEK result phase (82077AA
             // section 5.2.4).
             pending_st0_ = u8(0x20 | ds);
@@ -643,9 +666,10 @@ u8 FloppyController::io_read8(u16 port) {
         if (exec_cycles_left_ == 0) v |= MSR_RQM;
         if (result_pos_ < int(result_.size())) v |= MSR_DIO;
         if (command_pos_ > 0 && command_pos_ < command_len_) v |= MSR_CB;
-        // The 82077 keeps the busy bit set until the result FIFO is drained
-        // too; the Award boot code reads result bytes one at a time while
-        // CB is asserted and would leave stray FIFO bytes behind otherwise.
+        // CB (command busy) stays set through the whole results phase and
+        // clears when the last result byte is read (82077AA section 2.1.6).
+        // The Award boot code reads result bytes one at a time while CB is
+        // asserted and relies on it dropping after the final byte.
         if (result_pos_ < int(result_.size())) v |= MSR_CB;
         if (exec_cycles_left_ > 0) v |= MSR_CB;
         if (std::getenv("OLDBOX_FDC_TRACE") && std::getenv("OLDBOX_FDC_VAL"))
@@ -667,7 +691,9 @@ u8 FloppyController::io_read8(u16 port) {
     }
     case 0x3F6: // Digital input register (on controllers that decode it)
     case 0x3F7:
-        return present_ ? 0x80 : 0x00;
+        // DIR bit 7 = DSKCHG: reflects the OPPOSITE of the drive's change
+        // pin (1 = change active); a head step clears it (82077AA 2.1.8a).
+        return present_ && !disk_changed_ ? 0x00 : 0x80;
     default:
         return 0xFF;
     }

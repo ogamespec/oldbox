@@ -318,7 +318,28 @@ TEST(floppy_missing_media) {
     CHECK_EQ(int(result[0]) & 0x40, 0x40); // abnormal termination
     CHECK_EQ(int(result[0]) & 0x08, 0x08); // not ready
     CHECK_EQ(int(result[1]) & 0x04, 0x04); // no data
-    CHECK_EQ(int(bus.io_read8(0x3F7)) & 0x80, 0x00); // no disk change / media
+    // With no media the change line stays active.
+    CHECK_EQ(int(bus.io_read8(0x3F7)) & 0x80, 0x80);
+}
+
+TEST(floppy_disk_change_line_and_seek) {
+    Bus bus(1u * 1024 * 1024);
+    Dma dma(bus);
+    IrqLog irq;
+    FloppyController fdc(bus, dma, irq.fdc());
+    const std::string path = make_image("fdc_change", 1474560);
+    CHECK(fdc.attach(path));
+
+    // A freshly inserted disk latches the change line (DIR bit 7 = 1).
+    CHECK_EQ(int(bus.io_read8(0x3F7)) & 0x80, 0x80);
+    // A head step clears it (82077AA section 2.1.8a).
+    bus.io_write8(0x3F2, 0x1C);
+    fdc_command(bus, {0x07, 0x00}); // RECALIBRATE
+    fdc_command(bus, {0x08});       // SENSE INTERRUPT STATUS
+    const auto sense = fdc_result(bus, 2);
+    CHECK_EQ(int(sense[0]) & 0xC0, 0x00); // seek end, no error
+    CHECK_EQ(int(bus.io_read8(0x3F7)) & 0x80, 0x00);
+    drop(path);
 }
 
 TEST(atapi_inquiry_and_iso_read) {

@@ -43,7 +43,6 @@ TEST(freedos_boots_to_command_prompt_with_reference_bios) {
     }
 
     SystemConfig cfg;
-    cfg.firmware.builtin_bios = false;
     cfg.firmware.bios_path = bios;
     cfg.firmware.vga_bios_path = vga;
     cfg.storage.floppy_path = floppy;

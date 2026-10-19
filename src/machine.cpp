@@ -1,5 +1,4 @@
 #include "oldbox/machine.hpp"
-#include "oldbox/firmware.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -82,29 +81,15 @@ Machine::Machine(SystemConfig cfg)
       usb_(bus_) {
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
     // Firmware service shim: early Award POST calls INT 13h AH=00h before it
-    // has installed a usable disk IRQ handler.  The reset itself is a no-op
-    // for an emulated 82077AA, so report success instead of entering the
-    // BIOS's controller-failure beep loop.  Real reads/writes still go through
-    // the Award INT 13h handler and the emulated FDC/ATA hardware.
-    cpu_.set_software_interrupt_hook([this](u8 vector) {
-        if (cfg_.trace) {
-            trace_history_.push_back(std::format("INT {:02x} ax={:04x} bx={:04x} cx={:04x} dx={:04x} cs:ip={:04x}:{:04x}",
-                vector, cpu_.state().gpr[0] & 0xffff, cpu_.state().gpr[3] & 0xffff,
-                cpu_.state().gpr[1] & 0xffff, cpu_.state().gpr[2] & 0xffff,
-                cpu_.state().seg[1].selector, cpu_.state().eip));
-            while (trace_history_.size() > 512) trace_history_.pop_front();
-        }
-        if (vector == 0x13) {
-            if (std::getenv("OLDBOX_INT13_TRACE")) {
-                std::fprintf(stderr, "INT13 ah=%02x dl=%02x cx=%04x cs:ip=%04x:%04x\n",
-                    u8((cpu_.state().gpr[0] >> 8) & 0xff), u8(cpu_.state().gpr[2] & 0xff),
-                    u16(cpu_.state().gpr[1]), cpu_.state().seg[1].selector, cpu_.state().eip);
-            }
-            return bios_int13();
-        }
-        if (vector == 0x1a) return bios_int1a();
-        return false;
-    });
+    // =====================================================================
+    //  NO BIOS-SERVICE HOOKS.  OldBox is a low-level emulator: the guest
+    //  runs the REAL Award BIOS from its dump, and every interrupt the CPU
+    //  executes must go to that real BIOS code and the real device models
+    //  (8259/82077AA/IDE/RTC/SMBus, ...) behind it.  Never intercept
+    //  INT 10h/13h/15h/1Ah (or any other vector) here to fake guest
+    //  services: if a guest hangs or misbehaves, fix the hardware model or
+    //  the CPU instead.  Adding such shims is forbidden.
+    // =====================================================================
     if (cfg_.trace || cfg_.dump_control) {
         cpu_.set_control_trace([this](std::string line) {
             control_history_.push_back(std::move(line));
@@ -148,282 +133,35 @@ Machine::Machine(SystemConfig cfg)
          cfg_.video.voodoo_enabled ? cfg_.video.voodoo_memory_mb : 0);
 }
 
-bool Machine::bios_int13() {
-    auto& s = cpu_.state();
-    const u8 ah = u8((s.gpr[0] >> 8) & 0xff);
-    const u8 dl = u8(s.gpr[2] & 0xff);
-    auto set_cf = [&](bool v) { if (v) s.eflags |= 1; else s.eflags &= ~u32(1); };
-    auto set_ah = [&](u8 v) { s.gpr[0] = (s.gpr[0] & 0xffff00ffu) | (u32(v) << 8); };
-    auto fail = [&](u8 code) { set_ah(code); set_cf(true); return true; };
 
-    // Hard disks (dl >= 0x80): the primary master is the only one modelled.
-    if (dl >= 0x80) {
-        const bool hdd = ata_.hdd_present() && dl == 0x80;
-        const u32 cyls = hdd ? ata_.hdd_cylinders() : 0;
-        const u32 heads = hdd ? ata_.hdd_heads() : 0;
-        const u32 spt = hdd ? ata_.hdd_spt() : 0;
-        const u64 total = hdd ? ata_.hdd_total_sectors() : 0;
-        switch (ah) {
-        case 0x00: // reset disk system
-        case 0x01: // status
-            set_ah(hdd ? 0u : 0x01u); set_cf(!hdd); return true;
-        case 0x08: { // get drive parameters
-            if (!hdd) return fail(0x01);
-            const u32 c = cyls ? cyls - 1 : 0;
-            s.gpr[1] = (s.gpr[1] & 0xffff0000u) | (u32(spt & 0x3f)) | ((u32(c) & 0x300u) >> 2);
-            s.gpr[1] = (s.gpr[1] & 0xffff00ffu) | ((u32(c) & 0xffu) << 8);
-            s.gpr[2] = (s.gpr[2] & 0xff00ff00u) | ((u32(heads ? heads - 1 : 0) & 0xffu) << 8) | 0x80u;
-            s.gpr[3] = (s.gpr[3] & 0xffffff00u);
-            set_ah(0); set_cf(false); return true;
-        }
-        case 0x02: case 0x03: case 0x04: { // read / write / verify (CHS)
-            if (!hdd) return fail(0x80);
-            const u16 cx = u16(s.gpr[1]);
-            const u16 dx = u16(s.gpr[2]);
-            u32 c = ((u32(cx) & 0xff00u) >> 8) | ((u32(cx) & 0xc0u) << 2);
-            u32 h = (u32(dx) & 0xff00u) >> 8;
-            u32 sec = u32(cx) & 0x3fu;
-            u32 count = s.gpr[0] & 0xff;
-            if (count == 0 || sec == 0 || h >= heads || spt == 0) return fail(0x01);
-            u64 lba = (u64(c) * heads + h) * spt + (sec - 1);
-            const u16 es = s.seg[0].selector;
-            const u16 bx = u16(s.gpr[3]);
-            std::vector<u8> buf(512);
-            u32 done = 0;
-            for (; done < count; ++done, ++lba) {
-                if (lba >= total) return fail(0x01);
-                if (ah == 0x03) {
-                    for (u32 j = 0; j < 512; ++j)
-                        buf[j] = bus_.read8(u32(es) * 16u + bx + done * 512u + j);
-                    if (!ata_.hdd_write_sector(lba, buf.data())) return fail(0x01);
-                } else {
-                    if (!ata_.hdd_read_sector(lba, buf.data())) return fail(0x01);
-                    if (ah == 0x02) {
-                        for (u32 j = 0; j < 512; ++j)
-                            bus_.write8(u32(es) * 16u + bx + done * 512u + j, buf[j]);
-                    }
-                }
-            }
-            s.gpr[0] = (s.gpr[0] & 0xffffff00u) | done;
-            set_ah(0); set_cf(false); return true;
-        }
-        case 0x15: // get disk type
-            if (!hdd) return fail(0x00);
-            set_ah(0x03); // fixed disk
-            {
-                const u32 c = cyls ? cyls - 1 : 0;
-                s.gpr[1] = (s.gpr[1] & 0xffff0000u) | (u32(spt & 0x3f)) | ((u32(c) & 0x300u) >> 2);
-                s.gpr[1] = (s.gpr[1] & 0xffff00ffu) | ((u32(c) & 0xffu) << 8);
-                s.gpr[2] = (s.gpr[2] & 0xff00ff00u) | ((u32(heads ? heads - 1 : 0) & 0xffu) << 8) | 0x80u;
-            }
-            set_cf(false); return true;
-        case 0x16: // change line status
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x09: // initialize drive parameters (IDE INITIALIZE DEVICE PARAMETERS)
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x0c: // seek
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x10: // check drive ready
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x11: // recalibrate
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x14: // ATAPI / IDE diagnostic: 0 = ATA device
-            if (!hdd) return fail(0x01);
-            set_ah(0); set_cf(false); return true;
-        case 0x41: // EDD installation check
-            if (!hdd) return fail(0x01);
-            s.gpr[3] = (s.gpr[3] & 0xffff0000u) | 0xaa55u;
-            set_ah(0x30); // EDD-3
-            s.gpr[1] = (s.gpr[1] & 0xffff0000u) | 0x0001u;
-            set_cf(false); return true;
-        case 0x42: { // EDD extended read
-            if (!hdd) return fail(0x01);
-            const u16 ds = s.seg[3].selector;
-            const u32 tbl = s.gpr[3];
-            const u16 count = u16(bus_.read16(u32(ds) * 16u + tbl));
-            const u16 off = bus_.read16(u32(ds) * 16u + tbl + 2);
-            const u16 seg = bus_.read16(u32(ds) * 16u + tbl + 4);
-            const u64 lba = u64(bus_.read32(u32(ds) * 16u + tbl + 8)) |
-                            (u64(bus_.read32(u32(ds) * 16u + tbl + 12)) << 32);
-            std::vector<u8> buf(512);
-            for (u32 i = 0; i < count; ++i) {
-                if (lba + i >= total) return fail(0x01);
-                if (!ata_.hdd_read_sector(lba + i, buf.data())) return fail(0x01);
-                for (u32 j = 0; j < 512; ++j)
-                    bus_.write8(u32(seg) * 16u + off + i * 512u + j, buf[j]);
-            }
-            set_ah(0); set_cf(false); return true;
-        }
-        default: return fail(0x01);
-        }
-    }
-
-    if (dl > 1) { // only A: and B: are fitted
-        switch (ah) {
-        case 0x00: case 0x01: set_ah(0); set_cf(false); return true;
-        default: return fail(0x01);
-        }
-    }
-    const bool drive_b = dl == 1;
-    const bool media_present = drive_b ? floppy_.present_b() : floppy_.present();
-    const u32 tracks = drive_b ? (floppy_.present_b() ? floppy_.tracks_b() : 80)
-                               : (floppy_.present() ? floppy_.tracks() : 80);
-    const u32 heads = drive_b ? (floppy_.present_b() ? floppy_.heads_b() : 2)
-                              : (floppy_.present() ? floppy_.heads() : 2);
-    const u32 spt = drive_b ? (floppy_.present_b() ? floppy_.sectors_per_track_b() : 9)
-                            : (floppy_.present() ? floppy_.sectors_per_track() : 18);
-    switch (ah) {
-    case 0x00: // reset disk system
-        set_ah(0); set_cf(false); return true;
-    case 0x01: // status of last operation
-        set_ah(0); set_cf(false); return true;
-    case 0x02: case 0x04: { // read / verify sectors
-        const u16 cx = u16(s.gpr[1]);
-        const u16 dx = u16(s.gpr[2]);
-        u32 cyl = (cx >> 8) & 0xff;
-        u32 head = (dx >> 8) & 1;
-        u32 sector = cx & 0x3f;
-        const u32 count = s.gpr[0] & 0xff;
-        if (!media_present) return fail(0x80);
-        if (count == 0 || sector == 0 || cyl >= tracks || head >= heads || sector > spt) return fail(0x04);
-        const u16 es = s.seg[0].selector;
-        const u16 bx = u16(s.gpr[3]);
-        std::vector<u8> buf(512);
-        u32 done = 0;
-        for (; done < count; ++done) {
-            const bool ok = drive_b ? floppy_.read_chs_b(cyl, head, sector, buf.data())
-                                    : floppy_.read_chs(cyl, head, sector, buf.data());
-            if (!ok) return fail(0x04);
-            if (ah == 0x02) {
-                for (u32 j = 0; j < 512; ++j)
-                    bus_.write8(u32(es) * 16u + bx + done * 512u + j, buf[j]);
-            }
-            if (++sector > spt) {
-                sector = 1;
-                if (++head >= heads) { head = 0; ++cyl; }
-                if (cyl >= tracks) break;
-            }
-        }
-        s.gpr[0] = (s.gpr[0] & 0xffffff00u) | done;
-        set_ah(0); set_cf(false); return true;
-    }
-    case 0x03: // write sectors
-        return fail(0x01);
-    case 0x08: { // get drive parameters
-        s.gpr[1] = (s.gpr[1] & 0xffffff00u) | u32(spt & 0x3f) | (u32((tracks - 1) >> 2) & 0xc0u);
-        s.gpr[1] = (s.gpr[1] & 0xffff00ffu) | (u32((tracks - 1) & 0xffu) << 8);
-        s.gpr[2] = (s.gpr[2] & 0xff00ff00u) | (u32(heads - 1) << 8) | (drive_b ? 2u : 1u);
-        s.gpr[3] = (s.gpr[3] & 0xffffff00u) | (drive_b ? 3u : 4u); // 3 = 720K, 4 = 1.44M
-        set_ah(0); set_cf(false); return true;
-    }
-    case 0x15: // get disk type
-        set_ah(media_present ? 0x01 : 0x00); set_cf(false); return true;
-    case 0x16: // change line status
-        set_ah(0); set_cf(false); return true;
-    case 0x41: // EDD installation check: no extended disk services
-        return fail(0x01);
-    default:
-        return fail(0x01);
-    }
-}
-
-bool Machine::bios_int1a() {
-    auto& s = cpu_.state();
-    const u8 ah = u8((s.gpr[0] >> 8) & 0xff);
-    auto bcd = [](u32 v) { return u8(((v / 10u) << 4) | (v % 10u)); };
-    auto from_bcd = [](u8 v) { return u32((v >> 4) * 10u + (v & 0x0fu)); };
-    Rtc& rtc = piix4_.rtc();
-    auto clear_cf = [&] { s.eflags &= ~u32(1); };
-    switch (ah) {
-    case 0x00: { // read system clock counter
-        const u32 ticks = bus_.read32(0x46cu);
-        s.gpr[1] = (s.gpr[1] & 0xffff0000u) | (ticks >> 16);
-        s.gpr[2] = (s.gpr[2] & 0xffff0000u) | (ticks & 0xffffu);
-        s.gpr[0] &= 0xffffff00u; // AL = 0: no midnight rollover
-        clear_cf();
-        return true;
-    }
-    case 0x02: { // read real-time clock time
-        const std::tm t = rtc.time();
-        s.gpr[1] = (s.gpr[1] & 0xffff0000u) | (u32(bcd(u32(t.tm_hour))) << 8) | bcd(u32(t.tm_min));
-        s.gpr[2] = (s.gpr[2] & 0xffff0000u) | (u32(bcd(u32(t.tm_sec))) << 8);
-        s.gpr[0] &= 0xffffff00u;
-        clear_cf();
-        return true;
-    }
-    case 0x04: { // read real-time clock date
-        const std::tm t = rtc.time();
-        const u32 year = u32(t.tm_year + 1900);
-        s.gpr[1] = (s.gpr[1] & 0xffff0000u) | (u32(bcd(year / 100)) << 8) | bcd(year % 100);
-        s.gpr[2] = (s.gpr[2] & 0xffff0000u) | (u32(bcd(u32(t.tm_mon + 1))) << 8) | bcd(u32(t.tm_mday));
-        clear_cf();
-        return true;
-    }
-    case 0x01: { // set time
-        std::tm t = rtc.time();
-        t.tm_hour = int(from_bcd(u8(s.gpr[1] >> 8)));
-        t.tm_min = int(from_bcd(u8(s.gpr[1])));
-        t.tm_sec = int(from_bcd(u8(s.gpr[2] >> 8)));
-        rtc.set_time(t);
-        clear_cf();
-        return true;
-    }
-    case 0x03: { // set date
-        std::tm t = rtc.time();
-        const u32 century = from_bcd(u8(s.gpr[1] >> 8));
-        const u32 y = from_bcd(u8(s.gpr[1]));
-        t.tm_year = int((century ? century * 100 + y : y + (y < 80 ? 2000 : 1900)) - 1900);
-        t.tm_mon = int(from_bcd(u8(s.gpr[2] >> 8))) - 1;
-        t.tm_mday = int(from_bcd(u8(s.gpr[2])));
-        rtc.set_time(t);
-        clear_cf();
-        return true;
-    }
-    default:
-        s.eflags |= 1;
-        return true;
-    }
-}
 
 Machine::~Machine() = default;
 
+
+
 void Machine::load_firmware() {
-    if (cfg_.firmware.builtin_bios && cfg_.firmware.bios_path.empty()) {
-        auto fw = fallback_bios_image();
-        bios_.assign(fw.begin(), fw.end());
-        log(LogLevel::info, "firmware", "using built-in OldBox POST ROM (forced)");
-    }
-    if (bios_.empty()) {
-        const std::vector<std::string> bios_candidates = {
-            cfg_.firmware.bios_path,
-            "assets/bios/bios.bin",
-            "assets/bios/BXC09716.BIN",
-            "assets/bios/EP-ZXA.bin"
-        };
-        if (!cfg_.firmware.bios_path.empty()) {
-            bios_ = read_first({cfg_.firmware.bios_path});
-            if (bios_.empty()) throw Error("cannot read BIOS: " + cfg_.firmware.bios_path);
-        } else {
-            bios_ = read_first(bios_candidates);
-        }
-    }
-    if (bios_.empty()) {
-        auto fw = fallback_bios_image();
-        bios_.assign(fw.begin(), fw.end());
-        log(LogLevel::info, "firmware", "using built-in OldBox POST ROM");
+    // A REAL Award BIOS dump is required; there is deliberately no built-in
+    // or fallback firmware (src/bios was removed).  The reference board's
+    // image is assets/bios/EP-ZXA.bin (256 KiB EP-61BXA-M dump).
+    const std::vector<std::string> bios_candidates = {
+        cfg_.firmware.bios_path,
+        "assets/bios/bios.bin",
+        "assets/bios/BXC09716.BIN",
+        "assets/bios/EP-ZXA.bin"
+    };
+    if (!cfg_.firmware.bios_path.empty()) {
+        bios_ = read_first({cfg_.firmware.bios_path});
+        if (bios_.empty()) throw Error("cannot read BIOS dump: " + cfg_.firmware.bios_path);
     } else {
-        logf(LogLevel::info, "firmware", "loaded system BIOS: {} bytes", bios_.size());
+        bios_ = read_first(bios_candidates);
     }
-    if (bios_.size() < 0x10000 || (bios_.size() & (bios_.size() - 1)) != 0) {
-        logf(LogLevel::warn, "firmware", "BIOS size {} is not a power-of-two >= 64 KiB; using fallback", bios_.size());
-        auto fw = fallback_bios_image();
-        bios_.assign(fw.begin(), fw.end());
-    }
+    if (bios_.empty())
+        throw Error("no Award BIOS dump found; point --bios at a real 256 KiB Award BIOS image "
+                    "(e.g. assets/bios/EP-ZXA.bin)");
+    if (bios_.size() < 0x10000 || (bios_.size() & (bios_.size() - 1)) != 0)
+        throw Error("invalid BIOS dump size " + std::to_string(bios_.size()) +
+                    ": expected a power-of-two size >= 64 KiB (real Award BIOS dumps are 256 KiB)");
+    logf(LogLevel::info, "firmware", "loaded system BIOS dump: {} bytes", bios_.size());
 
     const std::vector<std::string> vga_candidates = {
         cfg_.firmware.vga_bios_path,
@@ -442,6 +180,7 @@ void Machine::load_firmware() {
         s3_.load_option_rom(vga_bios_);
         log(LogLevel::info, "firmware", "loaded S3 Trio64 option ROM");
     }
+
     // The reference board always has its W29C020 flash fitted.  Without an
     // explicit --flash backing file it lives in memory only (changes are
     // discarded on exit); the boot block's flash detection needs it either

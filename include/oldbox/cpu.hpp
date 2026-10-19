@@ -125,7 +125,6 @@ public:
     void resume_smm();
     [[nodiscard]] bool in_smm() const { return state_.smm; }
     void set_interrupt_ack(InterruptAck ack) { irq_ack_ = std::move(ack); }
-    void set_software_interrupt_hook(std::function<bool(u8)> cb) { sw_int_hook_ = std::move(cb); }
     void set_trace(std::function<void(const CpuState&, u16)> cb) { trace_ = std::move(cb); }
     void set_control_trace(std::function<void(std::string)> cb) { control_trace_ = std::move(cb); }
     void set_memory_logging(bool v) { memory_logging_ = v; }
@@ -226,7 +225,6 @@ private:
     std::array<u64, 5> mc_addr_{};
     std::array<u64, 5> mc_misc_{};
     InterruptAck irq_ack_;
-    std::function<bool(u8)> sw_int_hook_;
     std::function<void(std::string)> control_trace_;
     std::function<void(const CpuState&, u16)> trace_;
     bool memory_logging_ = false;

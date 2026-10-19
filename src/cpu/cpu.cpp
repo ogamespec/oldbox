@@ -952,7 +952,8 @@ void Cpu::do_iret(int size) {
 
 void Cpu::software_interrupt(int vector) {
     if (vector == 3 || vector == 4) { /* debug/trap */ }
-    if (sw_int_hook_ && sw_int_hook_(u8(vector))) return;
+    // The interrupt always goes through the IDT/IVT to the firmware's own
+    // handler; there is no interception mechanism by design.
     deliver_interrupt(vector, true);
 }
 
