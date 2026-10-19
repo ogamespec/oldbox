@@ -95,6 +95,14 @@ else()
     target_link_libraries(oldbox PRIVATE oldbox_core)
 endif()
 
+if(WIN32)
+    # Explorer/taskbar icon embedded in oldbox.exe.  The artwork is generated
+    # by tools/make_icon.py; the window icon set at runtime lives in
+    # src/frontend/icon_rgba.inc.
+    enable_language(RC)
+    target_sources(oldbox PRIVATE src/win32/oldbox.rc)
+endif()
+
 if(OLDBOX_BUILD_TESTS)
     enable_testing()
     add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_io.cpp tests/test_voodoo.cpp

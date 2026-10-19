@@ -1,0 +1,157 @@
+#!/usr/bin/env python3
+"""Build the OldBox application icon from the artwork sheet.
+
+The sheet (``artwork/31f9e34b-...png``) holds five logo variants on a dark
+background.  This tool takes the bottom-right one - the isometric beige cube
+machine - cuts it out of the sheet, drops the "OldBox"/"IBM-совместимый ПК
+эмулятор" caption that sits underneath it, makes the background transparent
+and writes the three files the build consumes:
+
+    artwork/oldbox-icon.png          512x512 master (RGBA, transparent)
+    artwork/oldbox.ico               Windows icon, 16..256 px
+    src/frontend/icon_rgba.inc       48x48 BGRA pixels embedded in oldbox.exe
+                                     for SDL_SetWindowIcon (title bar, taskbar)
+
+Usage:
+    python3 tools/make_icon.py
+"""
+from __future__ import annotations
+
+import argparse
+from pathlib import Path
+
+import numpy as np
+from PIL import Image
+
+ROOT = Path(__file__).resolve().parents[1]
+SHEET = ROOT / "artwork/31f9e34b-ba65-459c-b0d5-73f02fd279a3.png"
+# Bottom-right variant: the graphic occupies this window of the sheet and the
+# caption starts lower (y >= 758), so the box deliberately stops above it.
+SHEET_BOX = (600, 560, 790, 752)
+ICON_PX = 256
+EMBED_PX = 48
+ICO_SIZES = (16, 24, 32, 48, 64, 128, 256)
+# Luminance at which a pixel stops being the sheet's background/drop shadow and
+# starts being the machine.  The cube body is ~120..220, its dark screen is
+# protected separately (it is enclosed, so it is never background).
+SHADOW_CUT = 42.0
+
+
+def background_color(arr: np.ndarray) -> np.ndarray:
+    """Median colour of the sheet border: the artwork background."""
+    edge = np.concatenate([arr[0, :], arr[-1, :], arr[:, 0], arr[:, -1]])
+    return np.median(edge, axis=0)
+
+
+def outside_mask(lum: np.ndarray, threshold: float) -> np.ndarray:
+    """Flood fill the dark background from the border (8-connected)."""
+    h, w = lum.shape
+    outside = np.zeros((h, w), bool)
+    stack = [(x, 0) for x in range(w)] + [(x, h - 1) for x in range(w)]
+    stack += [(0, y) for y in range(h)] + [(w - 1, y) for y in range(h)]
+    while stack:
+        x, y = stack.pop()
+        if outside[y, x] or lum[y, x] >= threshold:
+            continue
+        outside[y, x] = True
+        if x > 0: stack.append((x - 1, y))
+        if x + 1 < w: stack.append((x + 1, y))
+        if y > 0: stack.append((x, y - 1))
+        if y + 1 < h: stack.append((x, y + 1))
+    return outside
+
+
+def cut_out(img: Image.Image) -> Image.Image:
+    """Return the artwork on a transparent background, trimmed to its content."""
+    arr = np.asarray(img.convert("RGB")).astype(np.float32)
+    lum = arr.mean(axis=2)
+    bg = background_color(arr)
+    bg_lum = float(bg.mean())
+
+    # The sheet has a faint drop shadow around every logo; it is part of the
+    # background, not of the machine, so the silhouette starts at SHADOW_CUT.
+    outside = outside_mask(lum, bg_lum + 60.0)
+    core = ~outside
+    # Soften the silhouette by one pixel so the edges are anti-aliased instead
+    # of being a hard binary cut.
+    for _ in range(1):
+        core = (core
+                & np.roll(core, 1, 0) & np.roll(core, -1, 0)
+                & np.roll(core, 1, 1) & np.roll(core, -1, 1))
+    ref = float(np.percentile(lum[~outside], 90)) if (~outside).any() else 255.0
+    coverage = np.clip((lum - SHADOW_CUT) / max(ref - SHADOW_CUT, 1.0), 0.0, 1.0)
+    alpha = np.where(core, 1.0, coverage)
+    alpha[alpha < 0.02] = 0.0
+
+    a = np.repeat(alpha[:, :, None], 3, axis=2)
+    colour = np.where(a > 0.004, (arr - (1.0 - a) * bg) / np.maximum(a, 0.004), 0.0)
+    rgba = np.dstack([np.clip(colour, 0, 255), alpha * 255.0]).round().astype(np.uint8)
+
+    # Trim to the visible content, then centre it on a square canvas.
+    ys, xs = np.nonzero(rgba[:, :, 3] > 8)
+    rgba = rgba[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+    h, w = rgba.shape[:2]
+    side = int(max(h, w) * 1.06)
+    canvas = np.zeros((side, side, 4), np.uint8)
+    y0 = (side - h) // 2
+    x0 = (side - w) // 2
+    canvas[y0:y0 + h, x0:x0 + w] = rgba
+    return Image.fromarray(canvas, "RGBA")
+
+
+def premultiplied_resize(img: Image.Image, size: int) -> Image.Image:
+    """Resize RGBA without dark fringes leaking out of transparent pixels."""
+    arr = np.asarray(img).astype(np.float32)
+    arr[:, :, :3] *= arr[:, :, 3:4] / 255.0
+    small = np.asarray(Image.fromarray(arr.round().astype(np.uint8), "RGBA")
+                       .resize((size, size), Image.LANCZOS)).astype(np.float32)
+    a = small[:, :, 3:4] / 255.0
+    small[:, :, :3] = np.where(a > 0.004, small[:, :, :3] / np.maximum(a, 0.004), 0.0)
+    return Image.fromarray(np.clip(small, 0, 255).round().astype(np.uint8), "RGBA")
+
+
+def write_inc(img: Image.Image, path: Path) -> None:
+    """Emit ARGB8888 pixels (BGRA byte order) for SDL_CreateSurfaceFrom."""
+    arr = np.asarray(img)
+    bgra = arr[:, :, [2, 1, 0, 3]]
+    data = bgra.tobytes()
+    lines = ["// Generated by tools/make_icon.py from artwork/oldbox-icon.png -- do not edit.",
+             "#pragma once",
+             "#include <cstddef>",
+             "#include <cstdint>",
+             "",
+             "namespace oldbox {",
+             f"inline constexpr int kIconWidth = {EMBED_PX};",
+             f"inline constexpr int kIconHeight = {EMBED_PX};",
+             "// ARGB8888, i.e. B,G,R,A bytes: the layout SDL_SetWindowIcon wants.",
+             "inline constexpr std::uint8_t kIconPixels[] = {"]
+    for i in range(0, len(data), 16):
+        lines.append("  " + ",".join("%d" % b for b in data[i:i + 16]) + ",")
+    lines += ["};", f"inline constexpr std::size_t kIconPixelsSize = sizeof(kIconPixels);", "} // namespace oldbox", ""]
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("\n".join(lines), encoding="ascii")
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--sheet", type=Path, default=SHEET)
+    args = ap.parse_args()
+    if not args.sheet.exists():
+        raise SystemExit(f"artwork sheet not found: {args.sheet}")
+
+    icon = cut_out(Image.open(args.sheet).crop(SHEET_BOX))
+    master = premultiplied_resize(icon, ICON_PX)
+    master.save(ROOT / "artwork/oldbox-icon.png")
+    premultiplied_resize(icon, 256).save(ROOT / "artwork/oldbox.ico",
+                                         sizes=[(s, s) for s in ICO_SIZES])
+    write_inc(premultiplied_resize(icon, EMBED_PX), ROOT / "src/frontend/icon_rgba.inc")
+
+    print(f"wrote artwork/oldbox-icon.png ({ICON_PX}x{ICON_PX})")
+    print(f"wrote artwork/oldbox.ico ({', '.join(f'{s}x{s}' for s in ICO_SIZES)})")
+    print(f"wrote src/frontend/icon_rgba.inc ({EMBED_PX}x{EMBED_PX} ARGB8888)")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,8 @@
+// Windows resource script: application icon for oldbox.exe.
+// The image is produced by tools/make_icon.py from the artwork sheet; the
+// window/taskbar icon set at runtime comes from src/frontend/icon_rgba.inc.
+#include <windows.h>
+
+#define IDI_OLDBOX 101
+
+IDI_OLDBOX ICON "../../artwork/oldbox.ico"

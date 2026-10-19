@@ -28,8 +28,9 @@ Windows-сборка (Visual Studio 2026, MSVC, без `as`/`ld`) описана
 `build-windows.bat` или `cmake --preset windows-vs2026` + `cmake --build --preset windows-vs2026-release`.
 Готовый бинарник Windows — `build\vs2026\Release\oldbox.exe`; быстрый запуск
 оригинального Award BIOS в окне — `run.bat` (меню: обычный запуск, автовход в
-Setup по Del, FreeDOS-дискета, headless-проверка). В эмуляторе: `Esc` — выход,
-`F11` — полный экран, `F12` — скриншот в `oldbox-screenshot.bmp`.
+Setup по Del, FreeDOS-дискета, headless-проверка). В эмуляторе: `F11` — полный
+экран, `F12` — скриншот в `oldbox-screenshot.bmp`. Горячей клавиши выхода нет:
+окно закрывается только крестиком, а `Esc` и остальные клавиши уходят гостю.
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
@@ -80,7 +81,9 @@ ctest --test-dir build --output-on-failure
 
 `--headless` не создаёт окно; `--dump-text` печатает VGA text buffer,
 `--dump-ram` сохраняет первые 1 MiB гостевой RAM, `--screenshot` пишет PPM.
-F1 захватывает/отпускает мышь, F11 — fullscreen, F12 — BMP-скриншот, Esc — выход.
+F1 захватывает/отпускает мышь, F11 — fullscreen, F12 — BMP-скриншот. Выхода по
+горячей клавише нет: окно закрывается крестиком, все клавиши (включая Esc)
+передаются гостю.
 
 ## Что уже работает
 

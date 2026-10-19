@@ -2,8 +2,11 @@
 #ifdef OLDBOX_WITH_SDL
 #include <SDL3/SDL.h>
 #include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <vector>
+
+#include "icon_rgba.inc"
 
 namespace oldbox {
 namespace {
@@ -36,12 +39,12 @@ void handle_event(SdlState& st, Machine& machine, const SDL_Event& e) {
     case SDL_EVENT_KEY_DOWN:
     case SDL_EVENT_KEY_UP: {
         const bool down = e.key.down;
+        // Every key belongs to the guest: DOS programs and games need Esc,
+        // Ctrl+Q/Ctrl+C and the rest.  There is deliberately no quit hotkey;
+        // the emulator is closed with the window close button (SDL_EVENT_QUIT).
         machine.key_event(int(e.key.scancode), down);
         if (down) {
-            if (e.key.scancode == SDL_SCANCODE_ESCAPE) {
-                st.running = false;
-                machine.stop();
-            } else if (e.key.scancode == SDL_SCANCODE_F1) {
+            if (e.key.scancode == SDL_SCANCODE_F1) {
                 st.mouse_captured = !st.mouse_captured;
                 SDL_SetWindowRelativeMouseMode(st.window, st.mouse_captured);
             } else if (e.key.scancode == SDL_SCANCODE_F11) {
@@ -127,6 +130,12 @@ int run_sdl_frontend(Machine& machine) {
                  SDL_GetRendererName(st.renderer));
     std::fflush(stderr);
     SDL_SetRenderVSync(st.renderer, 1);
+    // Window/taskbar icon (the .exe icon comes from src/win32/oldbox.rc).
+    if (SDL_Surface* icon = SDL_CreateSurfaceFrom(kIconWidth, kIconHeight, SDL_PIXELFORMAT_ARGB8888,
+                                                  const_cast<std::uint8_t*>(kIconPixels), kIconWidth * 4)) {
+        SDL_SetWindowIcon(st.window, icon);
+        SDL_DestroySurface(icon);
+    }
     const VideoFrame initial = machine.display_frame();
     if (initial.valid()) rebuild_texture(st, initial.width, initial.height);
 
