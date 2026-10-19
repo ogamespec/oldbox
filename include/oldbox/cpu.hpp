@@ -180,12 +180,18 @@ public:
     [[nodiscard]] bool in_virtual86_mode() const { return state_.mode == CpuMode::virtual86; }
     [[nodiscard]] u16 cs_selector() const { return state_.seg[1].selector; }
     [[nodiscard]] int cpl() const {
-        // CPL is architecturally fixed at 3 in virtual-8086 mode; the low bits
-        // of the 8086-style CS selector are not a privilege level.  During an
-        // interrupt frame setup the privilege change is already effective
-        // before CS is loaded, so a temporary override is used.
+        // CPL is architecturally fixed at 3 in virtual-8086 mode and at 0 in
+        // real mode; the low bits of an 8086-style selector are not a
+        // privilege level there.  In protected mode the CPL is the DPL cached
+        // in the CS descriptor at load time — a CS loaded in real mode caches
+        // DPL 0, so right after MOV CR0 (PE=1) the CPL is still 0 until the
+        // first far transfer reloads CS.  During an interrupt frame setup the
+        // privilege change is already effective before CS is loaded, so a
+        // temporary override is used.
         if (cpl_override_ >= 0) return cpl_override_;
-        return state_.mode == CpuMode::virtual86 ? 3 : (state_.seg[unsigned(SegReg::cs)].selector & 3);
+        if (state_.mode == CpuMode::virtual86) return 3;
+        if (state_.mode == CpuMode::real) return 0;
+        return (state_.seg[unsigned(SegReg::cs)].access >> 5) & 3;
     }
     [[nodiscard]] bool io_allowed(u16 port);
     [[nodiscard]] bool interrupts_enabled() const;

@@ -20,6 +20,7 @@ if not exist "%EXE%" (
 set "BIOS=assets\bios\EP-ZXA.bin"
 set "VGABIOS=assets\vga\S3Trio64_1_14-04.bin"
 set "FLOPPY=assets\floppy\freedos1440.img"
+set "GAMEFLOPPY=assets\floppy\freedos-games.img"
 set "GAMEDISK=assets\floppy\Megafortress_3.5_Disk.IMA"
 set "MEMTEST=assets\floppy\MEMTEST.IMG"
 set "HDD=assets\hdd\oldbox-hdd-500mb.img"
@@ -70,10 +71,11 @@ goto :eof
 
 :win_game
 echo.
-echo   Boot order: A: = FreeDOS 1.44M, B: = Megafortress 720K, C: = 500 MB HDD
-echo   At the A:\^> prompt type:  B:  then  INSTALL  to install to C:.
+echo   Boot order: A: = FreeDOS (HIMEMX, DOS=HIGH), B: = Megafortress 720K, C: = 500 MB HDD
+echo   Install the game once:  B:  then  INSTALL  to install to C:.
+echo   Run the installed game:  C:  then  CD \MEGA  then  MEGA
 echo.
-"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%FLOPPY%" --floppy-b "%GAMEDISK%" --hdd "%HDD%"
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%GAMEFLOPPY%" --floppy-b "%GAMEDISK%" --hdd "%HDD%"
 goto :eof
 
 :win_memtest
