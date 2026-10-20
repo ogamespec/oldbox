@@ -35,10 +35,13 @@ Setup по Del, FreeDOS-дискета, headless-проверка). В эмул�
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
 Пункт 10 в `run.bat` запускает установку Windows 95 OSR2: A: — FreeDOS с
-`QCDROM.SYS` + `MSCDEX.EXE`, C: — чистый 500-МБ диск `assets\hdd\win95-hdd.img`,
-D: — `C:\Isos\Windows95OSR2.iso`. В `A:\>` нужно набрать `D:` и `SETUP`.
-Дискету собирает `python3 tools/make_win95_cd_floppy.py` (берёт `qcdrom.sys` и
-`mscdex.exe` из `DOS Drivers.zip`), целевой диск —
+`HIMEM.SYS` (из установочного ISO), `QCDROM.SYS` и `MSCDEX.EXE`, C: — чистый
+500-МБ диск `assets\hdd\win95-hdd.img`, D: — `C:\Isos\Windows95OSR2.iso`.
+В `A:\>` нужно набрать `D:` и `SETUP`. Нужен именно `HIMEM.SYS`: с FreeDOS
+`HIMEMX.EXE` Setup останавливается с сообщением «Cannot start Windows in
+standard mode. Make sure you have installed HIMEM.SYS...».
+Дискету собирает `python3 tools/make_win95_cd_floppy.py` (берёт `HIMEM.SYS`
+из ISO, `qcdrom.sys` и `mscdex.exe` — из `DOS Drivers.zip`), целевой диск —
 `python3 tools/make_win95_hdd.py`.
 SDL3 при отсутствии системного пакета скачивается CMake-ом (release 3.2.30).
 На Linux без заголовков X11/Wayland SDL собирается в console-режиме; для окна

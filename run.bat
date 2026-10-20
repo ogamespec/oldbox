@@ -107,7 +107,7 @@ goto :eof
 
 :win95
 echo.
-echo   Boot order: A: = FreeDOS + QCDROM + MSCDEX
+echo   Boot order: A: = FreeDOS + HIMEM.SYS + QCDROM + MSCDEX
 echo               C: = clean 500 MB HDD  (%WIN95HDD%)
 echo               D: = Windows 95 OSR2 CD (%WIN95ISO%)
 echo.
