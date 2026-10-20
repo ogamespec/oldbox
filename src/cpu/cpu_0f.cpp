@@ -139,10 +139,37 @@ void Cpu::execute_0f() {
         bool ok = false;
         if ((sel & ~7u) != 0 && (sel & ~7u) + 7 <= ((sel & 4) ? ldt_limit_ : state_.gdtr_limit)) {
             const Descriptor d = read_descriptor((sel & 4) ? ldt_base_ : state_.gdtr_base, sel);
-            if (d.access & 0x80) {
+            const u8 type = u8(d.access & 0x1f);
+            const bool is_system = (d.access & 0x10) == 0;
+            bool valid_type = true;
+            if (is_system) {
+                // LAR accepts TSS/LDT descriptors and call/task gates; LSL
+                // rejects gates (Intel PRM Vol. 2, LAR/LSL type tables).
+                if (op == 0x02)
+                    valid_type = type == 0x01 || type == 0x02 || type == 0x03 || type == 0x04 ||
+                                 type == 0x05 || type == 0x09 || type == 0x0b || type == 0x0c;
+                else
+                    valid_type = type == 0x01 || type == 0x02 || type == 0x03 || type == 0x09 ||
+                                 type == 0x0b;
+            }
+            // Non-conforming segments must be visible at CPL/RPL.
+            const bool conforming = !is_system && (type & 0x18) == 0x18 && (type & 0x04) != 0;
+            const int dpl = (d.access >> 5) & 3;
+            const bool visible = conforming || (cpl() <= dpl && int(sel & 3) <= dpl);
+            if ((d.access & 0x80) && valid_type && visible) {
                 ok = true;
-                if (op == 0x02) value = u32(d.access) | (u32(d.flags & 0xf0u) << 8);
-                else value = (d.limit << ((d.flags & 0x80) ? 12 : 0)) | ((d.flags & 0x80) ? 0xfff : 0);
+                if (op == 0x02) {
+                    // LAR r16 returns the access-rights byte in AH; the
+                    // 32-bit form also returns descriptor byte 6 in 23:16
+                    // (Intel PRM Vol. 2: masked by FF00h / 00FxFF00h).
+                    u32 raw_limit = d.limit;
+                    if (d.flags & 0x80) raw_limit >>= 12; // undo 4 KiB scaling
+                    const u32 byte6 = ((raw_limit >> 16) & 0x0fu) | (d.flags & 0xf0u);
+                    value = (u32(d.access) << 8) | (byte6 << 16);
+                } else {
+                    // read_descriptor() already applied the G-bit scaling.
+                    value = d.limit;
+                }
             }
         }
         set_flag(ZF, ok);

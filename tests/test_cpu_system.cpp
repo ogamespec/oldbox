@@ -345,9 +345,60 @@ TEST(system_lar_lsl_descriptor_access_rights) {
     h.emit(0x0f); h.emit(0x02); h.emit(0xd8); // lar bx, ax
     h.emit(0x0f); h.emit(0x03); h.emit(0xc0); // lsl ax, ax (result in AX)
     h.halt(); h.run(4);
-    CHECK_EQ(h.r16(3), 0x409au); // access rights: flags in 15:8, access in 7:0
+    // LAR r16 returns the access-rights byte in AH (Intel PRM Vol. 2,
+    // "r16 <- r/m16 masked by FF00H"): type/DPL/S/P bits land in 15:8.
+    CHECK_EQ(h.r16(3), 0x9a00u);
     CHECK_EQ(h.r16(0), 0x1234u); // limit with G=0
     CHECK(h.flag(ZF));
+}
+
+TEST(system_lar32_and_lsl32_use_descriptor_bytes) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().gdtr_limit = 0x37;
+    // GDT[6] (selector 0x30): raw limit 0x12345, access 0xfa, byte 6 = 0xc1
+    // (G=1, D/B=1, limit high nibble = 1).
+    const u32 g6 = 0x500 + 0x30;
+    h.bus.write16(g6, 0x2345);
+    h.bus.write16(g6 + 2, 0x0000);
+    h.bus.write8(g6 + 4, 0x00);
+    h.bus.write8(g6 + 5, 0xfa);
+    h.bus.write8(g6 + 6, 0xc1);
+    h.bus.write8(g6 + 7, 0x00);
+    // GDT[5] (selector 0x28): 32-bit call gate, valid for LAR but not for LSL.
+    const u32 g5 = 0x500 + 0x28;
+    h.bus.write16(g5, 0x0100);
+    h.bus.write16(g5 + 2, 0x08);
+    h.bus.write8(g5 + 4, 0x00);
+    h.bus.write8(g5 + 5, 0xec);
+    h.bus.write8(g5 + 6, 0x00);
+    h.bus.write8(g5 + 7, 0x00);
+
+    h.set_r(0, 0x30); // EAX = selector 0x30
+    h.emit(0x0f); h.emit(0x02); h.emit(0xd8); // lar ebx, ax
+    h.run(1);
+    // 32-bit LAR: access byte in 15:8, descriptor byte 6 (flags + limit
+    // high nibble) in 23:16; G=1 and D/B=1 -> 0x00C1FA00.
+    CHECK_EQ(h.r(3), 0x00c1fa00u);
+    CHECK(h.flag(ZF));
+
+    h.set_r(0, 0x30);
+    h.emit(0x0f); h.emit(0x03); h.emit(0xc0); // lsl eax, ax
+    h.run(1);
+    // G=1 raw limit 0x12345 -> 0x12345fff (already scaled by the descriptor
+    // read; LSL must not scale it a second time).
+    CHECK_EQ(h.r(0), 0x12345fffu);
+    CHECK(h.flag(ZF));
+
+    // LAR accepts a call gate, LSL does not.
+    h.set_r(0, 0x28);
+    h.emit(0x0f); h.emit(0x02); h.emit(0xd8); // lar ebx, ax
+    h.run(1);
+    CHECK(h.flag(ZF));
+    h.set_r(0, 0x28);
+    h.emit(0x0f); h.emit(0x03); h.emit(0xc0); // lsl eax, ax
+    h.run(1);
+    CHECK(!h.flag(ZF));
 }
 
 TEST(system_arpl_verr_verw_lar_lsl_mode_rules) {
@@ -419,7 +470,8 @@ TEST(system_arpl_verr_verw_lar_lsl_mode_rules) {
     h.emit(0x0f); h.emit(0x03); h.emit(0xc8); // lsl cx,ax
     h.cpu.step(); h.cpu.step();
     CHECK(h.flag(ZF)); // LSL result is checked through CX below
-    CHECK_EQ(h.r16(3), 0x0092u);
+    // LAR r16: the access-rights byte is returned in AH (FF00h mask).
+    CHECK_EQ(h.r16(3), 0x9200u);
     CHECK_EQ(h.r16(1), 0xffffu);
 
     h.set_eip(0x1000); h.code = 0x1000;
