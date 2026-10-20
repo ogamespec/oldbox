@@ -206,6 +206,46 @@ TEST(mode_tss_stack_switch_and_iret) {
     CHECK_EQ(h.r(4), 0x7000u);
 }
 
+TEST(mode_16bit_tss_stack_switch) {
+    CpuHarness h;
+    h.make_flat_gdt();
+    // GDT[3] -> selector 0x28: 16-bit available TSS at 0x2000, limit 0x2b.
+    h.bus.write16(0x528, 0x002b); h.bus.write16(0x52a, 0x2000);
+    h.bus.write8(0x52c, 0x00); h.bus.write8(0x52d, 0x81); h.bus.write8(0x52e, 0x00); h.bus.write8(0x52f, 0x00);
+    h.state().gdtr_limit = 0x2f;
+    h.bus.write16(0x2002, 0x9000); // SP0
+    h.bus.write16(0x2004, 0x0010); // SS0
+    h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
+    gate(h, 0x20, 0x08, 0x3000, 0xee); // 32-bit interrupt gate, DPL3
+    h.bus.write8(0x3000, 0xcf);        // iret
+    auto& s = h.state();
+    s.mode = CpuMode::protected_mode;
+    s.cr0 = 0x60000001;
+    s.seg[1].selector = 0x08; s.seg[1].base = 0; s.seg[1].limit = 0xffffffff; s.seg[1].flags = 0xc0; s.seg[1].access = 0x9a;
+    s.seg[2] = s.seg[1]; s.seg[2].selector = 0x10; s.seg[2].access = 0x92;
+    s.seg[3] = s.seg[2]; s.seg[0] = s.seg[2]; s.seg[4] = s.seg[2]; s.seg[5] = s.seg[2];
+    s.eip = 0x1000;
+    h.set_r(0, 0x28);
+    h.emit(0x0f); h.emit(0x00); h.emit(0xd8);
+    h.cpu.step(); // ltr
+    h.state().seg[1].selector = 0x1b; h.state().seg[1].access = 0xfa;
+    h.state().seg[2].selector = 0x23; h.state().seg[2].access = 0xf2;
+    h.state().seg[3] = h.state().seg[2]; h.state().seg[0] = h.state().seg[2];
+    h.state().gpr[4] = 0x7000;
+    h.emit(0xcd); h.emit(0x20); // int 0x20 from ring 3
+    h.halt();
+    h.cpu.step();
+    CHECK_EQ(h.cpu.state().seg[1].selector, 0x08u);
+    CHECK_EQ(h.cpu.state().seg[2].selector, 0x10u);
+    CHECK_EQ(h.r(4), 0x8fecu); // SP0 - five 32-bit words
+    CHECK_EQ(h.bus.read32(h.r(4) + 4), 0x1bu);  // saved CS
+    CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x23u); // saved SS
+    h.cpu.step(); // iret
+    CHECK_EQ(h.cpu.state().seg[1].selector, 0x1bu);
+    CHECK_EQ(h.cpu.state().seg[2].selector, 0x23u);
+    CHECK_EQ(h.r(4), 0x7000u);
+}
+
 TEST(mode_paging_4k_user_protection_and_wp) {
     CpuHarness h;
     h.enter_flat_protected();

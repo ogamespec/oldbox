@@ -1069,12 +1069,27 @@ void Cpu::deliver_interrupt(int vector, bool software) {
     const int new_cpl = (target.access >> 5) & 3;
     if (v86 && new_cpl != 0) throw CpuException{13, u32(sel & ~3u), true};
     const bool change_privilege = (new_cpl < old_cpl) || (old_flags & VM) != 0;
+    auto tss_stack = [&](u32& out_esp, u16& out_ss) {
+        if (tr_selector_ == 0) throw CpuException{10, u32(tr_selector_ & ~3u), true};
+        if (tr_32bit_) {
+            if (tr_limit_ < 0x67) throw CpuException{10, u32(tr_selector_ & ~3u), true};
+            out_esp = read_linear32_super(tr_base_ + 4);
+            out_ss = u16(read_linear16_super(tr_base_ + 8));
+        } else {
+            // 16-bit TSS: SP0/SS0 live at offsets 2 and 4.  Windows 95
+            // standard mode uses such a TSS for its protected-mode handlers;
+            // treating every TSS as 32-bit raised #TS(0x88) here.
+            if (tr_limit_ < 0x2b) throw CpuException{10, u32(tr_selector_ & ~3u), true};
+            out_esp = u32(read_linear16_super(tr_base_ + 2));
+            out_ss = u16(read_linear16_super(tr_base_ + 4));
+        }
+    };
     if (v86) {
         // Virtual-8086 calls the protected-mode handler through a ring-0
-        // 32-bit TSS stack.  The complete 8086 register image is preserved.
-        if (tr_selector_ == 0 || tr_limit_ < 0x67) throw CpuException{10, u32(tr_selector_ & ~3u), true};
-        const u32 new_esp = read_linear32_super(tr_base_ + 4);
-        const u16 new_ss = u16(read_linear16_super(tr_base_ + 8));
+        // TSS stack.  The complete 8086 register image is preserved.
+        u32 new_esp = 0;
+        u16 new_ss = 0;
+        tss_stack(new_esp, new_ss);
         const u16 old_ss = state_.seg[unsigned(SegReg::ss)].selector;
         const u32 old_esp = state_.gpr[4];
         const u16 old_es = state_.seg[unsigned(SegReg::es)].selector;
@@ -1116,9 +1131,9 @@ void Cpu::deliver_interrupt(int vector, bool software) {
         return;
     }
     if (change_privilege) {
-        if (tr_selector_ == 0 || tr_limit_ < 0x67) throw CpuException{10, u32(tr_selector_ & ~3u), true};
-        const u32 new_esp = read_linear32_super(tr_base_ + 4);
-        const u16 new_ss = u16(read_linear16_super(tr_base_ + 8));
+        u32 new_esp = 0;
+        u16 new_ss = 0;
+        tss_stack(new_esp, new_ss);
         const u16 old_ss = state_.seg[unsigned(SegReg::ss)].selector;
         const u32 old_esp = state_.gpr[4];
         cpl_override_ = new_cpl;
