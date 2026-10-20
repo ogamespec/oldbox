@@ -17,6 +17,50 @@ void Pit::reset() {
     ns_accumulator_ = 0;
     ns_rem_ = 0;
     pit_rem_ = 0;
+    speaker_points_.clear();
+    speaker_frame_start_ = 0;
+    speaker_frame_reload_ = 0;
+    speaker_frame_gate_ = false;
+    speaker_frame_active_ = false;
+}
+
+void Pit::begin_speaker_frame() {
+    speaker_frame_start_ = now_ ? now_() : 0;
+    speaker_frame_reload_ = reload(2);
+    speaker_frame_gate_ = speaker();
+    speaker_points_.clear();
+    speaker_frame_active_ = true;
+}
+
+Pit::SpeakerTimeline Pit::take_speaker_frame() {
+    SpeakerTimeline t;
+    const u64 now = now_ ? now_() : speaker_frame_start_;
+    if (!speaker_frame_active_) {
+        t.start_cycle = now;
+        t.end_cycle = now;
+        t.first_reload = reload(2);
+        t.first_gate = speaker();
+        return t;
+    }
+    t.start_cycle = speaker_frame_start_;
+    t.end_cycle = now;
+    if (t.end_cycle < t.start_cycle) t.end_cycle = t.start_cycle;
+    t.first_reload = speaker_frame_reload_;
+    t.first_gate = speaker_frame_gate_;
+    t.changes = std::move(speaker_points_);
+    speaker_points_.clear();
+    speaker_frame_active_ = false;
+    return t;
+}
+
+void Pit::record_speaker() {
+    if (!speaker_frame_active_) return;
+    const u64 cycle = now_ ? now_() : speaker_frame_start_;
+    const u16 r = reload(2);
+    const bool g = speaker();
+    const u16 last_r = speaker_points_.empty() ? speaker_frame_reload_ : speaker_points_.back().reload;
+    const bool last_g = speaker_points_.empty() ? speaker_frame_gate_ : speaker_points_.back().gate;
+    if (r != last_r || g != last_g) speaker_points_.push_back(SpeakerPoint{cycle, r, g});
 }
 
 u64 Pit::cycles_to_pit_ticks(u64 cycles) {
@@ -196,6 +240,7 @@ void Pit::write_control(u8 value) {
     // count write on real silicon); keep that behaviour.
     c.running = true;
     c.output = false;
+    if (ch == 2) record_speaker();
 }
 
 void Pit::write_counter(int index, u8 value) {
@@ -209,6 +254,7 @@ void Pit::write_counter(int index, u8 value) {
         c.reload = u16((c.reload & 0xff00u) | value);
         c.ticks = 0;
         c.running = true;
+        if (index == 2) record_speaker();
         return;
     }
     switch (c.access) {
@@ -224,6 +270,7 @@ void Pit::write_counter(int index, u8 value) {
     }
     c.ticks = 0;
     c.running = true;
+    if (index == 2) record_speaker();
 }
 
 u8 Pit::read_counter(int index) {
@@ -280,6 +327,7 @@ void Pit::io_write8(u16 port, u8 value) {
     case 0x61:
         speaker_port_ = u8(value & 0x0f);
         set_gate(2, (value & 0x01) != 0);
+        record_speaker();
         break;
     default: break;
     }

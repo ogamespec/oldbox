@@ -768,3 +768,47 @@ TEST(s3_crtc_timing_derivation) {
     CHECK_EQ(f.s3.width(), 640);
     CHECK_EQ(f.s3.height(), 480);
 }
+
+TEST(s3_attribute_palette_table_is_committed_atomically) {
+    Fix f;
+    f.s3.set_text_mode();
+    f.bus.write8(0xB8000, 0xDB);   // full block, so pixel (0,0) is foreground
+    f.bus.write8(0xB8001, 0x05);
+    const VideoFrame before = f.s3.frame();
+    const u32 old_color = before.pixels[0];
+    CHECK_EQ(old_color, 0x00AA00AAu); // default EGA attribute 5 -> DAC 5
+
+    // The BIOS writes AR00..AR0F one register at a time.  Half a table must
+    // not be rendered: a frame between AR07 and AR08 keeps the old palette.
+    for (u8 i = 0; i < 8; ++i) f.attr(i, u8(i == 5 ? 6 : i));
+    const VideoFrame partial = f.s3.frame();
+    CHECK_EQ(partial.pixels[0], old_color);
+
+    for (u8 i = 8; i < 16; ++i) f.attr(i, u8(i == 5 ? 6 : i));
+    const VideoFrame after = f.s3.frame();
+    CHECK_EQ(after.pixels[0], 0x00AA5500u); // complete table: color 5 -> DAC 6 (brown)
+
+    // A lone register write is not a table burst; it becomes visible on the
+    // next render after the burst is idle.
+    f.attr(5, 12);
+    (void)f.s3.frame();                  // burst idle -> flush
+    const VideoFrame lone = f.s3.frame();
+    CHECK_EQ(lone.pixels[0], 0x00FF5555u);
+}
+
+TEST(s3_reset_restores_power_on_mode_and_palette) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.dac(5, 63, 0, 0);
+    f.s3.reset();
+    // Reset must not leave the previous mode/frame or a half-written palette.
+    CHECK_EQ(f.s3.width(), 720);
+    CHECK_EQ(f.s3.height(), 400);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00000000u);
+    f.w(0x3C8, 5);
+    CHECK_EQ(f.r(0x3C9), 42); // EGA DAC entry 5 is back at R=42
+    CHECK_EQ(f.r(0x3C9), 0);
+    CHECK_EQ(f.r(0x3C9), 42);
+    f.w(0x3C0, 0x05);
+    CHECK_EQ(f.r(0x3C1), 0x05u); // power-on attribute palette is identity
+}

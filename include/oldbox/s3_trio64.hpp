@@ -188,6 +188,15 @@ private:
     // VGA data path state.
     mutable std::array<u8, 4> latch_{};
     bool font_loaded_ = false;
+    // The BIOS writes the 16 attribute-palette registers one at a time.
+    // Rendering uses a committed snapshot so a frame cannot mix old/new fade
+    // tables; the snapshot is updated once after the full 0..15 sequence.
+    std::array<u8, 32> render_attr_{};
+    std::array<u8, 768> render_dac_{};
+    bool rendering_ = false;
+    u8 attr_burst_next_ = 0;          // 0 = inactive, 1..16 = expected next index
+    u32 attr_burst_generation_ = 0;
+    u32 attr_burst_render_generation_ = 0;
 
     Window linear_window_{*this, Window::linear};
     Window mmio_window_{*this, Window::mmio};
@@ -239,6 +248,7 @@ private:
     void gfx_write(u8 index, u8 value);
     void attr_write(u8 index, u8 value);
     void dac_write(u8 value);
+    void commit_palette();
     [[nodiscard]] u8 dac_read_byte();
     void render_frame();
     void render_text();

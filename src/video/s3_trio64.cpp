@@ -142,6 +142,10 @@ void S3Trio64::reset() {
     linear_enabled_ = false;
     mmio_enabled_ = false;
     font_loaded_ = false;
+    mode_ = ModeInfo{};
+    width_ = 640;
+    height_ = 480;
+    frame_.clear();
     dirty_ = true;
     cycles_per_frame_ = std::max<u64>(1, (u64(cpu_mhz_) * 1000000ull) / 60ull);
 
@@ -166,6 +170,12 @@ void S3Trio64::reset() {
         dac_[std::size_t(i * 3 + 2)] = v;
     }
     for (int i = 0; i < 16; ++i) attr_[std::size_t(i)] = u8(i);
+    render_attr_ = attr_;
+    render_dac_ = dac_;
+    rendering_ = false;
+    attr_burst_next_ = 0;
+    attr_burst_generation_ = 0;
+    attr_burst_render_generation_ = 0;
 
     set_text_mode();
 }
@@ -564,14 +574,47 @@ void S3Trio64::gfx_write(u8 index, u8 value) {
     dirty();
 }
 
+void S3Trio64::commit_palette() {
+    render_attr_ = attr_;
+    render_dac_ = dac_;
+    attr_burst_next_ = 0;
+}
+
 void S3Trio64::attr_write(u8 index, u8 value) {
-    attr_[index & 0x1F] = value;
+    index &= 0x1F;
+    attr_[index] = value;
+    if (index < 0x10) {
+        ++attr_burst_generation_;
+        // VGA BIOS INT 10h AX=1002 writes AR00..AR0F in order.  Keep the
+        // rendered palette on the previous complete table until the whole
+        // sequence has arrived; a single/odd register still becomes visible
+        // on the next render (see the idle-flush in render_frame()).
+        if (attr_burst_next_ == 0) {
+            if (index == 0) {
+                attr_burst_next_ = 1;
+            } else {
+                render_attr_ = attr_;
+            }
+        } else if (index == attr_burst_next_) {
+            ++attr_burst_next_;
+            if (attr_burst_next_ >= 16) {
+                render_attr_ = attr_;
+                attr_burst_next_ = 0;
+            }
+        } else {
+            // An irregular sequence (single-register effect, or the BIOS
+            // restarted at another index): apply it and stop batching.
+            render_attr_ = attr_;
+            attr_burst_next_ = (index == 0) ? 1 : 0;
+        }
+    }
     dirty();
 }
 
 void S3Trio64::dac_write(u8 value) {
     const u32 i = u32(dac_index_) * 3u + dac_write_phase_;
     dac_[i] = u8(value & 0x3F);
+    render_dac_[i] = dac_[i];
     if (++dac_write_phase_ == 3) {
         dac_write_phase_ = 0;
         dac_index_ = u8(dac_index_ + 1);
@@ -1028,16 +1071,18 @@ u8 S3Trio64::legacy_read(u32 off) const {
 
 u32 S3Trio64::palette_rgb(u8 index) const {
     index = u8(index & dac_mask_);
+    const std::array<u8, 768>& table = rendering_ ? render_dac_ : dac_;
     const u32 base = u32(index) * 3u;
-    const u32 r6 = dac_[base + 0] & 0x3F;
-    const u32 g6 = dac_[base + 1] & 0x3F;
-    const u32 b6 = dac_[base + 2] & 0x3F;
+    const u32 r6 = table[base + 0] & 0x3F;
+    const u32 g6 = table[base + 1] & 0x3F;
+    const u32 b6 = table[base + 2] & 0x3F;
     auto expand = [](u32 v) { return ((v << 2) | (v >> 4)) & 0xFF; };
     return (expand(r6) << 16) | (expand(g6) << 8) | expand(b6);
 }
 
 u32 S3Trio64::attr_palette_index(u8 color) const {
-    return attr_[color & 0x0F] & 0x3F;
+    const std::array<u8, 32>& table = rendering_ ? render_attr_ : attr_;
+    return table[color & 0x0F] & 0x3F;
 }
 
 u8 S3Trio64::font_byte(u8 ch, int row, bool font_b) const {
@@ -1223,18 +1268,6 @@ void S3Trio64::render_hw_cursor() {
 }
 
 void S3Trio64::render_frame() {
-    if (std::getenv("OLDBOX_S3_PAL")) {
-        static u64 pn = 0;
-        if ((++pn % 30) == 1) {
-            std::fprintf(stderr, "S3 PAL attr=");
-            for (int i = 0; i < 16; ++i) std::fprintf(stderr, "%02x ", attr_[i]);
-            std::fprintf(stderr, " dac0-7=");
-            for (int i = 0; i < 8; ++i) std::fprintf(stderr, "%02x%02x%02x ", dac_[i*3], dac_[i*3+1], dac_[i*3+2]);
-            std::fprintf(stderr, " dac18-1f=");
-            for (int i = 0x18; i < 0x20; ++i) std::fprintf(stderr, "%02x%02x%02x ", dac_[i*3], dac_[i*3+1], dac_[i*3+2]);
-            std::fprintf(stderr, "\n");
-        }
-    }
     if (std::getenv("OLDBOX_S3_TRACE")) {
         static u64 n = 0;
         if ((++n % 60) == 1)
@@ -1245,15 +1278,28 @@ void S3Trio64::render_frame() {
     update_timing();
     const int w = width_, h = height_;
     frame_.resize(std::size_t(w) * std::size_t(h));
+    // A lone palette write (not a full 0..15 BIOS table) must not stay
+    // invisible forever: on the next render after the burst is idle, apply
+    // the pending table.  A full table commits above at index 15.
+    if (attr_burst_next_ != 0 && attr_burst_generation_ == attr_burst_render_generation_) {
+        render_attr_ = attr_;
+        attr_burst_next_ = 0;
+    }
+    attr_burst_render_generation_ = attr_burst_generation_;
     if (!screen_enabled()) {
         std::fill(frame_.begin(), frame_.end(), 0);
-        dirty_ = false;
+        rendering_ = false;
+        dirty_ = attr_burst_next_ != 0;
         return;
     }
+    rendering_ = true;
     if (mode_.text) render_text();
     else render_graphics();
     render_hw_cursor();
-    dirty_ = false;
+    rendering_ = false;
+    // A pending single-index burst is flushed on the next render (the idle
+    // path above); keep the frame dirty so frame() retries even outside tick.
+    dirty_ = attr_burst_next_ != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1412,6 +1458,7 @@ void S3Trio64::set_text_mode() {
     cursor_x_ = cursor_y_ = 0;
     dirty_ = true;
     update_timing();
+    commit_palette();
     render_frame();
 }
 
@@ -1441,6 +1488,7 @@ void S3Trio64::set_mode13h() {
     s3_unlocked_ = sys_unlocked_ = cfg_unlocked_ = exseq_unlocked_ = false;
     dirty_ = true;
     update_timing();
+    commit_palette();
     render_frame();
 }
 

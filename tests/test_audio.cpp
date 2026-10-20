@@ -41,6 +41,20 @@ struct Rig {
     return p;
 }
 
+// Magnitude of one DFT bin (left channel only); enough to check that the
+// 70 Hz gate envelope exists instead of relying on a waveform shape.
+[[nodiscard]] double tone_energy(const std::vector<i16>& stereo, double freq, u32 rate) {
+    constexpr double pi = 3.14159265358979323846;
+    const std::size_t frames = stereo.size() / 2;
+    double re = 0.0, im = 0.0;
+    for (std::size_t i = 0; i < frames; ++i) {
+        const double a = 2.0 * pi * freq * double(i) / double(rate);
+        re += double(stereo[i * 2]) * std::cos(a);
+        im -= double(stereo[i * 2]) * std::sin(a);
+    }
+    return std::sqrt(re * re + im * im) / double(frames ? frames : 1);
+}
+
 } // namespace
 
 TEST(audio_dsp_reset_and_version) {
@@ -349,29 +363,70 @@ TEST(audio_dsp_dma_playback_and_irq) {
 
 
 // The PC speaker is a separate source mixed additively into the sound
-// card's stream: the gate/data bits of port 61h enable it, the PIT channel
-// 2 reload sets the tone, and the card's samples must survive unchanged
-// below the added beeper.
+// card's stream.  The PIT output is a square wave at 1193182/reload, i.e. two
+// edges per period; the old model toggled once per phase cycle (one octave
+// low).  It is also unipolar and capacitor-coupled, so the DC blocker must
+// keep the card's offset while adding the beeper's AC.
 TEST(pc_speaker_square_wave_and_additive_mixing) {
     PcSpeaker speaker;
     std::vector<i16> buffer(size_t(44100) * 2, 0);
     // Gate off: nothing is added.
     speaker.mix(buffer, 44100, false, 0x0BB8);
     CHECK(peak(buffer) == 0);
-    // Gate on with reload 0x0BB8 -> 1193182/3000 ~= 397.7 Hz square wave.
+
+    // Gate on with reload 0x0BB8 -> 1193182/3000 ~= 397.7 Hz.
     // Start from a non-zero "card" signal to prove the mix is additive.
     std::vector<i16> tone(size_t(44100) * 2, 1000);
     speaker.mix(tone, 44100, true, 0x0BB8);
+
     int transitions = 0;
-    for (size_t i = 0; i + 2 < tone.size(); i += 2) {
-        const bool a = tone[i] >= 1000;
-        const bool b = tone[i + 2] >= 1000;
-        if (a != b) ++transitions;
+    bool prev = tone[0] >= 1000;
+    for (std::size_t i = 0; i + 2 < tone.size(); i += 2) {
+        const bool now = tone[i + 2] >= 1000;
+        if (now != prev) ++transitions;
+        prev = now;
     }
-    // The beeper pitch is the PIT output toggle rate, 1193182/reload ~= 397 Hz.
-    CHECK(transitions >= 380 && transitions <= 420);
-    // Every sample keeps the card's +1000 offset below the beeper.
-    for (size_t i = 0; i < tone.size(); ++i) {
-        CHECK(tone[i] == 1000 + PcSpeaker::amplitude || tone[i] == 1000 - PcSpeaker::amplitude);
+    // A 397.7 Hz square has two edges per period: ~795 crossings per second.
+    CHECK(transitions >= 760 && transitions <= 830);
+
+    // The card's +1000 offset survives (the DC blocker works on the speaker
+    // signal, not on the already-mixed output).
+    long long sum = 0;
+    for (std::size_t i = 0; i < tone.size(); i += 2) sum += tone[i];
+    const double avg = double(sum) / 44100.0;
+    CHECK(avg > 950.0 && avg < 1050.0);
+    CHECK(peak(tone) > 1000);
+}
+
+// DD2's intro sets a PC-speaker tone once per 70 Hz frame; the 140 Hz timer
+// ISR clears port 61h.  The resulting 70 Hz envelope is the low "brrr".  A
+// constant-gate tone has almost no 70 Hz energy, while the gated unipolar
+// waveform must have a strong 70 Hz line.
+TEST(pc_speaker_gate_timeline_produces_brrr) {
+    constexpr int rate = 44100;
+    constexpr int frames = rate;
+    constexpr u16 reload = 3000; // ~397.7 Hz tone
+
+    std::vector<SpeakerPoint> points;
+    points.push_back({0, reload, false});
+    for (int i = 0; i < frames; i += 630) { // 70 Hz gate, 3.6 ms on
+        points.push_back({u64(i), reload, true});
+        const int off = std::min(frames, i + 159);
+        if (off < frames) points.push_back({u64(off), reload, false});
     }
+
+    PcSpeaker gated;
+    std::vector<i16> brrr(size_t(frames) * 2, 0);
+    gated.mix_timeline(brrr, rate, 0, frames, points);
+    const double low = tone_energy(brrr, 70.0, rate);
+    const double high = tone_energy(brrr, 1193182.0 / reload, rate);
+    CHECK(low > 100.0);
+    CHECK(low > high * 0.2);
+
+    // The same tone without the gate has no 70 Hz line to speak of.
+    PcSpeaker constant;
+    std::vector<i16> flat(size_t(frames) * 2, 0);
+    constant.mix(flat, rate, true, reload);
+    const double low_flat = tone_energy(flat, 70.0, rate);
+    CHECK(low > low_flat * 3.0);
 }

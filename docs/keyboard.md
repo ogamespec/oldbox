@@ -72,4 +72,4 @@ up 0x48, right 0x4D, down 0x50, left 0x4B, Ctrl 0x1D, Alt 0x38
   `keys[0x4D]`/`keys[0x38]` в INT 9-таблице DD2 (`DGROUP:0x2B82`), включая
   release.
 
-Проходят все 301 тест на Linux и Windows (`ctest`).
+Проходят все 305 тестов на Linux и Windows (`ctest`).

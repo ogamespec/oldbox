@@ -44,6 +44,7 @@ Machine::Machine(SystemConfig cfg)
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       floppy_(bus_, piix4_.dma(), [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       usb_(bus_) {
+    piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
     // Firmware service shim: early Award POST calls INT 13h AH=00h before it
     // =====================================================================
@@ -284,6 +285,7 @@ void Machine::reset() {
     ata_.reset();
     floppy_.reset();
     if (audio_) audio_->reset();
+    speaker_.reset();
     if (apic_) apic_->reset();
     if (flash_) {
         flash_->reset_session();
@@ -366,6 +368,7 @@ void Machine::run_instructions(u64 count) {
 }
 
 void Machine::run_frame() {
+    piix4_.pit().begin_speaker_frame();
     const u64 end = cpu_.state().cycles + cycles_per_frame();
     u64 last_tick = cpu_.state().cycles;
     while (running_ && cpu_.state().cycles < end) {
@@ -409,7 +412,14 @@ void Machine::render_audio(std::span<i16> out, u32 host_rate) {
     } else {
         std::fill(out.begin(), out.end(), i16(0));
     }
-    speaker_.mix(out, host_rate, piix4_.pit().speaker(), piix4_.pit().reload(2));
+    const Pit::SpeakerTimeline timeline = piix4_.pit().take_speaker_frame();
+    std::vector<SpeakerPoint> points;
+    points.reserve(timeline.changes.size() + 1);
+    points.push_back(SpeakerPoint{timeline.start_cycle, timeline.first_reload, timeline.first_gate});
+    for (const SpeakerPoint& p : timeline.changes) {
+        if (p.cycle >= timeline.start_cycle) points.push_back(p);
+    }
+    speaker_.mix_timeline(out, host_rate, timeline.start_cycle, timeline.end_cycle, points);
 }
 
 VideoFrame Machine::display_frame() const {

@@ -457,6 +457,40 @@ TEST(pit_speaker_port_gate_and_output) {
     CHECK(pit.speaker());
 }
 
+TEST(pit_speaker_timeline_records_gate_and_reload) {
+    Bus bus(1 * megabyte);
+    Pit pit(bus, 1, [](bool) {});
+    u64 now = 0;
+    pit.set_cycle_source([&]() { return now; });
+    pit.begin_speaker_frame();
+
+    now = 10;
+    pit.io_write8(0x61, 0x03);       // gate + data enable
+    now = 20;
+    pit.io_write8(0x43, 0xb6);       // CH2, lobyte/hibyte, mode 3
+    now = 30;
+    pit.io_write8(0x42, 0x04);       // low byte
+    now = 40;
+    pit.io_write8(0x42, 0x00);       // high byte -> reload 4
+    now = 50;
+    pit.io_write8(0x61, 0x00);       // ISR turns the speaker off
+
+    const Pit::SpeakerTimeline tl = pit.take_speaker_frame();
+    CHECK_EQ(tl.start_cycle, 0u);
+    CHECK_EQ(tl.end_cycle, 50u);
+    CHECK(!tl.first_gate);
+    CHECK_EQ(tl.first_reload, 0u);
+    CHECK(tl.changes.size() >= 3);
+    bool saw_gate_on = false, saw_reload = false;
+    for (const SpeakerPoint& p : tl.changes) {
+        if (p.gate) saw_gate_on = true;
+        if (p.gate && p.reload == 4) saw_reload = true;
+    }
+    CHECK(saw_gate_on);
+    CHECK(saw_reload);
+    CHECK(!tl.changes.back().gate);
+}
+
 TEST(pit_refresh_bit_toggles) {
     Bus bus(1 * megabyte);
     Pit pit(bus, 1, [](bool) {});

@@ -145,7 +145,7 @@ F1 захватывает/отпускает мышь, F11 — fullscreen, F12 �
 ./build/oldbox_tests
 ```
 
-Покрытие: 301 тест — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 305 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -157,7 +157,9 @@ PGE/PVI/AC, machine check, MTRR/perf MSR, APIC priority/timer, SMM
 page-fault error code, MSR/CPUID/SYSENTER, I/O-привилегии и bitmap,
 A20/port 0x92/8042, PCI/BAR, Voodoo-растеризация, S3/VGA (CRTC
 start/cursor high/low, byte mode, CR9 DBL SCN), клавиатура (SDL scancode ->
-PC set 1, E0-расширенные стрелки/модификаторы), ATA/ATAPI/FDC,
+PC set 1, E0-расширенные стрелки/модификаторы), PIT/PC Speaker
+(униполярный динамик, 70 Гц огибающая, таймлайн порта 61h), S3 atomic palette
+table, ATA/ATAPI/FDC,
 SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 (`freedos_boots_to_command_prompt_with_reference_bios`).
 
@@ -181,6 +183,8 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
   смещением.
 - [docs/keyboard.md](docs/keyboard.md) — SDL3 scancode -> PC set 1,
   E0-префикс для стрелок/правых модификаторов, исправление Alt и стрелок.
+- [docs/pc-speaker.md](docs/pc-speaker.md) — PIT канал 2 и PC Speaker:
+  почему заставка DD2 «пищит» вместо «БРРРР» и как сделан таймлайн гейта.
 - [docs/cpu-features.md](docs/cpu-features.md) — матрица архитектурных
   возможностей Pentium Pro/Pentium II: реализовано/упрощено/не моделируется.
 - [docs/io-a20.md](docs/io-a20.md) — I/O-карта, привилегии, A20.
