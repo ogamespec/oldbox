@@ -180,6 +180,35 @@ TEST(dma_page_registers_map_to_channels) {
     CHECK_EQ(dma.io_read8(0x8f), 0xffu); // refresh register: no page
 }
 
+// The A20 gate masks only the processor's address line 20.  The 8237 drives
+// the ISA address bus itself, so a floppy transfer into a buffer above 1 MiB
+// (the FreeDOS disk buffers in the HMA) must reach the real address even
+// while the CPU has A20 disabled.
+TEST(dma_bus_master_ignores_a20_gate) {
+    Bus bus(2 * megabyte);
+    Dma dma(bus);
+    bus.set_a20(false);
+    // Channel 2: address 0x0000, page 0x10 -> physical 0x100000.
+    dma.io_write8(0x0c, 0x00); // clear flip-flop
+    dma.io_write8(0x0b, 0x46); // channel 2, single, read, increment
+    dma.io_write8(0x04, 0x00);
+    dma.io_write8(0x04, 0x00);
+    dma.io_write8(0x05, 0x02); // count 2 -> three bytes
+    dma.io_write8(0x05, 0x00);
+    dma.io_write8(0x81, 0x10);
+    dma.io_write8(0x0a, 0x02); // unmask channel 2
+    // The CPU path is still gated: a CPU write with A20 off wraps to 0xxxxx.
+    bus.write8(0x100000, 0x11);
+    CHECK_EQ(bus.read8_raw(0x000000), 0x11u);
+    CHECK_EQ(bus.read8_raw(0x100000), 0x00u);
+    // A bus-master transfer goes to the full 24-bit address.
+    CHECK(dma.write_byte(2, 0xaa));
+    CHECK(dma.write_byte(2, 0xbb));
+    CHECK_EQ(bus.read8_raw(0x100000), 0xaau);
+    CHECK_EQ(bus.read8_raw(0x100001), 0xbbu);
+    CHECK_EQ(bus.read8_raw(0x000000), 0x11u); // the low alias untouched
+}
+
 // ===========================================================================
 // 82C59 PIC pair (PIIX4 datasheet 4.2.2)
 // ===========================================================================

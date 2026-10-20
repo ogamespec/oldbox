@@ -105,8 +105,18 @@ const MemoryRegion* Bus::find_region(u32 addr, u32 len) const {
     return best;
 }
 
-u8 Bus::read8(u32 addr) {
-    if (!a20_) addr &= ~(1u << 20);
+namespace {
+constexpr u32 a20_gate(u32 addr, bool a20_on) {
+    return a20_on ? addr : (addr & ~(1u << 20));
+}
+} // namespace
+
+u8 Bus::read8(u32 addr) { return read8_raw(a20_gate(addr, a20_)); }
+u16 Bus::read16(u32 addr) { return read16_raw(a20_gate(addr, a20_)); }
+u32 Bus::read32(u32 addr) { return read32_raw(a20_gate(addr, a20_)); }
+u64 Bus::read64(u32 addr) { return u64(read32(addr)) | (u64(read32(addr + 4)) << 32); }
+
+u8 Bus::read8_raw(u32 addr) {
     u8 v;
     if (auto* r = find_region(addr)) {
         if (r->device) v = r->device->read8(addr - r->base);
@@ -117,30 +127,30 @@ u8 Bus::read8(u32 addr) {
     }
     return v;
 }
-u16 Bus::read16(u32 addr) {
-    if (!a20_) addr &= ~(1u << 20);
+u16 Bus::read16_raw(u32 addr) {
     if (auto* r = find_region(addr, 2)) {
         if (r->device) return r->device->read16(addr - r->base);
         return le16(r->ram + addr - r->base);
     }
-    return u16(read8(addr)) | (u16(read8(addr + 1)) << 8);
+    return u16(read8_raw(addr)) | (u16(read8_raw(addr + 1)) << 8);
 }
-u32 Bus::read32(u32 addr) {
-    if (!a20_) addr &= ~(1u << 20);
+u32 Bus::read32_raw(u32 addr) {
     u32 v;
     if (auto* r = find_region(addr, 4)) {
         if (r->device) v = r->device->read32(addr - r->base);
         else v = le32(r->ram + addr - r->base);
-    } else v = u32(read16(addr)) | (u32(read16(addr + 2)) << 16);
+    } else v = u32(read16_raw(addr)) | (u32(read16_raw(addr + 2)) << 16);
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x read32 %05x = %08x\n", watch_cs_, watch_ip_, addr, v);
     }
     return v;
 }
-u64 Bus::read64(u32 addr) { return u64(read32(addr)) | (u64(read32(addr + 4)) << 32); }
 
-void Bus::write8(u32 addr, u8 value) {
-    if (!a20_) addr &= ~(1u << 20);
+void Bus::write8(u32 addr, u8 value) { write8_raw(a20_gate(addr, a20_), value); }
+void Bus::write16(u32 addr, u16 value) { write16_raw(a20_gate(addr, a20_), value); }
+void Bus::write32(u32 addr, u32 value) { write32_raw(a20_gate(addr, a20_), value); }
+
+void Bus::write8_raw(u32 addr, u8 value) {
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write8 %05x = %02x\n", watch_cs_, watch_ip_, addr, value);
     }
@@ -150,8 +160,7 @@ void Bus::write8(u32 addr, u8 value) {
         return;
     }
 }
-void Bus::write16(u32 addr, u16 value) {
-    if (!a20_) addr &= ~(1u << 20);
+void Bus::write16_raw(u32 addr, u16 value) {
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write16 %05x = %04x\n", watch_cs_, watch_ip_, addr, value);
     }
@@ -160,10 +169,9 @@ void Bus::write16(u32 addr, u16 value) {
         if (!r->readonly || rom_write_enabled_) put_le16(r->ram + addr - r->base, value);
         return;
     }
-    write8(addr, u8(value)); write8(addr + 1, u8(value >> 8));
+    write8_raw(addr, u8(value)); write8_raw(addr + 1, u8(value >> 8));
 }
-void Bus::write32(u32 addr, u32 value) {
-    if (!a20_) addr &= ~(1u << 20);
+void Bus::write32_raw(u32 addr, u32 value) {
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write32 %05x = %08x\n", watch_cs_, watch_ip_, addr, value);
     }
@@ -172,7 +180,7 @@ void Bus::write32(u32 addr, u32 value) {
         if (!r->readonly || rom_write_enabled_) put_le32(r->ram + addr - r->base, value);
         return;
     }
-    write16(addr, u16(value)); write16(addr + 2, u16(value >> 16));
+    write16_raw(addr, u16(value)); write16_raw(addr + 2, u16(value >> 16));
 }
 void Bus::write64(u32 addr, u64 value) { write32(addr, u32(value)); write32(addr + 4, u32(value >> 32)); }
 

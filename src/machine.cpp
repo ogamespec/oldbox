@@ -438,6 +438,15 @@ void Machine::run_frame() {
     last_frame_cycles_ = cpu_.state().cycles;
 }
 
+void Machine::render_audio(std::span<i16> out, u32 host_rate) {
+    if (audio_) {
+        audio_->render(out, host_rate);
+    } else {
+        std::fill(out.begin(), out.end(), i16(0));
+    }
+    speaker_.mix(out, host_rate, piix4_.pit().speaker(), piix4_.pit().reload(2));
+}
+
 VideoFrame Machine::display_frame() const {
     if (voodoo_ && !voodoo_->passthrough() && voodoo_->output_active()) return voodoo_->frame();
     return s3_.frame();

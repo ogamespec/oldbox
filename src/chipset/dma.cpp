@@ -58,7 +58,7 @@ std::optional<u8> Dma::read_byte(int channel) {
     Channel& c = channels_[channel & 7];
     if (masked(channel) || dma_disabled_) return std::nullopt;
     const u32 addr = physical(channel);
-    const u8 v = bus_.read8(addr);
+    const u8 v = bus_.read8_raw(addr);
     c.active = true;
     ++c.base_cur;
     if (--c.count_cur == 0xffffu) {
@@ -75,7 +75,7 @@ bool Dma::write_byte(int channel, u8 value) {
     Channel& c = channels_[channel & 7];
     if (masked(channel) || dma_disabled_) return false;
     const u32 addr = physical(channel);
-    bus_.write8(addr, value);
+    bus_.write8_raw(addr, value);
     c.active = true;
     ++c.base_cur;
     if (--c.count_cur == 0xffffu) {

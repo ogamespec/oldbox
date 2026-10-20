@@ -63,6 +63,16 @@ public:
     void write16(u32 addr, u16 value);
     void write32(u32 addr, u32 value);
     void write64(u32 addr, u64 value);
+    // Bus-master accesses: the A20 gate only masks the processor's address
+    // line 20.  The 8237 drives the address bus itself, so DMA transfers to
+    // the HMA (e.g. the FreeDOS disk buffers) must not be wrapped when the
+    // CPU has A20 disabled.
+    [[nodiscard]] u8 read8_raw(u32 addr);
+    [[nodiscard]] u16 read16_raw(u32 addr);
+    [[nodiscard]] u32 read32_raw(u32 addr);
+    void write8_raw(u32 addr, u8 value);
+    void write16_raw(u32 addr, u16 value);
+    void write32_raw(u32 addr, u32 value);
     bool read_bytes(u32 addr, std::span<u8> out);
     bool write_bytes(u32 addr, std::span<const u8> in);
 

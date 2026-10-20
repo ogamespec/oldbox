@@ -9,6 +9,7 @@
 #include "oldbox/s3_trio64.hpp"
 #include "oldbox/voodoo.hpp"
 #include "oldbox/audio.hpp"
+#include "oldbox/speaker.hpp"
 #include "oldbox/storage.hpp"
 #include "oldbox/lm78.hpp"
 #include <memory>
@@ -39,6 +40,10 @@ public:
     [[nodiscard]] S3Trio64& s3() { return s3_; }
     [[nodiscard]] Voodoo* voodoo() { return voodoo_.get(); }
     [[nodiscard]] Awe64* audio() { return audio_.get(); }
+    // Renders the sound card and the PC speaker into one interleaved stereo
+    // buffer.  The beeper is mixed on top of the card's stream, never in
+    // place of it.
+    void render_audio(std::span<i16> out, u32 host_rate);
     [[nodiscard]] AtaController& ata() { return ata_; }
     [[nodiscard]] FloppyController& floppy() { return floppy_; }
     [[nodiscard]] Flash* flash() { return flash_.get(); }
@@ -87,6 +92,7 @@ private:
     std::unique_ptr<PamWindow> pam_window_;
     std::unique_ptr<LocalApic> apic_;
     std::unique_ptr<Awe64> audio_;
+    PcSpeaker speaker_;
     AtaController ata_;
     FloppyController floppy_;
     W83877TF superio_;

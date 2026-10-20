@@ -99,7 +99,7 @@ void push_audio(SdlState& st, Machine& machine) {
     if (!st.audio || !machine.audio()) return;
     constexpr int frames_per_tick = 735; // 44100 / 60
     st.audio_buffer.resize(frames_per_tick * 2);
-    machine.audio()->render(std::span<i16>(st.audio_buffer), 44100);
+    machine.render_audio(std::span<i16>(st.audio_buffer), 44100);
     SDL_PutAudioStreamData(st.audio, st.audio_buffer.data(), int(st.audio_buffer.size() * sizeof(i16)));
 }
 }

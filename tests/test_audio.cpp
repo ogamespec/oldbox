@@ -6,6 +6,7 @@
 
 #include "oldbox/audio.hpp"
 #include "oldbox/dma.hpp"
+#include "oldbox/speaker.hpp"
 #include "tests/test.hpp"
 
 #include <algorithm>
@@ -344,4 +345,33 @@ TEST(audio_dsp_dma_playback_and_irq) {
     CHECK(rig.card.irq_pending());
     rig.card.io_read8(u16(kSb + 0x0e)); // acknowledge 8-bit DMA interrupt
     CHECK(!rig.card.irq_pending());
+}
+
+
+// The PC speaker is a separate source mixed additively into the sound
+// card's stream: the gate/data bits of port 61h enable it, the PIT channel
+// 2 reload sets the tone, and the card's samples must survive unchanged
+// below the added beeper.
+TEST(pc_speaker_square_wave_and_additive_mixing) {
+    PcSpeaker speaker;
+    std::vector<i16> buffer(size_t(44100) * 2, 0);
+    // Gate off: nothing is added.
+    speaker.mix(buffer, 44100, false, 0x0BB8);
+    CHECK(peak(buffer) == 0);
+    // Gate on with reload 0x0BB8 -> 1193182/3000 ~= 397.7 Hz square wave.
+    // Start from a non-zero "card" signal to prove the mix is additive.
+    std::vector<i16> tone(size_t(44100) * 2, 1000);
+    speaker.mix(tone, 44100, true, 0x0BB8);
+    int transitions = 0;
+    for (size_t i = 0; i + 2 < tone.size(); i += 2) {
+        const bool a = tone[i] >= 1000;
+        const bool b = tone[i + 2] >= 1000;
+        if (a != b) ++transitions;
+    }
+    // The beeper pitch is the PIT output toggle rate, 1193182/reload ~= 397 Hz.
+    CHECK(transitions >= 380 && transitions <= 420);
+    // Every sample keeps the card's +1000 offset below the beeper.
+    for (size_t i = 0; i < tone.size(); ++i) {
+        CHECK(tone[i] == 1000 + PcSpeaker::amplitude || tone[i] == 1000 - PcSpeaker::amplitude);
+    }
 }

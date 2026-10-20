@@ -108,6 +108,9 @@ F1 захватывает/отпускает мышь, F11 — fullscreen, F12 �
 - AWE64: reset/version DSP, mixer, single/auto-init DMA, MPU-401 UART,
   EMU8000 (32 голоса), OPL3 fallback с таймерами/статус-регистром OPL2
   (YM3812: период (256−N)×80.8 мкс, RST/ST, флаги FT1/FT2/IRQ), SDL audio.
+- PC Speaker: канал 2 PIT (1193182/reload Гц) через порт 61h (gate/data),
+  квадратная волна микшируется в тот же поток, что и звуковая карта, —
+  бипер не блокирует и не заменяет звук AWE64.
 - 8042: PS/2-мышь по IBM PS/2 HITR (статус 64h, командный байт, команды
   контроллера и устройства, 3-байтовые пакеты, IRQ12); в гостевой FreeDOS
   на `freedos-games.img` грузится штатный Microsoft `MMOUSE.COM`
@@ -168,6 +171,9 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 - [assets/floppy/MEMTEST_WRAPPER.IMG](assets/floppy/MEMTEST_WRAPPER.IMG) —
   FAT12-обёртка для `MEMTEST.IMG` (собирается
   `tools/make_memtest_wrapper.py`).
+- `assets/floppy/dd2.img` — загрузочная FreeDOS-дискета с Dangerous Dave 2
+  (HIMEMX + DOS=HIGH, AUTOEXEC запускает DAVE2.EXE), собирается
+  `tools/make_dd2_floppy.py` из `C:\Games\DD2`; в `run.bat` — пункт 9.
 - [docs/cpu-features.md](docs/cpu-features.md) — матрица архитектурных
   возможностей Pentium Pro/Pentium II: реализовано/упрощено/не моделируется.
 - [docs/io-a20.md](docs/io-a20.md) — I/O-карта, привилегии, A20.
