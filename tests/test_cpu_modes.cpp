@@ -211,9 +211,19 @@ TEST(mode_tss_stack_switch_and_iret) {
     // An outer-ring IRET must not let the ring-3 frame raise IOPL or enable
     // IF above the old IOPL (Intel SDM Vol. 2, IRET, RETURN-OUTER-PRIVILEGE).
     h.bus.write32(h.r(4) + 8, 0x00003202u); // IOPL=3, IF=1 in the saved image
+    // A conforming code segment in ES is always usable from an outer ring and
+    // must survive the return (Intel SDM Vol. 3, 4.8.6 step 5).
+    h.state().seg[0].selector = 0x33;
+    h.state().seg[0].base = 0;
+    h.state().seg[0].limit = 0xffffffff;
+    h.state().seg[0].access = 0x9e;
+    h.state().seg[0].flags = 0xc0;
+    h.state().seg[0].valid = true;
     h.cpu.step();
     CHECK_EQ(h.cpu.state().seg[1].selector, 0x1bu);
     CHECK_EQ(h.cpu.state().seg[2].selector, 0x23u);
+    CHECK_EQ(h.cpu.state().seg[0].selector, 0x0033u);
+    CHECK(h.cpu.state().seg[0].valid);
     CHECK_EQ(h.r(4), 0x7000u);
     CHECK_EQ(h.cpu.state().eflags & IOPL, 0u);
     CHECK(!(h.cpu.state().eflags & IF));
@@ -855,6 +865,54 @@ TEST(mode_v86_vme_redirect_bit_with_low_iopl_faults) {
     CHECK_EQ(h.cpu.last_exception_vector(), 13);
     CHECK_EQ(int(h.state().mode), int(CpuMode::protected_mode));
     CHECK_EQ(h.state().seg[1].selector, 0x08u);
+}
+
+TEST(mode_v86_cli_sti_iopl3_without_vme) {
+    CpuHarness h;
+    h.reset_real();
+    enter_v86(h, 0x1000, 0, 0x2000, 0x0800, 3, IF);
+    h.emit(0xfa); // cli
+    h.emit(0xfb); // sti
+    h.emit(0xf4);
+    h.cpu.step();
+    CHECK(!(h.state().eflags & IF));
+    h.cpu.step();
+    CHECK(h.state().eflags & IF);
+    CHECK_EQ(h.cpu.last_exception_vector(), 0xffffffffu);
+}
+
+TEST(mode_protected_popf_cannot_enter_v86) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.emit(0x68); h.emit32(0x00020002u); // push 00020002h (VM=1)
+    h.emit(0x9d);                        // popf
+    h.emit(0xf4);
+    h.run(3);
+    CHECK_EQ(int(h.state().mode), int(CpuMode::protected_mode));
+    CHECK_EQ(h.state().eflags & VM, 0u);
+}
+
+TEST(mode_v86_vme_method6_exception_redirects_to_ivt) {
+    CpuHarness h;
+    h.make_flat_gdt();
+    install_tss(h, 0xa7, 0x88);       // room for the 32-byte redirection map
+    h.state().cr4 |= 0x1;             // VME
+    h.bus.write8(0x2068, 0x00);       // redirection bits for vectors 0..7
+    h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
+    gate(h, 0, 0x08, 0x3000);         // protected #DE handler
+    h.bus.write8(0x3000, 0xf4);
+    h.bus.write16(0, 0x4000);         // IVT[0] -> 0000:4000
+    h.bus.write16(2, 0x0000);
+    h.bus.write8(0x4000, 0xf4);
+    enter_v86(h, 0x1000, 0, 0x2000, 0x0800, 0, 0);
+    h.set_r(0, 1);
+    h.set_r(1, 0);
+    h.emit(0xf6); h.emit(0xf1);       // div cl -> #DE
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 0u);
+    CHECK_EQ(int(h.state().mode), int(CpuMode::virtual86));
+    CHECK_EQ(h.cpu.state().seg[1].selector, 0x0000u);
+    CHECK_EQ(h.eip(), 0x4000u);
 }
 
 TEST(mode_v86_not_present_page_fault_reports_user_read) {

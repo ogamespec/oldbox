@@ -14,7 +14,7 @@
 | Protected mode: GDT/LDT, DPL/RPL/CPL, expand-down, conforming | реализовано |
 | Загрузка сегментов, null-селекторы, hidden-часть | реализовано |
 | Virtual-8086: 8086-сегментация, CPL=3, IDT/TSS, IRET | реализовано |
-| VME: redirection bitmap, VIF/VIP, method 4/5/6 | реализовано, method 6 для исключений упрощён |
+| VME: redirection bitmap, VIF/VIP, method 4/5/6 | реализовано, method 3 для аппаратных прерываний упрощён |
 | PVI: VIF/VIP для ring 3 protected mode | реализовано |
 | Call gates 16/32-бит, parameter count, stack switch | реализовано |
 | Task gates, FAR JMP/CALL на TSS, IRET с NT | реализовано |

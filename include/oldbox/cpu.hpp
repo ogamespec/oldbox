@@ -178,6 +178,7 @@ public:
 
     [[nodiscard]] bool in_protected_mode() const { return state_.mode == CpuMode::protected_mode; }
     [[nodiscard]] bool in_virtual86_mode() const { return state_.mode == CpuMode::virtual86; }
+    [[nodiscard]] std::string cache_trace_text() const;
     [[nodiscard]] u16 cs_selector() const { return state_.seg[1].selector; }
     [[nodiscard]] int cpl() const {
         // CPL is architecturally fixed at 3 in virtual-8086 mode and at 0 in
@@ -335,6 +336,9 @@ private:
     void software_interrupt(int vector);
     void v86_redirect_interrupt(u8 vector);
     [[nodiscard]] bool v86_redirect_bit(u8 vector);
+    bool vme_policy_fault_ = false;
+    std::deque<std::string> cache_trace_;
+    void note_cache(std::string line);
     void execute_one();
     void execute_0f();
     void execute_grp1(u8 modrm_byte);

@@ -451,6 +451,7 @@ std::string Machine::status_text() const {
                      cpu_.state().gpr[4], cpu_.state().seg[2].selector, cpu_.state().seg[2].base);
     o << "Chipset " << piix4_.status() << "\n";
     o << std::format("PCI     {} devices\n", pci_.devices().size());
+    o << "Cache trace:\n" << cpu_.cache_trace_text();
     if (!trace_history_.empty()) {
         o << "Trace tail:\n";
         for (const auto& t : trace_history_) o << "  " << t << "\n";
