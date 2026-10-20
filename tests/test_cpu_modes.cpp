@@ -12,6 +12,15 @@ static void gate(CpuHarness& h, int vector, u16 selector, u32 off, u8 type = 0x8
     h.bus.write16(g + 6, u16(off >> 16));
 }
 
+static void segment_desc(CpuHarness& h, u32 at, u32 base, u32 limit, u8 access, u8 flags) {
+    h.bus.write16(at, u16(limit & 0xffff));
+    h.bus.write16(at + 2, u16(base & 0xffff));
+    h.bus.write8(at + 4, u8(base >> 16));
+    h.bus.write8(at + 5, access);
+    h.bus.write8(at + 6, u8(((limit >> 16) & 0x0f) | (flags & 0xf0)));
+    h.bus.write8(at + 7, u8(base >> 24));
+}
+
 // Build a 32-bit TSS at 0x2000, install it through LTR and leave the CPU in
 // protected mode.  The caller is expected to have called make_flat_gdt().
 static void install_tss(CpuHarness& h, u16 limit = 0x67, u16 io_base = 0) {
@@ -199,11 +208,15 @@ TEST(mode_tss_stack_switch_and_iret) {
     CHECK_EQ(h.cpu.state().seg[2].base, 0u);
     CHECK_EQ(h.bus.read32(h.r(4) + 4), 0x1bu); // saved CS
     CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x23u); // saved SS (with ring3 stack)
-    // iret returns to ring 3, restores ESP.
+    // An outer-ring IRET must not let the ring-3 frame raise IOPL or enable
+    // IF above the old IOPL (Intel SDM Vol. 2, IRET, RETURN-OUTER-PRIVILEGE).
+    h.bus.write32(h.r(4) + 8, 0x00003202u); // IOPL=3, IF=1 in the saved image
     h.cpu.step();
     CHECK_EQ(h.cpu.state().seg[1].selector, 0x1bu);
     CHECK_EQ(h.cpu.state().seg[2].selector, 0x23u);
     CHECK_EQ(h.r(4), 0x7000u);
+    CHECK_EQ(h.cpu.state().eflags & IOPL, 0u);
+    CHECK(!(h.cpu.state().eflags & IF));
 }
 
 TEST(mode_16bit_tss_stack_switch) {
@@ -602,6 +615,77 @@ TEST(mode_sgdt_lgdt_operand_layout) {
     h.halt(); h.run(3);
     CHECK_EQ(h.cpu.state().gdtr_limit, 0x0030u);
     CHECK_EQ(h.cpu.state().gdtr_base, 0x00000600u);
+}
+
+TEST(mode_lgdt_lidt_16bit_operand_loads_24bit_base) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    // 16-bit operand size: only the low 24 bits of the base are loaded.
+    // The high byte (0x93) of the six-byte pseudo-descriptor is ignored.
+    h.bus.write16(0x4100, 0x07ff);
+    h.bus.write32(0x4102, 0x93011330);
+    h.emit(0x66); h.emit(0x0f); h.emit(0x01); h.emit(0x15); h.emit32(0x4100); // lgdt
+    h.emit(0x66); h.emit(0x0f); h.emit(0x01); h.emit(0x1d); h.emit32(0x4100); // lidt
+    h.halt(); h.run(3);
+    CHECK_EQ(h.cpu.state().gdtr_base, 0x00011330u);
+    CHECK_EQ(h.cpu.state().gdtr_limit, 0x07ffu);
+    CHECK_EQ(h.cpu.state().idtr_base, 0x00011330u);
+    CHECK_EQ(h.cpu.state().idtr_limit, 0x07ffu);
+}
+
+TEST(mode_expand_down_data_segment_limit) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().gdtr_limit = 0x37;
+    // GDT[6] -> 0x30: expand-down read/write data, limit 0x1000, B=0.
+    segment_desc(h, 0x530, 0, 0x1000, 0x96, 0x00);
+    h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
+    gate(h, 13, 0x08, 0x3000);
+    h.bus.write8(0x3000, 0xf4);
+    h.bus.write16(0x2000, 0xbeef);
+    h.emit(0x66); h.emit(0xb8); h.emit16(0x0030); // mov ax,0x30
+    h.emit(0x8e); h.emit(0xd8);                   // mov ds,ax
+    h.emit(0xa1); h.emit32(0x2000); // mov eax,[0x2000] (valid: > limit)
+    h.emit(0xa3); h.emit32(0x2000); // mov [0x2000],eax
+    h.emit(0xa1); h.emit32(0x0800); // mov eax,[0x0800] (invalid: <= limit)
+    h.halt(); h.run(8);
+    CHECK_EQ(h.cpu.last_exception_vector(), 13);
+    CHECK_EQ(h.cpu.last_exception_error(), 0x0030u);
+}
+
+TEST(mode_code_segment_is_not_writable_but_readable) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().gdtr_limit = 0x37;
+    // GDT[6] -> 0x30: present, DPL0, execute/read code.
+    segment_desc(h, 0x530, 0, 0xffffffff, 0x9a, 0xc0);
+    h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
+    gate(h, 13, 0x08, 0x3000);
+    h.bus.write8(0x3000, 0xf4);
+    h.bus.write32(0x2000, 0x12345678);
+    h.emit(0x66); h.emit(0xb8); h.emit16(0x0030); // mov ax,0x30
+    h.emit(0x8e); h.emit(0xd8);                   // mov ds,ax
+    h.emit(0xa1); h.emit32(0x2000); // read is allowed
+    h.emit(0xa3); h.emit32(0x2000); // write must #GP
+    h.halt(); h.run(6);
+    CHECK_EQ(h.r(0), 0x12345678u);
+    CHECK_EQ(h.cpu.last_exception_vector(), 13);
+    CHECK_EQ(h.cpu.last_exception_error(), 0x0030u);
+}
+
+TEST(mode_conforming_code_ignores_rpl) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().gdtr_limit = 0x37;
+    // GDT[6] -> 0x30: DPL0 conforming execute/read code at 0x3000.
+    segment_desc(h, 0x530, 0, 0xffffffff, 0x9e, 0xc0);
+    h.bus.write8(0x3000, 0xf4);
+    h.emit(0xea); h.emit32(0x3000); h.emit16(0x0033); // jmp far 0x33:0x3000
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 0xffffffffu);
+    CHECK_EQ(h.state().seg[1].selector, 0x0030u);
+    CHECK_EQ(h.state().seg[1].base, 0u);
+    CHECK_EQ(h.eip(), 0x3000u);
 }
 
 TEST(mode_protected_16bit_gate_pushes_16bit_error_frame) {

@@ -21,7 +21,8 @@ struct TestCpu {
         s.seg[1].flags = 0x40;
         s.seg[1].access = 0x9b;
         s.seg[0] = s.seg[2] = s.seg[3] = s.seg[4] = s.seg[5] = s.seg[1];
-        s.seg[2].access = 0x93;
+        s.seg[0].access = s.seg[2].access = s.seg[3].access = 0x93;
+        s.seg[4].access = s.seg[5].access = 0x93;
         s.eip = 0x1000;
         s.gpr[4] = 0x8000;
     }

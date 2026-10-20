@@ -309,6 +309,7 @@ private:
     void update_mode_from_cr0();
     void load_segment(SegReg seg, u16 selector);
     void load_segment_raw(SegReg seg, u16 selector);
+    void load_stack_segment(u16 selector, int cpl);
     void load_segment_8086(SegReg seg, u16 selector);
     void clear_inaccessible_data_segments(int new_cpl);
     void load_cs_far(u16 selector, u32 offset, int cpl_override = -1);

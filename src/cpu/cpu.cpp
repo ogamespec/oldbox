@@ -267,6 +267,20 @@ u32 Cpu::near_ip_addr(u32 v) const {
     return v & 0xffffu;
 }
 
+namespace {
+bool segment_limit_fault(const Segment& sg, u32 offset, u32 size) {
+    if (size == 0) size = 1;
+    const bool code = (sg.access & 0x18) == 0x18;
+    const bool data = (sg.access & 0x10) && !code;
+    const u64 end = u64(offset) + size - 1;
+    if (data && (sg.access & 0x04)) {
+        const u32 max = (sg.flags & 0x40) ? 0xffffffffu : 0xffffu;
+        return offset <= sg.limit || end > max;
+    }
+    return end > sg.limit;
+}
+}
+
 void Cpu::check_segment(SegReg s, u32 offset, u32 size, bool write) {
     const auto& sg = state_.seg[unsigned(s)];
     if (!sg.valid) { exception_gp(sg.selector & ~3u); return; }
@@ -288,13 +302,17 @@ void Cpu::check_segment(SegReg s, u32 offset, u32 size, bool write) {
         return;
     }
     if (size == 0) size = 1;
-    const u64 end = u64(offset) + size - 1;
-    if (end > sg.limit) {
+    const bool code = (sg.access & 0x18) == 0x18;
+    if (segment_limit_fault(sg, offset, size)) {
         if (s == SegReg::ss) exception_ss(sg.selector & ~3u);
         else exception_gp(sg.selector & ~3u);
         return;
     }
-    if (write && (sg.access & 0x0a) != 0x02 && (sg.access & 0x02) == 0) {
+    if (write) {
+        // Code segments are never writable, even when execute/read.
+        if (code || !(sg.access & 0x02)) exception_gp(sg.selector & ~3u);
+    } else if (code && !(sg.access & 0x02)) {
+        // Execute-only code cannot be read through a data-segment register.
         exception_gp(sg.selector & ~3u);
     }
 }
@@ -447,7 +465,8 @@ ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
     m.offset = off;
     const auto& seg = state_.seg[unsigned(m.segment)];
     m.linear = seg.base + off;
-    if (check_limit && state_.mode == CpuMode::protected_mode && u64(off) + u64(operand_size) - 1 > seg.limit) {
+    if (check_limit && state_.mode == CpuMode::protected_mode &&
+        segment_limit_fault(seg, off, u32(operand_size))) {
         exception_gp(seg.selector & ~3u);
     }
     return m;
@@ -623,6 +642,20 @@ void Cpu::load_segment_raw(SegReg seg, u16 selector) {
     s.valid = true;
 }
 
+void Cpu::load_stack_segment(u16 selector, int cpl) {
+    // Privilege stack loaded by an interlevel return or interrupt: the
+    // selector must name a present, writable data segment with DPL=RPL=CPL.
+    // Expand-down stacks are allowed (Intel SDM Vol. 3, 4.8.5).
+    if ((selector & ~7u) == 0) exception_gp(0);
+    const Descriptor d = read_descriptor_checked(selector);
+    const u8 type = d.access & 0x1f;
+    const bool data = (d.access & 0x10) && !(d.access & 0x08);
+    if (!data || !(type & 2) || ((d.access >> 5) & 3) != cpl || (selector & 3) != cpl)
+        exception_gp(selector & ~3u);
+    if (!(d.access & 0x80)) throw CpuException{11, u32(selector & ~3u), true};
+    load_segment_raw(SegReg::ss, selector);
+}
+
 void Cpu::load_segment(SegReg seg, u16 selector) {
     // MOV SS / POP SS / LSS inhibit interrupts until after the following
     // instruction.  The Award flash utility's real-mode call thunk relies on
@@ -647,12 +680,16 @@ void Cpu::load_segment(SegReg seg, u16 selector) {
     if (!(d.access & 0x80)) exception_gp(selector & ~3u);
     const int dpl = (d.access >> 5) & 3;
     if (seg == SegReg::ss) {
-        if (!data || !(type & 2) || (type & 0x0c) != 0) exception_gp(selector & ~3u);
+        // SS must be a writable data segment; expand-down stacks are valid.
+        if (!data || !(type & 2)) exception_gp(selector & ~3u);
         if (dpl != cpl()) exception_gp(selector & ~3u);
         if ((selector & 3) != cpl()) exception_gp(selector & ~3u);
     } else {
         if (!data && !(code && (type & 2))) exception_gp(selector & ~3u);
-        if (!(type & 0x04)) { // non-conforming
+        // The E bit in a data descriptor is the expand-down flag, not the
+        // conforming bit of a code descriptor.  Only conforming code skips
+        // the DPL check when loaded into DS/ES/FS/GS.
+        if (data || !(type & 0x04)) {
             if (dpl < std::max(cpl(), int(selector & 3))) exception_gp(selector & ~3u);
         }
     }
@@ -697,11 +734,12 @@ void Cpu::load_cs_far_raw(u16 selector, u32 offset, int cpl_override) {
     const int dpl = (d.access >> 5) & 3;
     // A direct far transfer may only stay at the same privilege level (or
     // enter a conforming segment); privilege changes require a gate.
-    if (rpl > cpl_now) exception_gp(selector & ~3u);
     if (d.access & 0x04) {
+        // Conforming code: the RPL is ignored; DPL is the lowest CPL allowed.
         if (dpl > cpl_now) exception_gp(selector & ~3u);
-    } else if (dpl != cpl_now) {
-        exception_gp(selector & ~3u);
+    } else {
+        if (rpl > cpl_now) exception_gp(selector & ~3u);
+        if (dpl != cpl_now) exception_gp(selector & ~3u);
     }
     if (offset > d.limit) exception_gp(0);
     // CS.RPL always reflects the new CPL, even if the selector image used a
@@ -832,27 +870,26 @@ void Cpu::do_far_return(int size, u16 extra) {
     const u32 off = pop_value(size);
     const u16 sel = u16(pop_value(size));
     int old_cpl = -1;
+    bool outer = false;
     if (state_.mode == CpuMode::protected_mode) {
         old_cpl = cpl();
         const int new_cpl = sel & 3;
         if (new_cpl < old_cpl) exception_gp(sel & ~3u);
-        if (new_cpl > old_cpl) {
-            // The RET immediate releases the callee's copy of the parameters
-            // before SS:ESP for the caller is popped.
+        outer = new_cpl > old_cpl;
+        if (outer) {
+            // For an interlevel return the RET immediate discards parameters
+            // from the callee's stack before SS:ESP is popped (Intel SDM
+            // Vol. 2, RET: ESP <- ESP + SRC in RETURN-OUTER-PRIVILEGE-LEVEL).
             if (extra) set_stack_pointer(stack_pointer() + extra);
             const u32 esp = pop_value(size);
             const u16 ss = u16(pop_value(size));
-            load_segment_raw(SegReg::ss, ss);
+            load_stack_segment(ss, new_cpl);
             state_.gpr[4] = size == 2 ? (esp & 0xffffu) : esp;
         }
-    } else if (extra) {
-        set_stack_pointer(stack_pointer() + extra);
     }
     load_cs_far(sel, off, state_.mode == CpuMode::protected_mode ? int(sel & 3) : -1);
-    if (state_.mode == CpuMode::protected_mode && extra && old_cpl >= 0 && int(sel & 3) <= old_cpl) {
-        set_stack_pointer(stack_pointer() + extra);
-    }
-    if (old_cpl >= 0 && int(sel & 3) > old_cpl) clear_inaccessible_data_segments(sel & 3);
+    if (extra && !outer) set_stack_pointer(stack_pointer() + extra);
+    if (old_cpl >= 0 && outer) clear_inaccessible_data_segments(sel & 3);
 }
 void Cpu::do_iret(int size) {
     if (state_.mode == CpuMode::real) {
@@ -931,22 +968,30 @@ void Cpu::do_iret(int size) {
     // privilege than the handler is running at.
     const int new_cpl = sel & 3;
     if (new_cpl < old_cpl) exception_gp(sel & ~3u);
-    if (new_cpl > old_cpl) {
+    const bool outer = new_cpl > old_cpl;
+    if (outer) {
         const u32 esp = pop_value(size);
         const u16 ss = u16(pop_value(size));
-        load_segment_raw(SegReg::ss, ss);
+        load_stack_segment(ss, new_cpl);
         state_.gpr[4] = size == 2 ? (esp & 0xffffu) : esp;
     }
     load_cs_far_raw(sel, off, new_cpl);
-    if (new_cpl > old_cpl) clear_inaccessible_data_segments(new_cpl);
-    if (size == 2) {
-        state_.eflags = (state_.eflags & 0xffff0000u) | (flags & 0xffffu) | 2u;
-    } else {
-        state_.eflags = (flags & 0x00ffffffu) | 2u;
-        // Only a CPL-0 IRET may change VM (the CPL-0 + VM image case was
-        // handled above); an outer-ring return cannot enter V86.
-        if (old_cpl != 0) state_.eflags &= ~VM;
+    if (outer) clear_inaccessible_data_segments(new_cpl);
+    // EFLAGS update follows the IRET rules: arithmetic flags and NT always,
+    // RF/AC/ID only for a 32-bit IRET, IOPL only at CPL 0, VM/VIF/VIP only at
+    // CPL 0 with a 32-bit IRET, and IF only when CPL <= IOPL.  A protected-mode
+    // return cannot enter V86 (that case was handled above).
+    u32 nf = state_.eflags;
+    const u32 arithmetic = CF | PF | AF | ZF | SF | TF | DF | OF | NT;
+    nf = (nf & ~arithmetic) | (flags & arithmetic);
+    if (size == 4) nf = (nf & ~(RF | AC | ID)) | (flags & (RF | AC | ID));
+    if (new_cpl == 0) {
+        nf = (nf & ~IOPL) | (flags & IOPL);
+        if (size == 4) nf = (nf & ~(VIF | VIP)) | (flags & (VIF | VIP));
+        nf &= ~VM;
     }
+    if (new_cpl <= int((nf >> 12) & 3u)) nf = (nf & ~IF) | (flags & IF);
+    state_.eflags = nf | 2u;
     update_mode_from_cr0();
 }
 

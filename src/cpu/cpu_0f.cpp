@@ -94,13 +94,17 @@ void Cpu::execute_0f() {
         case 2: { // LGDT
             if (cpl() != 0) exception_gp(0);
             const u16 limit = u16(read_mem(m.offset, 2, m.segment));
-            const u32 base = read_mem(m.offset + 2, 4, m.segment);
+            u32 base = read_mem(m.offset + 2, 4, m.segment);
+            // A 16-bit operand loads a 24-bit base; the high-order byte of
+            // the six-byte pseudo-descriptor is ignored (i386 PRM, LGDT).
+            if (opsize() == 2) base &= 0x00ffffffu;
             state_.gdtr_base = base; state_.gdtr_limit = limit; flush_tlb(); break;
         }
         case 3: { // LIDT
             if (cpl() != 0) exception_gp(0);
             const u16 limit = u16(read_mem(m.offset, 2, m.segment));
-            const u32 base = read_mem(m.offset + 2, 4, m.segment);
+            u32 base = read_mem(m.offset + 2, 4, m.segment);
+            if (opsize() == 2) base &= 0x00ffffffu;
             state_.idtr_base = base; state_.idtr_limit = limit; break;
         }
         case 4: write_rm(m, state_.cr0 & 0xffffu, 2); break; // SMSW
