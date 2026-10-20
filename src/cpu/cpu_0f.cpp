@@ -114,9 +114,6 @@ void Cpu::execute_0f() {
         case 6: { // LMSW
             if (cpl() != 0) exception_gp(0);
             const u16 v = u16(read_rm(m, 2));
-            note_cache(std::format("LMSW {:04x} cr0={:08x} mode={} at {:04x}:{:08x} ES={:04x}/{:02x} base={:08x} lim={:08x} val={}",
-                v, state_.cr0, int(state_.mode), opcode_cs_, opcode_ip_,
-                state_.seg[0].selector, state_.seg[0].access, state_.seg[0].base, state_.seg[0].limit, state_.seg[0].valid));
             state_.cr0 = (state_.cr0 & ~0x0fu) | (v & 0x0f);
             update_mode_from_cr0();
             flush_tlb();
@@ -213,9 +210,6 @@ void Cpu::execute_0f() {
             case 0: {
                 const u32 old = state_.cr0;
                 if (!(v & 1u) && (v & 0x80000000u)) exception_gp(0); // PG requires PE
-                note_cache(std::format("MOVCR0 {:08x}->{:08x} mode={} at {:04x}:{:08x} ES={:04x}/{:02x} base={:08x} lim={:08x} val={}",
-                    old, v, int(state_.mode), opcode_cs_, opcode_ip_,
-                    state_.seg[0].selector, state_.seg[0].access, state_.seg[0].base, state_.seg[0].limit, state_.seg[0].valid));
                 state_.cr0 = v;
                 if ((old ^ v) & 0x80000000u) flush_tlb();
                 update_mode_from_cr0();

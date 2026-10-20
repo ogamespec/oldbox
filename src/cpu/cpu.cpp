@@ -92,17 +92,6 @@ void Cpu::invalidate_tlb_page(u32 linear) {
     tlb_flags_[page] = 0;
 }
 
-void Cpu::note_cache(std::string line) {
-    cache_trace_.push_back(std::move(line));
-    if (cache_trace_.size() > 4096) cache_trace_.pop_front();
-}
-
-std::string Cpu::cache_trace_text() const {
-    std::string out;
-    for (const auto& line : cache_trace_) out += line + "\n";
-    return out;
-}
-
 void Cpu::update_mode_from_cr0() {
     if (state_.cr0 & 1u) {
         if (state_.eflags & VM) state_.mode = CpuMode::virtual86;
@@ -619,10 +608,6 @@ Descriptor Cpu::read_descriptor(u32 base, u16 selector) {
 }
 
 void Cpu::load_segment_8086(SegReg seg, u16 selector) {
-    if (seg == SegReg::es && state_.mode != CpuMode::real && opcode_cs_ == 0x0070)
-        note_cache(std::format("ES8086 {:04x} mode={} cr0={:08x} at {:04x}:{:08x} old={:04x} base={:08x} lim={:08x} acc={:02x}",
-            selector, int(state_.mode), state_.cr0, opcode_cs_, opcode_ip_,
-            state_.seg[0].selector, state_.seg[0].base, state_.seg[0].limit, state_.seg[0].access));
     auto& s = state_.seg[unsigned(seg)];
     s.selector = selector;
     s.base = u32(selector) << 4;
@@ -633,10 +618,6 @@ void Cpu::load_segment_8086(SegReg seg, u16 selector) {
 }
 
 void Cpu::load_segment_raw(SegReg seg, u16 selector) {
-    if (seg == SegReg::es)
-        note_cache(std::format("ESraw {:04x} mode={} cr0={:08x} at {:04x}:{:08x} old={:04x} base={:08x} lim={:08x} acc={:02x}",
-            selector, int(state_.mode), state_.cr0, opcode_cs_, opcode_ip_,
-            state_.seg[0].selector, state_.seg[0].base, state_.seg[0].limit, state_.seg[0].access));
     if (state_.mode != CpuMode::protected_mode) {
         load_segment_8086(seg, selector);
         return;
@@ -726,9 +707,6 @@ void Cpu::clear_inaccessible_data_segments(int new_cpl) {
         const bool code = (s.access & 0x18) == 0x18;
         const bool conforming = code && (s.access & 0x04);
         if (!conforming && ((s.access >> 5) & 3) < new_cpl) {
-            if (seg == SegReg::es)
-                note_cache(std::format("ESclear new_cpl={} at {:04x}:{:08x} old={:04x} acc={:02x}",
-                    new_cpl, opcode_cs_, opcode_ip_, s.selector, s.access));
             s.selector = 0;
             s.base = 0;
             s.limit = 0;
