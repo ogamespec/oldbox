@@ -7,6 +7,15 @@
 #include <sstream>
 
 namespace oldbox {
+
+namespace {
+// A real ATA/ATAPI drive spends hundreds of microseconds to milliseconds
+// executing a command before asserting INTRQ.  The instant assertion turns
+// the CD-ROM polling loop into an IRQ storm; DOS/4GW then receives an IRQ
+// inside its brief A20-off window and corrupts its VMM state (Error [35] in
+// the HoMM2 installer).
+constexpr u64 kCommandLatency = 50000;
+}
 namespace {
 
 constexpr u8 ST_BSY  = 0x80;
@@ -248,6 +257,7 @@ void AtaController::reset_channel(Channel& ch) {
     ch.control = 0;
     ch.nien = false;
     ch.irq_reason = 0;
+    ch.irq_due_at = 0;
     ch.bm_command = 0;
     ch.bm_status = 0;
     ch.bm_dtp = 0;
@@ -266,6 +276,7 @@ void AtaController::reset() {
 
 void AtaController::tick(u64 cpu_cycles) {
     tick_acc_ += cpu_cycles;
+    for (auto& ch : channels_) update_irq(ch);
 }
 
 // ---------------------------------------------------------------------------
@@ -353,16 +364,18 @@ u8 AtaController::drive_status(const IdeDrive& d) const {
 void AtaController::raise_irq(Channel& ch) {
     ch.irq_pending = true;
     ch.bm_status |= 0x04;
+    if (ch.irq_due_at == 0) ch.irq_due_at = tick_acc_ + kCommandLatency;
     update_irq(ch);
 }
 
 void AtaController::clear_irq(Channel& ch) {
     ch.irq_pending = false;
+    ch.irq_due_at = 0;
     update_irq(ch);
 }
 
 void AtaController::update_irq(Channel& ch) {
-    const bool level = ch.irq_pending && !ch.nien;
+    const bool level = ch.irq_pending && !ch.nien && tick_acc_ >= ch.irq_due_at;
     if (level == ch.irq_asserted) return;
     ch.irq_asserted = level;
     if (irq_) irq_(ch.irq, level);

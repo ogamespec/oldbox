@@ -117,6 +117,7 @@ TEST(ata_identify) {
     // IDENTIFY DEVICE on the primary master.
     ata_select(bus, 0x1F0, 0xA0);
     bus.io_write8(0x1F7, 0xEC);
+    ata.tick(100'000); // command execution latency before INTRQ
     CHECK_EQ(irq.last_line, 14);
     const u8 status = bus.io_read8(0x1F7);
     CHECK((status & 0x40) != 0); // DRDY
@@ -366,6 +367,7 @@ TEST(atapi_inquiry_and_iso_read) {
     // Secondary master, PACKET command.
     ata_select(bus, 0x170, 0xA0);
     bus.io_write8(0x177, 0xA0);
+    ata.tick(100'000); // command execution latency before INTRQ
     CHECK_EQ(irq.last_line, 15);
     CHECK_EQ(int(bus.io_read8(0x177)) & 0x08, 0x08); // command packet requested
     CHECK_EQ(int(bus.io_read8(0x174)), 0x01);       // CoD = command

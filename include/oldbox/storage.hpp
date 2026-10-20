@@ -125,6 +125,7 @@ private:
         bool irq_pending = false;
         bool irq_asserted = false;
         bool nien = false;
+        u64 irq_due_at = 0; // INTRQ asserts when the command latency expires
         u8 bm_command = 0;
         u8 bm_status = 0;
         u32 bm_dtp = 0;
