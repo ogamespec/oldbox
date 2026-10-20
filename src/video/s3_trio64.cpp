@@ -763,7 +763,7 @@ static u32 aperture_offset(u32 off) {
 }
 
 u32 S3Trio64::display_start_word() const {
-    const u32 low = u32(crtc_[0x0C]) | (u32(crtc_[0x0D]) << 8);
+    const u32 low = u32(crtc_[0x0D]) | (u32(crtc_[0x0C]) << 8);
     if (crtc_[0x69] & 0x0F) return low | (u32(crtc_[0x69] & 0x0F) << 16);
     return low | (u32(crtc_[0x31] & 0x30) << 12) | (u32(crtc_[0x51] & 0x03) << 18);
 }
@@ -804,6 +804,13 @@ void S3Trio64::update_timing() const {
     if (m.vde > 4096) m.vde = 4096;
     m.char_h = int(crtc_[0x09] & 0x1F) + 1;
     if (m.char_h > 32) m.char_h = 32;
+    // CR9 bit 7 (DBL SCN) makes the CRTC repeat every character row: each
+    // logical line occupies two scan lines while the vertical timing
+    // registers keep describing the physical 400-line frame.  Without this
+    // the row count is doubled and the renderer walks into the next 200
+    // lines of VRAM (Dangerous Dave 2 sets CR9=0xC0 for its 320x200 mode).
+    m.dbl_scan = (crtc_[0x09] & 0x80) != 0;
+    m.scan_per_row = m.char_h * (m.dbl_scan ? 2 : 1);
     m.char_w = (seq_[0x01] & 0x01) ? 8 : 9;
     m.text = !(attr_[0x10] & 0x01);
     m.chain4 = (seq_[0x04] & 0x08) != 0;
@@ -830,22 +837,27 @@ void S3Trio64::update_timing() const {
     }
     m.planar = !m.text && m.bpp == 4;
     if (std::getenv("OLDBOX_S3_TRACE"))
-        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x\n",
+        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x\n",
                      int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.chain4),
-                     pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67]);
+                     pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67],
+                     crtc_[0x17], crtc_[0x18], gfx_[0x05], gfx_[0x06]);
 
     const u32 sw = display_start_word();
-    // Chain-4 (mode 13h) addressing occupies A17-A2, so the word start scales
-    // by 4 bytes; planar/text modes by 2, enhanced linear modes by 8.
+    // CR17 bit 6 selects the memory-address counter unit.  In byte mode the
+    // start register holds a byte address (Dangerous Dave 2 sets CR17=0xE3
+    // for its 320x200 planar mode); in word mode the counter is in words and
+    // the address is doubled.  Chain-4 additionally consumes A1-A0.
+    const bool byte_mode = (crtc_[0x17] & 0x40) != 0;
     m.start = (m.enhanced && !m.planar && !m.text) ? sw * 8u
             : m.chain4 ? sw * 4u
+            : byte_mode ? sw
             : sw * 2u;
     if (m.text || m.planar) m.pitch = pitch_reg * 2u;
     else m.pitch = pitch_reg * 8u;
     if (m.pitch < 1) m.pitch = 1;
 
     m.cols = m.hde;
-    m.rows = std::max(1, m.vde / m.char_h);
+    m.rows = std::max(1, m.vde / m.scan_per_row);
 
     if (m.text) {
         m.width = m.hde * m.char_w;
@@ -1074,10 +1086,10 @@ u32 S3Trio64::text_rgb(int x, int y) const {
     const ModeInfo& m = mode_;
     if (m.char_w <= 0 || m.char_h <= 0 || m.cols <= 0) return 0;
     const int col = x / m.char_w;
-    const int row = y / m.char_h;
+    const int row = y / m.scan_per_row;
     if (col < 0 || col >= m.cols || row < 0 || row >= m.rows) return 0;
     const int sx = x % m.char_w;
-    const int sy = y % m.char_h;
+    const int sy = (y % m.scan_per_row) / (m.dbl_scan ? 2 : 1);
     // Odd/even text addressing stores character and attribute bytes in the
     // same plane word, so a cell index is one byte in each plane.  Sequential
     // planar modes use two bytes per cell.
@@ -1109,7 +1121,7 @@ u32 S3Trio64::text_rgb(int x, int y) const {
     const bool cursor_enabled = !(crtc_[0x0A] & 0x20) && ((crtc_[0x0A] & 0x1F) <= (crtc_[0x0B] & 0x1F));
     if (cursor_enabled) {
         const u32 start_w = display_start_word();
-        const u32 cur_w = u32(crtc_[0x0E]) | (u32(crtc_[0x0F]) << 8);
+        const u32 cur_w = u32(crtc_[0x0F]) | (u32(crtc_[0x0E]) << 8);
         const u32 idx = (cur_w >= start_w) ? (cur_w - start_w) : (cur_w + 0x10000u - start_w);
         const u32 here = u32(row * m.cols + col);
         const int cs = crtc_[0x0A] & 0x1F;

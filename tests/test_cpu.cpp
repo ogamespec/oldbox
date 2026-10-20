@@ -211,3 +211,22 @@ TEST(cpu_msr_pat_roundtrip) {
     CHECK_EQ(t.cpu.state().gpr[0], 0x00070406u);
     CHECK_EQ(t.cpu.state().gpr[2], 0u);
 }
+
+TEST(cpu_loopnz_decrements_cx) {
+    TestCpu t;
+    // 16-bit ops via 0x66 in the 32-bit test segment:
+    // mov cx,0xfe; mov al,1 (ZF=0); loopnz +0 -> taken, cx must become 0xfd
+    t.code({0x66,0xb9,0xfe,0x00, 0xb0,0x01, 0x67,0xe0,0x00, 0xf4});
+    t.run(10);
+    CHECK_EQ(t.cpu.reg16(1), 0xfdu);
+    CHECK_EQ(t.cpu.state().eip, 0x100au); // landed after the loopnz
+}
+
+TEST(cpu_sub_cl_ch_preserves_ax) {
+    TestCpu t;
+    // mov ax,7; mov cx,0xfe; sub cl,ch -> cl=0xfe, ax must stay 7
+    t.code({0x66,0xb8,0x07,0x00, 0x66,0xb9,0xfe,0x00, 0x2a,0xcd, 0xf4});
+    t.run(10);
+    CHECK_EQ(t.cpu.reg16(0), 0x0007u);
+    CHECK_EQ(t.cpu.reg16(1), 0x00feu);
+}

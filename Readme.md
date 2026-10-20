@@ -145,7 +145,7 @@ F1 захватывает/отпускает мышь, F11 — fullscreen, F12 �
 ./build/oldbox_tests
 ```
 
-Покрытие: 279 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 297 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -155,7 +155,8 @@ call/task gates, 16/32-битные TSS, IRET NT, debug-регистры и brea
 PGE/PVI/AC, machine check, MTRR/perf MSR, APIC priority/timer, SMM
 (LDT/auto-HALT/NMI), x87 FPREM/FSINCOS/FPTAN/FXTRACT, paging 4K/PSE/PAE,
 page-fault error code, MSR/CPUID/SYSENTER, I/O-привилегии и bitmap,
-A20/port 0x92/8042, PCI/BAR, Voodoo-растеризация, S3/VGA, ATA/ATAPI/FDC,
+A20/port 0x92/8042, PCI/BAR, Voodoo-растеризация, S3/VGA (CRTC
+start/cursor high/low, byte mode, CR9 DBL SCN), ATA/ATAPI/FDC,
 SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 (`freedos_boots_to_command_prompt_with_reference_bios`).
 
@@ -173,7 +174,10 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
   `tools/make_memtest_wrapper.py`).
 - `assets/floppy/dd2.img` — загрузочная FreeDOS-дискета с Dangerous Dave 2
   (HIMEMX + DOS=HIGH, AUTOEXEC запускает DAVE2.EXE), собирается
-  `tools/make_dd2_floppy.py` из `C:\Games\DD2`; в `run.bat` — пункт 9.
+  `tools/make_dd2_floppy.py`; в `run.bat` — пункт 9.
+- [docs/s3.md](docs/s3.md) — CRTC start/cursor high/low, byte mode и double
+  scan S3 Trio64; ошибки, из-за которых DD2 выводил страницу не с тем
+  смещением.
 - [docs/cpu-features.md](docs/cpu-features.md) — матрица архитектурных
   возможностей Pentium Pro/Pentium II: реализовано/упрощено/не моделируется.
 - [docs/io-a20.md](docs/io-a20.md) — I/O-карта, привилегии, A20.

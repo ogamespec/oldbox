@@ -256,8 +256,8 @@ TEST(s3_text_mode_builtin_font_and_cursor) {
     // Move the cursor to the second character cell.
     f.bus.write8(0xB8002, 'B');
     f.bus.write8(0xB8003, 0x07);
-    f.crtc(0x0E, 0x01);
-    f.crtc(0x0F, 0x00);
+    f.crtc(0x0E, 0x00);                 // cursor location high
+    f.crtc(0x0F, 0x01);                 // cursor location low -> cell 1
     CHECK_EQ(f.s3.pixel(12, 13), 0x00FFFFFFu);
     CHECK_EQ(f.s3.pixel(3, 13), 0x00000000u);
 }
@@ -366,6 +366,85 @@ TEST(s3_mode12h_planar) {
     const VideoFrame fr = f.s3.frame();
     CHECK_EQ(fr.width, 640);
     CHECK_EQ(fr.height, 480);
+}
+
+TEST(s3_cr9_double_scan_halves_logical_rows) {
+    Fix f;
+    f.mode12h();
+    // A 320x200 planar mode with a 400-line vertical timing: CR9 bit 7
+    // doubles every logical row, so the CRTC still counts 400 scan lines but
+    // only 200 rows are fetched from video memory.
+    f.crtc(0x11, 0x00);
+    f.crtc(0x01, 39);                    // 40 character clocks -> 320 pixels
+    f.crtc(0x12, 0x8F);                  // 400 scan lines (0x8F + bit 8)
+    f.crtc(0x09, 0xC0);                  // DBL SCN, max scan line 0
+    f.crtc(0x13, 0x28);                  // 40 words = 80-byte planar pitch
+    f.seq(0x04, 0x06);                   // planar, sequential CPU addressing
+    f.seq(0x02, 0x01);                   // write plane 0 only
+    f.dac(1, 63, 0, 0);
+    f.bus.write8(0xA0000, 0xFF);                     // first row
+    f.bus.write8(0xA0000 + 199u * 80u, 0xFF);        // last logical row
+    f.seq(0x02, 0x0F);
+
+    CHECK_EQ(f.crtcr(0x09), 0xC0);
+    CHECK_EQ(f.s3.width(), 320);
+    CHECK_EQ(f.s3.height(), 200);
+    const VideoFrame fr = f.s3.frame();
+    CHECK_EQ(fr.width, 320);
+    CHECK_EQ(fr.height, 200);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
+    CHECK_EQ(f.s3.pixel(0, 199), 0x00FF0000u);
+    CHECK_EQ(f.s3.pixel(0, 200), 0x00000000u);       // outside the 200 rows
+}
+
+TEST(s3_cr9_double_scan_text_cursor) {
+    Fix f;
+    f.s3.set_text_mode();
+    f.dac(7, 63, 63, 63);
+    f.bus.write8(0xB8001, 0x07);         // cell 0 attribute: white foreground
+    f.crtc(0x09, 0xCF);                  // DBL SCN, 16-line character cells
+    CHECK_EQ(f.s3.width(), 720);
+    CHECK_EQ(f.s3.height(), 400);
+    const VideoFrame fr = f.s3.frame();
+    CHECK_EQ(fr.height, 400);
+    // The BIOS cursor covers character rows 13-14.  With double scanning they
+    // occupy scan lines 26-29 (each font row is emitted twice).
+    CHECK_EQ(f.s3.pixel(3, 26), 0x00FFFFFFu);
+    CHECK_EQ(f.s3.pixel(3, 29), 0x00FFFFFFu);
+    CHECK_EQ(f.s3.pixel(3, 30), 0x00000000u);
+}
+
+TEST(s3_crtc_start_address_high_low) {
+    Fix f;
+    f.mode12h();
+    (void)f.s3.frame();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x0C, 0x00);                  // start address high
+    f.crtc(0x0D, 0x20);                  // start address low -> 0x20
+    f.crtc(0x17, 0x8C);                  // word address mode
+    f.seq(0x02, 0x01);                   // plane 0
+    f.bus.write8(0xA0000 + 0x40, 0xFF);  // word mode: displayed byte = 0x20*2
+    CHECK_EQ(f.s3.read_vram8(0x40), 0xFF);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x000000AAu);
+}
+
+TEST(s3_crtc_byte_mode_start_address) {
+    Fix f;
+    f.mode12h();
+    (void)f.s3.frame();
+    f.seq(0x02, 0x01);                   // plane 0
+    f.bus.write8(0xA0000, 0xFF);
+    CHECK_EQ(f.s3.read_vram8(0), 0xFF);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x000000AAu); // baseline at start 0
+    f.crtc(0x0C, 0x00);
+    f.crtc(0x0D, 0x20);                  // start counter = 0x20
+    f.crtc(0x17, 0xCC);                  // CR17 bit 6: byte address mode
+    f.bus.write8(0xA0000 + 0x20, 0xFF);  // first displayed byte at 0x20
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.crtcr(0x17) & 0x40, 0x40);
+    CHECK_EQ(f.s3.width(), 640);
+    CHECK_EQ(f.s3.read_vram8(0x20), 0xFF);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x000000AAu);
 }
 
 TEST(s3_vga_raster_ops) {

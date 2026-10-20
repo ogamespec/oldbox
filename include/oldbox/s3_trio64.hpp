@@ -90,6 +90,8 @@ private:
         int vde = 400;            // scan lines of active display
         int char_w = 9;
         int char_h = 16;
+        bool dbl_scan = false;    // CR9 bit 7: each character row is displayed twice
+        int scan_per_row = 16;    // physical scan lines per logical row
         int cols = 80;
         int rows = 25;
         int width = 720;

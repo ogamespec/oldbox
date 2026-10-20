@@ -88,7 +88,8 @@ goto :eof
 :win_dd2
 echo.
 echo   Boots A: = FreeDOS + Dangerous Dave 2, AUTOEXEC starts DAVE2.EXE.
-echo   The game files (C:\Games\DD2) live on the same floppy in A:\.
+echo   Built from the correctly unpacked DAVE2_UNPACKED.EXE and the original
+echo   data in C:\Work\dave2\re\ref\orig (not the holey C:\Games\DD2 copy).
 echo.
 if not exist "%DD2FLOPPY%" (
     echo [ERROR] %DD2FLOPPY% not found. Build it with:
