@@ -34,6 +34,12 @@ Setup по Del, FreeDOS-дискета, headless-проверка). В эмул�
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
+Пункт 10 в `run.bat` запускает установку Windows 95 OSR2: A: — FreeDOS с
+`QCDROM.SYS` + `MSCDEX.EXE`, C: — чистый 500-МБ диск `assets\hdd\win95-hdd.img`,
+D: — `C:\Isos\Windows95OSR2.iso`. В `A:\>` нужно набрать `D:` и `SETUP`.
+Дискету собирает `python3 tools/make_win95_cd_floppy.py` (берёт `qcdrom.sys` и
+`mscdex.exe` из `DOS Drivers.zip`), целевой диск —
+`python3 tools/make_win95_hdd.py`.
 SDL3 при отсутствии системного пакета скачивается CMake-ом (release 3.2.30).
 На Linux без заголовков X11/Wayland SDL собирается в console-режиме; для окна
 нужны `libx11-dev`/`libwayland-dev` (или Windows-сборка).

@@ -25,13 +25,16 @@ set "GAMEDISK=assets\floppy\Megafortress_3.5_Disk.IMA"
 set "MEMTEST=assets\floppy\MEMTEST.IMG"
 set "DD2FLOPPY=assets\floppy\dd2.img"
 set "HDD=assets\hdd\oldbox-hdd-500mb.img"
+if not defined WIN95ISO set "WIN95ISO=C:\Isos\Windows95OSR2.iso"
+set "WIN95FLOPPY=assets\floppy\freedos-win95.img"
+set "WIN95HDD=assets\hdd\win95-hdd.img"
 
 echo ==============================================================
 echo   OldBox - Award BIOS ^(EP-ZXA^) test launcher
 echo ==============================================================
 echo.
 echo   [1] Boot BIOS, press Del yourself to enter Setup
-echo   [2] Boot BIOS, Del is pressed automatically -> Setup
+echo   [2] Boot BIOS, Del is pressed automatically -^> Setup
 echo   [3] Boot BIOS with the FreeDOS 1.44M floppy  (A: only)
 echo   [4] Boot BIOS with 500 MB primary-master HDD
 echo   [5] FreeDOS A: + Megafortress B: + 500 MB HDD C:
@@ -40,8 +43,9 @@ echo   [6] Boot the Memtest86+ floppy
 echo   [7] Headless smoke test 40 s, print text screen to console
 echo   [8] Headless: auto-enter Setup and save setup.ppm
 echo   [9] Boot Dangerous Dave 2 (FreeDOS + DD2 on one floppy)
+echo   [10] Windows 95 OSR2 setup: FreeDOS A: + MSCDEX, CD D:, HDD C:
 echo.
-set /p CHOICE=Choice [1-9]: 
+set /p "CHOICE=Choice [1-10]: "
 
 if "%CHOICE%"=="1" goto :win
 if "%CHOICE%"=="2" goto :win_del
@@ -52,6 +56,7 @@ if "%CHOICE%"=="6" goto :win_memtest
 if "%CHOICE%"=="7" goto :headless
 if "%CHOICE%"=="8" goto :headless_shot
 if "%CHOICE%"=="9" goto :win_dd2
+if "%CHOICE%"=="10" goto :win95
 echo Unknown choice.
 pause
 exit /b 1
@@ -98,6 +103,36 @@ if not exist "%DD2FLOPPY%" (
     exit /b 1
 )
 "%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%DD2FLOPPY%"
+goto :eof
+
+:win95
+echo.
+echo   Boot order: A: = FreeDOS + QCDROM + MSCDEX
+echo               C: = clean 500 MB HDD  (%WIN95HDD%)
+echo               D: = Windows 95 OSR2 CD (%WIN95ISO%)
+echo.
+echo   At the A:\^> prompt type:  D:  then  SETUP
+echo.
+if not exist "%WIN95ISO%" (
+    echo [ERROR] Windows 95 OSR2 ISO not found:
+    echo         %WIN95ISO%
+    echo         Put it there or set WIN95ISO before running run.bat.
+    pause
+    exit /b 1
+)
+if not exist "%WIN95FLOPPY%" (
+    echo [ERROR] %WIN95FLOPPY% not found. Build it with:
+    echo         py -3 tools\make_win95_cd_floppy.py
+    pause
+    exit /b 1
+)
+if not exist "%WIN95HDD%" (
+    echo [ERROR] %WIN95HDD% not found. Build it with:
+    echo         py -3 tools\make_win95_hdd.py
+    pause
+    exit /b 1
+)
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%WIN95FLOPPY%" --cdrom "%WIN95ISO%" --hdd "%WIN95HDD%"
 goto :eof
 
 :headless
