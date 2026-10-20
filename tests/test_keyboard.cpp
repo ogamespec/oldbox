@@ -22,6 +22,10 @@ struct KbdHarness {
                   }
               },
               [](bool) {}) {}
+
+    // Advance the controller clock so queued command responses (which the
+    // 8042 model now delays by its processing latency) become visible.
+    void settle() { kbd.tick(1u << 20); }
 };
 
 } // namespace
@@ -157,8 +161,14 @@ struct MouseHarness {
         kbd.io_write8(0x64, 0xd4);
         kbd.io_write8(0x60, cmd);
     }
-    [[nodiscard]] u8 read_byte() { return kbd.io_read8(0x60); }
-    [[nodiscard]] u8 status() { return kbd.io_read8(0x64); }
+    [[nodiscard]] u8 read_byte() {
+        kbd.tick(1u << 20);
+        return kbd.io_read8(0x60);
+    }
+    [[nodiscard]] u8 status() {
+        kbd.tick(1u << 20);
+        return kbd.io_read8(0x64);
+    }
 };
 
 TEST(keyboard_command_response_precedes_queued_keys) {
@@ -168,11 +178,13 @@ TEST(keyboard_command_response_precedes_queued_keys) {
     KbdHarness h;
     h.kbd.key_event(0x1c, true);
     h.kbd.io_write8(0x64, 0xaa);
+    h.settle();
     CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x55);
     CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1c);
     // The same holds for the interface test.
     h.kbd.key_event(0x1e, true);
     h.kbd.io_write8(0x64, 0xab);
+    h.settle();
     CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x00);
     CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1e);
 }

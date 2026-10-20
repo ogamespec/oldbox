@@ -1232,6 +1232,7 @@ TEST(keyboard_command_byte_and_kirq_gating) {
     CHECK_EQ(kbd.io_read8(0x60), 0x1fu);
     // 0x20 returns the programmed byte.
     kbd.io_write8(0x64, 0x20);
+    kbd.tick(1u << 20); // controller response latency
     CHECK_EQ(kbd.io_read8(0x60), 0x44u);
     // Status bit 3 marks the last host write as a command.
     kbd.io_write8(0x64, 0xae);

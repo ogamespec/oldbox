@@ -611,10 +611,22 @@ void Cpu::load_segment_8086(SegReg seg, u16 selector) {
     auto& s = state_.seg[unsigned(seg)];
     s.selector = selector;
     s.base = u32(selector) << 4;
-    s.limit = 0xffff;
-    s.access = seg == SegReg::cs ? 0x9b : 0x93;
-    s.flags = 0;
-    s.valid = true;
+    if (state_.mode == CpuMode::real) {
+        // On the 386+ a real-mode load writes only the visible selector and
+        // the hidden base (selector << 4): the cached limit, attributes and
+        // validity survive from the last protected-mode load.  This residual
+        // state is the basis of unreal mode, and DOS/4GW's VMM depends on it
+        // (e.g. an ES whose 64 KiB limit came from a protected-mode alias
+        // keeps that limit after "mov es, ax" in real mode).  A segment that
+        // was unusable (null selector in protected mode) stays unusable in
+        // real-address mode (PRM Vol. 3, 8.8).  V86-mode loads, in contrast,
+        // reset the hidden part to a 64 KiB data segment.
+    } else {
+        s.limit = 0xffff;
+        s.access = seg == SegReg::cs ? 0x9b : 0x93;
+        s.flags = 0;
+        s.valid = true;
+    }
 }
 
 void Cpu::load_segment_raw(SegReg seg, u16 selector) {
@@ -1431,6 +1443,8 @@ void Cpu::step() {
             cpl_override_ = -1;
             last_exception_vector_ = e.vector;
             last_exception_error_ = e.error;
+
+
             logf(LogLevel::debug, "cpu", "exception {} err={} at {:04x}:{:08x} op={:04x}", e.vector, e.error,
                  state_.seg[unsigned(SegReg::cs)].selector, opcode_ip_, last_opcode_);
             state_.eip = opcode_ip_;

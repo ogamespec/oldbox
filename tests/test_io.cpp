@@ -199,6 +199,7 @@ TEST(port92_and_keyboard_8042_a20_gate) {
     kbd.io_write8(0x60, 0x00);
     CHECK(!a20_state);
     kbd.io_write8(0x64, 0xd0);
+    kbd.tick(1u << 20); // controller response latency
     CHECK_EQ(kbd.io_read8(0x60), 0x00u);
     kbd.io_write8(0x64, 0xd1);
     kbd.io_write8(0x60, 0x02);

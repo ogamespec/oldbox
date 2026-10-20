@@ -48,6 +48,10 @@ private:
 
     std::deque<OutputByte> output_;    // device data waiting for the output buffer
     std::deque<OutputByte> responses_; // controller command responses (served first)
+    std::deque<std::pair<OutputByte, u64>> pending_; // responses waiting out the
+                                                     // controller processing delay
+    u64 now_ = 0;            // CPU cycles elapsed since reset
+    u64 delay_cycles_ = 8192;// 8042 host command processing latency (~35us)
     std::deque<u8> keyboard_queue_;    // scan codes received from the keyboard
     std::deque<u8> mouse_queue_;       // packets received from the auxiliary device
 

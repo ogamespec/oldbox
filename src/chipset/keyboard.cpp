@@ -16,6 +16,8 @@ void Keyboard::reset() {
     output_port_ = 0x03;
     output_.clear();
     responses_.clear();
+    pending_.clear();
+    now_ = 0;
     keyboard_queue_.clear();
     mouse_queue_.clear();
     keyboard_cmd_ = 0;
@@ -81,10 +83,15 @@ void Keyboard::pump() {
 }
 
 void Keyboard::queue_response(u8 value, bool aux) {
-    if (responses_.size() < 64) {
-        const bool was_empty = !current_head();
-        responses_.push_back({value, aux});
-        if (was_empty) raise_irq_for_head();
+    // The real 8042 needs tens of microseconds to process a host command
+    // before its response lands in the output buffer and raises IRQ1.  Model
+    // that latency: the response becomes visible (status bit 0, interrupt)
+    // only after delay_cycles_ CPU cycles.  DOS/4GW's mouse handshake writes
+    // the command byte to disable IRQ1 immediately after issuing commands;
+    // an instant response raises IRQ1 before the disable, the BIOS INT 9
+    // handler consumes the byte and the handshake falls apart.
+    if (responses_.size() + pending_.size() < 64) {
+        pending_.push_back({OutputByte{value, aux}, now_ + delay_cycles_});
     }
     update_status();
 }
@@ -457,10 +464,15 @@ void Keyboard::io_write8(u16 port, u8 value) {
     handle_command(value);
 }
 
-void Keyboard::tick(u64) {
-    if (!output_.empty() || !keyboard_queue_.empty() || !mouse_queue_.empty()) {
-        update_status();
+void Keyboard::tick(u64 cycles) {
+    now_ += cycles;
+    const bool had = current_head() != nullptr;
+    while (!pending_.empty() && pending_.front().second <= now_) {
+        responses_.push_back(pending_.front().first);
+        pending_.pop_front();
     }
+    update_status();
+    if (!had && current_head() != nullptr) raise_irq_for_head();
 }
 
 } // namespace oldbox

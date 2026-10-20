@@ -1169,3 +1169,89 @@ TEST(mode_16bit_tss_task_switch) {
     CHECK_EQ(s.cr3 & 0xfffff000u, 0x12345000u); // no PDBR field: unchanged
     CHECK_EQ(s.eflags & 0xffff0000u, 0u);       // upper EFLAGS not loaded
 }
+
+// Unreal mode: a segment loaded in real mode keeps its hidden cache
+// (base = selector << 4, 64 KiB limit, writable) when PE is set without a
+// reload.  DOS/4GW's VMM relies on exactly this across its real<->protected
+// switches, so the emulator must not flush segment caches on MOV CR0.
+TEST(mode_unreal_es_cache_survives_pe_set) {
+    CpuHarness h;
+    h.reset_real();
+    h.set_eip(0x100);
+    auto& s = h.state();
+    h.bus.write16(0x30000 + 0x1234, 0xbeef);
+    h.set_r(0, 0x3000);
+    h.emit(0x8e); h.emit(0xc0);                       // mov es, ax
+    h.emit(0x66); h.emit(0xb8); h.emit32(0x60000001); // mov eax, 60000001h
+    h.emit(0x0f); h.emit(0x22); h.emit(0xc0);         // mov cr0, eax -> PE=1
+    h.emit(0x26); h.emit(0xa1); h.emit16(0x1234);     // mov ax, es:[1234h]
+    h.halt();
+    h.run(8);
+    CHECK(s.mode == CpuMode::protected_mode);
+    CHECK_EQ(s.cr0 & 1u, 1u);
+    CHECK_EQ(s.seg[0].base, 0x30000u); // hidden cache untouched by PE set
+    CHECK_EQ(s.seg[0].limit, 0xffffu);
+    CHECK(s.seg[0].valid);
+    CHECK_EQ(h.r16(0), 0xbeefu);       // access through the unreal ES works
+    CHECK(!s.shutdown);
+}
+
+// PRM Vol.3 4.4.1: loading a null selector into ES is NOT an exception;
+// only using it to access memory faults.  DOS/4G loads ES=0 in protected
+// mode and the load must silently succeed (the later use is what #GPs).
+TEST(mode_protected_null_es_load_legal_use_faults) {
+    CpuHarness h;
+    h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
+    gate(h, 13, 0x08, 0x3000);
+    h.bus.write8(0x3000, 0xf4); // hlt
+    h.set_r(0, 0);
+    h.emit(0x8e); h.emit(0xc0);          // mov es, ax (null) -> legal
+    h.emit(0x26); h.emit(0xa1); h.emit16(0); // mov ax, es:[0] -> #GP(0)
+    h.run(3);
+    CHECK(!h.state().seg[0].valid);      // null selectors are unusable
+    CHECK_EQ(h.state().seg[0].selector, 0u);
+    CHECK_EQ(h.cpu.last_exception_vector(), 13);
+    CHECK_EQ(h.cpu.last_exception_error(), 0u);
+    CHECK_EQ(h.state().eip, 0x3001u);    // hlt in the #GP handler
+}
+
+// A real-mode segment load updates selector and base only; the hidden
+// limit/attributes/validity survive from the last protected-mode load.
+// This is the mechanism behind unreal mode and DOS/4GW's mode dance.
+TEST(mode_real_segment_load_preserves_hidden_state) {
+    CpuHarness h;
+    h.reset_real();
+    auto& s = h.state();
+    // Previous protected-mode load of ES: flat 4 GiB writable data.
+    s.mode = CpuMode::protected_mode; s.cr0 = 0x60000001;
+    s.seg[0].selector = 0x08; s.seg[0].base = 0; s.seg[0].limit = 0xffffffff;
+    s.seg[0].access = 0x92; s.seg[0].flags = 0xc0; s.seg[0].valid = true;
+    s.mode = CpuMode::real; s.cr0 = 0x60000010; // clear PE
+    h.set_eip(0x100);
+    h.set_r(0, 0x1000);
+    h.emit(0x8e); h.emit(0xc0); // mov es, ax
+    h.halt();
+    h.run(2);
+    CHECK_EQ(s.seg[0].selector, 0x1000u);
+    CHECK_EQ(s.seg[0].base, 0x10000u);      // base reset to selector << 4
+    CHECK_EQ(s.seg[0].limit, 0xffffffffu);  // hidden limit survives
+    CHECK_EQ(s.seg[0].access, 0x92u);       // hidden attributes survive
+    CHECK(s.seg[0].valid);
+
+    // A segment that was unusable (null selector) stays unusable.
+    CpuHarness g;
+    g.reset_real();
+    auto& t = g.state();
+    t.mode = CpuMode::protected_mode; t.cr0 = 0x60000001;
+    t.seg[0].selector = 0; t.seg[0].base = 0; t.seg[0].limit = 0;
+    t.seg[0].access = 0; t.seg[0].flags = 0; t.seg[0].valid = false;
+    t.mode = CpuMode::real; t.cr0 = 0x60000010;
+    g.set_eip(0x100);
+    g.set_r(0, 0x2000);
+    g.emit(0x8e); g.emit(0xc0); // mov es, ax
+    g.halt();
+    g.run(2);
+    CHECK_EQ(t.seg[0].selector, 0x2000u);
+    CHECK_EQ(t.seg[0].base, 0x20000u);
+    CHECK(!t.seg[0].valid); // PRM 8.8: unusable in real-address mode
+}

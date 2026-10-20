@@ -114,7 +114,9 @@ TEST(keyboard_8042_system_flag_after_self_test) {
     Bus bus(1 * megabyte);
     Keyboard kbd(bus, [](int, bool) {}, [](bool) {});
     CHECK_EQ(kbd.io_read8(0x64) & 0x04u, 0u); // POST has not passed yet
+    kbd.io_write8(0x64, 0x64);
     kbd.io_write8(0x64, 0xaa);
+    kbd.tick(1u << 20); // controller response latency
     CHECK_EQ(kbd.io_read8(0x60), 0x55u);
     CHECK_EQ(kbd.io_read8(0x64) & 0x04u, 0x04u);
 }
