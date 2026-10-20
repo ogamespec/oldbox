@@ -34,6 +34,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_x87.cpp
     src/cpu/cpu_system.cpp
     src/machine.cpp
+    src/keymap.cpp
     src/chipset/i440bx.cpp
     src/chipset/piix4.cpp
     src/chipset/pic.cpp

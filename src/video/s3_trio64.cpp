@@ -1223,6 +1223,18 @@ void S3Trio64::render_hw_cursor() {
 }
 
 void S3Trio64::render_frame() {
+    if (std::getenv("OLDBOX_S3_PAL")) {
+        static u64 pn = 0;
+        if ((++pn % 30) == 1) {
+            std::fprintf(stderr, "S3 PAL attr=");
+            for (int i = 0; i < 16; ++i) std::fprintf(stderr, "%02x ", attr_[i]);
+            std::fprintf(stderr, " dac0-7=");
+            for (int i = 0; i < 8; ++i) std::fprintf(stderr, "%02x%02x%02x ", dac_[i*3], dac_[i*3+1], dac_[i*3+2]);
+            std::fprintf(stderr, " dac18-1f=");
+            for (int i = 0x18; i < 0x20; ++i) std::fprintf(stderr, "%02x%02x%02x ", dac_[i*3], dac_[i*3+1], dac_[i*3+2]);
+            std::fprintf(stderr, "\n");
+        }
+    }
     if (std::getenv("OLDBOX_S3_TRACE")) {
         static u64 n = 0;
         if ((++n % 60) == 1)

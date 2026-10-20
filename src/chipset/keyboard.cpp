@@ -105,9 +105,10 @@ void Keyboard::queue_mouse_byte(u8 v) {
     update_status();
 }
 
-void Keyboard::key_event(u8 scancode, bool down) {
-    if (down) queue_keyboard_byte(scancode);
-    else queue_keyboard_byte(u8(scancode | 0x80));
+void Keyboard::key_event(u8 scancode, bool down, bool extended) {
+    // Extended keys send E0 before both the make code and the break code.
+    if (extended) queue_keyboard_byte(0xe0);
+    queue_keyboard_byte(down ? scancode : u8(scancode | 0x80));
 }
 
 void Keyboard::mouse_event(int dx, int dy, u8 buttons) {

@@ -1,5 +1,6 @@
 #include "tests/test.hpp"
 #include "oldbox/keyboard.hpp"
+#include "oldbox/keymap.hpp"
 #include "oldbox/bus.hpp"
 
 using namespace oldbox;
@@ -73,6 +74,60 @@ TEST(keyboard_raises_irq_edge_for_every_byte) {
     CHECK_EQ(delivered, 4);
     CHECK_EQ(h.irq_high_edges, 4);
     CHECK_EQ(h.irq_line, 0);
+}
+
+TEST(keyboard_extended_keys_send_e0_prefix) {
+    KbdHarness h;
+    h.kbd.key_event(0x48, true, true);   // Up: E0 48
+    h.kbd.key_event(0x48, false, true);  // Up break: E0 C8
+    const u8 expected[] = {0xe0, 0x48, 0xe0, 0xc8};
+    for (u8 e : expected) CHECK_EQ(int(h.kbd.io_read8(0x60)), int(e));
+    // Right Ctrl is extended as well.
+    h.kbd.key_event(0x1d, true, true);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0xe0);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1d);
+}
+
+TEST(keyboard_sdl_scancode_mapping_audit) {
+    struct Case { int sdl; u8 code; bool extended; };
+    static constexpr Case cases[] = {
+        // Letters/digits: spot-check the ends of both ranges.
+        {4, 0x1e, false}, {29, 0x2c, false},
+        {30, 0x02, false}, {39, 0x0b, false},
+        // Control and punctuation, including the previously missing keys.
+        {40, 0x1c, false}, {41, 0x01, false}, {42, 0x0e, false}, {43, 0x0f, false},
+        {44, 0x39, false}, {45, 0x0c, false}, {46, 0x0d, false}, {47, 0x1a, false},
+        {48, 0x1b, false}, {49, 0x2b, false}, {50, 0x2b, false}, {51, 0x27, false},
+        {52, 0x28, false}, {53, 0x29, false}, {54, 0x33, false}, {55, 0x34, false},
+        {56, 0x35, false}, {57, 0x3a, false},
+        // Function keys.
+        {58, 0x3b, false}, {67, 0x44, false}, {68, 0x57, false}, {69, 0x58, false},
+        {104, 0x64, false}, {115, 0x6f, false},
+        {71, 0x46, false}, // ScrollLock
+        // Navigation cluster is E0-prefixed.
+        {73, 0x52, true}, {74, 0x47, true}, {75, 0x49, true}, {76, 0x53, true},
+        {77, 0x4f, true}, {78, 0x51, true}, {79, 0x4d, true}, {80, 0x4b, true},
+        {81, 0x50, true}, {82, 0x48, true},
+        // Keypad.
+        {83, 0x45, false}, {84, 0x35, true}, {85, 0x37, false}, {86, 0x4a, false},
+        {87, 0x4e, false}, {88, 0x1c, true},
+        {89, 0x4f, false}, {90, 0x50, false}, {91, 0x51, false}, {92, 0x4b, false},
+        {93, 0x4c, false}, {94, 0x4d, false}, {95, 0x47, false}, {96, 0x48, false},
+        {97, 0x49, false}, {98, 0x52, false}, {99, 0x53, false},
+        {100, 0x56, false}, {101, 0x5d, true}, {103, 0x59, false},
+        // Modifiers.
+        {224, 0x1d, false}, {225, 0x2a, false}, {226, 0x38, false}, {227, 0x5b, true},
+        {228, 0x1d, true}, {229, 0x36, false}, {230, 0x38, true}, {231, 0x5c, true},
+    };
+    for (const Case& c : cases) {
+        const Set1Key k = sdl_scancode_to_set1(c.sdl);
+        CHECK_EQ(int(k.code), int(c.code));
+        CHECK_EQ(k.extended, c.extended);
+    }
+    // PrintScreen/Pause need E0/E1 sequences and must not alias KP * / NumLock.
+    CHECK_EQ(int(sdl_scancode_to_set1(70).code), 0);
+    CHECK_EQ(int(sdl_scancode_to_set1(72).code), 0);
+    CHECK_EQ(int(sdl_scancode_to_set1(-1).code), 0);
 }
 
 TEST(keyboard_break_codes_carry_bit7) {

@@ -21,7 +21,7 @@ public:
     Keyboard(Bus& bus, IrqFn irq, A20Fn a20, ResetFn reset = {});
     void reset();
     void tick(u64 cpu_cycles);
-    void key_event(u8 scancode, bool down);
+    void key_event(u8 scancode, bool down, bool extended = false);
     void mouse_event(int dx, int dy, u8 buttons);
 
     u8 io_read8(u16 port) override;
