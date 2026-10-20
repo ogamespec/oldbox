@@ -43,6 +43,18 @@ standard mode. Make sure you have installed HIMEM.SYS...».
 Дискету собирает `python3 tools/make_win95_cd_floppy.py` (берёт `HIMEM.SYS`
 из ISO, `qcdrom.sys` и `mscdex.exe` — из `DOS Drivers.zip`), целевой диск —
 `python3 tools/make_win95_hdd.py`.
+Отдельный `run-world9.bat` запускает игровую FreeDOS-дискету
+`assets\floppy\freedos-games-cd.img` (HIMEMX + `MOUSE.COM`/`MOUSE.INI` + QCDROM + MSCDEX)
+и диск `C:\Isos\WORLD9`: CD виден как D:, жёсткий диск — как C:.
+В `A:\>` нужно набрать `D:` и `INSTALL.EXE`. Дискету собирает
+`python3 tools/make_games_floppy.py --cd --out assets/floppy/freedos-games-cd.img`.
+`run-homm2.bat` запускает Heroes of Might and Magic II (DOS) с той же
+дискетой: C: — 500-МБ диск, D: — `assets\cdrom\heroes2.iso`.
+В `A:\>` нужно набрать `D:`, затем `CD \HEROES2` и `INSTALL`; игра ставится
+в `C:\HEROES2` (около 60 МБ). Родной образ — BIN/CUE с 2352-байтовыми
+секторами и аудиодорожками; `tools/extract_cd_iso.py` вырезает из него
+data-дорожку в 2048-байтовый ISO (CD-аудио oldbox пока не проигрывает,
+поэтому в игре лучше выбрать MIDI).
 SDL3 при отсутствии системного пакета скачивается CMake-ом (release 3.2.30).
 На Linux без заголовков X11/Wayland SDL собирается в console-режиме; для окна
 нужны `libx11-dev`/`libwayland-dev` (или Windows-сборка).
