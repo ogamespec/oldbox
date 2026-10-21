@@ -376,6 +376,35 @@ TEST(cpu_enter_leave_and_xlat) {
     }
 }
 
+TEST(cpu_enter_leave_16bit_keeps_ebp_upper) {
+    {
+        // 32-bit stack, 16-bit operand size: LEAVE must write only BP, so the
+        // frame pointer's upper half survives (DOS/4GW keeps a 32-bit TSF
+        // pointer in EBP across 16-bit ENTER/LEAVE).
+        CpuHarness h;
+        h.set_r(4, 0x00348000);
+        h.set_r(5, 0x56788000);
+        h.emit(0x66); h.emit(0xc8); h.emit16(0); h.emit(0); // enter 0,0
+        h.emit(0x66); h.emit(0xc9);                          // leave
+        h.halt(); h.run(5);
+        CHECK_EQ(h.r(5), 0x00348000u);
+        CHECK_EQ(h.r(4), 0x00348000u);
+    }
+    {
+        // 16-bit stack and 16-bit operand size: ENTER sets BP, not EBP, and
+        // LEAVE restores BP; both must preserve the upper half of EBP.
+        CpuHarness h;
+        h.state().seg[2].flags = 0; // SS.B = 0
+        h.set_r(4, 0x8000);
+        h.set_r(5, 0x12345678);
+        h.emit(0x66); h.emit(0xc8); h.emit16(0); h.emit(0); // enter 0,0
+        h.emit(0x66); h.emit(0xc9);                          // leave
+        h.halt(); h.run(5);
+        CHECK_EQ(h.r(5), 0x12345678u);
+        CHECK_EQ(h.r(4), 0x8000u);
+    }
+}
+
 TEST(cpu_io_instructions_with_device) {
     struct Dev : IoDevice {
         u8 v = 0x5a;

@@ -1881,16 +1881,27 @@ void Cpu::execute_one() {
         const u32 frame = stack_pointer();
         if (level > 0) {
             for (int i = 1; i < int(level); ++i) {
-                const u32 off = (state_.gpr[5] - u32(i * opsz)) & (stack32() ? 0xffffffffu : 0xffffu);
+                const u32 bp = stack32() ? state_.gpr[5] : (state_.gpr[5] & 0xffffu);
+                const u32 off = (bp - u32(i * opsz)) & (stack32() ? 0xffffffffu : 0xffffu);
                 push_value(read_mem(off, opsz, SegReg::ss), opsz);
             }
             push_value(frame, opsz);
         }
-        state_.gpr[5] = frame;
+        // The stack-address size, not the operand size, selects BP or EBP as
+        // the frame pointer; a 16-bit stack write preserves EBP's upper half.
+        if (stack32()) state_.gpr[5] = frame;
+        else set_reg16(5, u16(frame));
         set_stack_pointer(stack_pointer() - alloc);
         break;
     }
-    case 0xc9: set_stack_pointer(state_.gpr[5]); state_.gpr[5] = pop_value(opsize()); break;
+    case 0xc9:
+        set_stack_pointer(state_.gpr[5]);
+        // LEAVE pops BP (not EBP) with a 16-bit operand size.  Writing BP
+        // must preserve the upper 16 bits: DOS/4GW keeps a 32-bit TSF
+        // pointer in EBP across 16-bit ENTER/LEAVE pairs.
+        if (opsize() == 4) state_.gpr[5] = pop_value(4);
+        else set_reg16(5, u16(pop_value(2)));
+        break;
     case 0xca: { const u16 n = fetch16(); trace_control("RETF", read_mem(stack_pointer(), opsize(), SegReg::ss), stack_pointer()); do_far_return(opsize(), n); break; }
     case 0xcb: trace_control("RETF", read_mem(stack_pointer(), opsize(), SegReg::ss), stack_pointer()); do_far_return(opsize()); break;
     case 0xcc: trace_control("INT3", 0, stack_pointer()); software_interrupt(3); break;
