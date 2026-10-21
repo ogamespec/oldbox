@@ -28,7 +28,8 @@ Windows-сборка (Visual Studio 2026, MSVC, без `as`/`ld`) описана
 `build-windows.bat` или `cmake --preset windows-vs2026` + `cmake --build --preset windows-vs2026-release`.
 Готовый бинарник Windows — `build\vs2026\Release\oldbox.exe`; быстрый запуск
 оригинального Award BIOS в окне — `run.bat` (меню: обычный запуск, автовход в
-Setup по Del, FreeDOS-дискета, headless-проверка). В эмуляторе: `F11` — полный
+Setup по Del, FreeDOS-дискета, headless-проверка). В эмуляторе: `F2` —
+консоль команд (CLI), `F11` — полный
 экран, `F12` — скриншот в `oldbox-screenshot.bmp`. Горячей клавиши выхода нет:
 окно закрывается только крестиком, а `Esc` и остальные клавиши уходят гостю.
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
@@ -110,9 +111,40 @@ ctest --test-dir build --output-on-failure
 
 `--headless` не создаёт окно; `--dump-text` печатает VGA text buffer,
 `--dump-ram` сохраняет первые 1 MiB гостевой RAM, `--screenshot` пишет PPM.
-F1 захватывает/отпускает мышь, F11 — fullscreen, F12 — BMP-скриншот. Выхода по
-горячей клавише нет: окно закрывается крестиком, все клавиши (включая Esc)
-передаются гостю.
+F1 захватывает/отпускает мышь, F2 открывает консоль команд, F11 — fullscreen,
+F12 — BMP-скриншот. Выхода по горячей клавише нет: окно закрывается крестиком;
+при закрытой консоли все клавиши, включая Esc, передаются гостю.
+
+## Консоль команд (CLI)
+
+`F2` открывает панель консоли: эмуляция продолжается, а команды выполняются
+на ходу — можно вынуть и вставить дискету или CD, поставить машину на паузу,
+снять скриншот, посмотреть CMOS и т.д. Если `oldbox` запущен из терминала,
+те же команды можно набирать прямо в окне терминала (автоматически, либо
+`--console`; `--no-console` отключает). Полный список и правила — в
+[docs/console.md](docs/console.md).
+
+```text
+oldbox> floppy eject
+A: disk ejected
+oldbox> insert C:\Isos\Windows95OSR2.iso
+D: inserted C:\Isos\Windows95OSR2.iso (611 MB, 312502 sectors)
+oldbox> cdrom eject
+D: CD ejected
+oldbox> key ctrl+alt+del
+pressed ctrl+alt+del
+```
+
+Команды: `help`, `status`, `devices`, `floppy [a|b] status|insert|eject`,
+`cdrom status|insert|eject`, `insert`, `eject`, `images`, `key`, `type`,
+`screenshot`, `text`, `cmos`, `pause`, `resume`, `step`, `reset`, `flush`,
+`version`, `quit`. В панели работают `Tab` (дополнение команд и путей),
+`Up`/`Down` (история), `PgUp`/`PgDn` (прокрутка), `Ctrl+L` (очистка),
+`Esc` (закрыть).
+
+Технически смена носителя — это не эмуляция «горячего подключения»: дискета
+взводит линию DSKCHG 82077AA (сброса контроллера нет), а CD остаётся
+ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока лоток пуст.
 
 ## Что уже работает
 
@@ -174,7 +206,7 @@ F1 захватывает/отпускает мышь, F11 — fullscreen, F12 �
 ./build/oldbox_tests
 ```
 
-Покрытие: 322 теста — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 326 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -188,7 +220,8 @@ A20/port 0x92/8042, PCI/BAR, Voodoo-растеризация, S3/VGA (CRTC
 start/cursor high/low, byte mode, CR9 DBL SCN), клавиатура (SDL scancode ->
 PC set 1, E0-расширенные стрелки/модификаторы), PIT/PC Speaker
 (униполярный динамик, 70 Гц огибающая, таймлайн порта 61h), S3 atomic palette
-table, ATA/ATAPI/FDC,
+table, ATA/ATAPI/FDC, консоль команд (смена дискет и CD на ходу,
+`TEST UNIT READY` → `NOT READY/3Ah`, дополнение путей, `key`/`pause`/`step`),
 SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 (`freedos_boots_to_command_prompt_with_reference_bios`).
 
@@ -197,6 +230,8 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 ## Документация
 
 - [docs/architecture.md](docs/architecture.md) — структура проекта и поток данных.
+- [docs/console.md](docs/console.md) — консоль команд (F2/CLI): смена дискет и
+  CD на ходу, пауза, скриншоты, `key`/`type`, `cmos` и другие команды.
 - [docs/cpu.md](docs/cpu.md) — модель Pentium II, режимы, MSR, покрытие и ограничения.
 - [docs/cpu-audit.md](docs/cpu-audit.md) — методика аудита инструкций, найденные
   ошибки, покрытие по группам и остаточные пробелы.

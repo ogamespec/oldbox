@@ -566,6 +566,7 @@ std::string Machine::status_text() const {
                      voodoo_ ? std::format("Voodoo {} MiB", cfg_.video.voodoo_memory_mb) : "no Voodoo");
     o << std::format("Audio   {}\n", audio_ ? audio_->status() : "disabled");
     o << std::format("Storage {}\n", ata_.status());
+    o << std::format("Floppy  {}\n", floppy_.status());
     o << std::format("Time    {:.3f} s, {} frames, {} instructions\n", emulated_seconds(), frames_, cpu_.instruction_count());
     o << std::format("CPU at  {:04x}:{:08x}  CSBASE={:08x} CR0={:08x} EFLAGS={:08x} ESP={:08x} SS={:04x} SSBASE={:08x}\n",
                      cpu_.state().seg[1].selector, cpu_.state().eip, cpu_.state().seg[1].base, cpu_.state().cr0, cpu_.state().eflags,
@@ -649,6 +650,9 @@ void Machine::type_text(const std::string& text) {
 void Machine::key_event(int sdl_scancode, bool down) {
     const Set1Key key = sdl_scancode_to_set1(sdl_scancode);
     if (key.code) piix4_.keyboard().key_event(key.code, down, key.extended);
+}
+void Machine::set1_key_event(u8 code, bool down, bool extended) {
+    if (code) piix4_.keyboard().key_event(code, down, extended);
 }
 void Machine::mouse_motion(int dx, int dy) {
     piix4_.keyboard().mouse_event(dx, dy, 0);

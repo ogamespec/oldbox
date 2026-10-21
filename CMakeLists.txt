@@ -34,6 +34,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_x87.cpp
     src/cpu/cpu_system.cpp
     src/machine.cpp
+    src/console.cpp
     src/keymap.cpp
     src/chipset/i440bx.cpp
     src/chipset/piix4.cpp
@@ -59,7 +60,8 @@ oldbox_warnings(oldbox_core)
 
 if(OLDBOX_WITH_SDL)
     if(OLDBOX_FETCH_SDL)
-        find_package(SDL3 QUIET)
+        # The console overlay uses SDL_RenderDebugText (SDL 3.2+).
+        find_package(SDL3 3.2 QUIET)
         if(NOT SDL3_FOUND)
             if(UNIX AND NOT APPLE)
                 include(CheckIncludeFile)
@@ -82,7 +84,7 @@ if(OLDBOX_WITH_SDL)
             FetchContent_MakeAvailable(SDL3)
         endif()
     else()
-        find_package(SDL3 REQUIRED)
+        find_package(SDL3 3.2 REQUIRED)
     endif()
     add_executable(oldbox src/main.cpp src/frontend/sdl3.cpp)
     target_compile_definitions(oldbox PRIVATE OLDBOX_WITH_SDL)
@@ -109,7 +111,7 @@ if(OLDBOX_BUILD_TESTS)
     add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_io.cpp tests/test_voodoo.cpp
         tests/test_s3.cpp tests/test_audio.cpp tests/test_storage.cpp tests/test_devices.cpp
         tests/test_chipset.cpp
-        tests/test_keyboard.cpp tests/test_machine.cpp)
+        tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp)
     target_link_libraries(oldbox_tests PRIVATE oldbox_core)
     target_include_directories(oldbox_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     oldbox_warnings(oldbox_tests)

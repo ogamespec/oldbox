@@ -121,6 +121,22 @@ bool FloppyController::attach_b(const std::string& path) {
     }
     if (data.size() < 512) return false;
     disk_b_ = std::move(data);
+
+    // Drive B: honours the same host-side write protection as drive A:.
+    bool perms_readonly = false;
+    {
+        std::error_code ec;
+        const auto perms = std::filesystem::status(path, ec).permissions();
+        if (!ec) {
+            const auto writes = std::filesystem::perms::owner_write |
+                                std::filesystem::perms::group_write |
+                                std::filesystem::perms::others_write;
+            perms_readonly = (perms & writes) == std::filesystem::perms::none;
+        }
+    }
+    std::fstream probe(path, std::ios::in | std::ios::out | std::ios::binary);
+    write_protect_b_ = perms_readonly || !probe.is_open();
+
     // Same size table as drive A.
     Geometry g{};
     const u64 size = disk_b_.size();
@@ -139,6 +155,8 @@ bool FloppyController::attach_b(const std::string& path) {
     }
     g.sector_size = 512;
     geo_b_ = g;
+    path_b_ = path;
+    dirty_b_ = false;
     present_b_ = true;
     return true;
 }
@@ -184,18 +202,59 @@ bool FloppyController::attach(const std::string& path) {
     present_ = true;
     dirty_ = false;
     determine_geometry();
-    reset();
-    disk_changed_ = true; // freshly inserted media latches the change line
+    // Inserting media does not reset the controller.  On a real 82077AA only
+    // the disk-change line latches; the next seek clears it (DIR bit 7).  A
+    // reset here would also lose the motor/DOR state a running DOS owns.
+    disk_changed_ = true;
+    ready_ = motor_;
     return true;
 }
 
+void FloppyController::eject() {
+    if (!present_) return;
+    writeback();
+    disk_.clear();
+    disk_.shrink_to_fit();
+    path_.clear();
+    present_ = false;
+    write_protect_ = false;
+    dirty_ = false;
+    ready_ = false;
+    // Drop any command result still queued for the removed disk so the next
+    // SENSE INTERRUPT STATUS cannot report data for media that is gone.
+    reset_state();
+    disk_changed_ = true;
+    geo_ = Geometry{};
+}
+
+void FloppyController::eject_b() {
+    if (!present_b_) return;
+    writeback();
+    disk_b_.clear();
+    disk_b_.shrink_to_fit();
+    path_b_.clear();
+    present_b_ = false;
+    write_protect_b_ = false;
+    dirty_b_ = false;
+    geo_b_ = Geometry{};
+}
+
 void FloppyController::writeback() {
-    if (!dirty_ || !present_ || write_protect_ || path_.empty()) return;
-    try {
-        write_file(path_, disk_);
-        dirty_ = false;
-    } catch (const Error&) {
-        // Leave dirty; the next flush or destruction may succeed.
+    if (dirty_ && present_ && !write_protect_ && !path_.empty()) {
+        try {
+            write_file(path_, disk_);
+            dirty_ = false;
+        } catch (const Error&) {
+            // Leave dirty; the next flush or destruction may succeed.
+        }
+    }
+    if (dirty_b_ && present_b_ && !write_protect_b_ && !path_b_.empty()) {
+        try {
+            write_file(path_b_, disk_b_);
+            dirty_b_ = false;
+        } catch (const Error&) {
+            // Leave dirty; the next flush or destruction may succeed.
+        }
     }
 }
 
@@ -232,6 +291,7 @@ std::string FloppyController::status() const {
     if (present_) {
         o << std::format(" {} {}", format_bytes(disk_.size()),
                          write_protect_ ? "write-protected" : "read-write");
+        if (!path_.empty()) o << " " << path_;
     }
     o << std::format(" {}", motor_ ? "motor-on" : "motor-off");
     return o.str();
@@ -361,7 +421,10 @@ u32 FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
         disk[off] = *value;
     }
     dma_.set_dreq(kFdcDma, false);
-    if (dma_ok_) dirty_ = true;
+    if (dma_ok_) {
+        if (drive_b) dirty_b_ = true;
+        else dirty_ = true;
+    }
     return bytes;
 }
 

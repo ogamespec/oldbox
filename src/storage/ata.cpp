@@ -603,6 +603,35 @@ bool AtaController::mount_cdrom(const std::string& iso_path) {
     return load_iso(channels_[1].drives[0], iso_path);
 }
 
+bool AtaController::eject_cdrom() {
+    Channel& ch = channels_[1];
+    IdeDrive& d = ch.drives[0];
+    if (!d.atapi) return false;
+    d.path.clear();
+    d.data.clear();
+    d.data.shrink_to_fit();
+    d.sectors = 0;
+    // The drive itself stays attached to the channel: only the medium is
+    // gone, so IDENTIFY/INQUIRY keep working while TUR reports 02/3A/00.
+    d.present = true;
+    d.dirty = false;
+    reset_drive(d);
+    build_identify(d, true);
+    // Cancel anything still in flight; the tray was opened by the host.
+    ch.irq_pending = false;
+    ch.irq_due_at = 0;
+    update_irq(ch);
+    return true;
+}
+
+void AtaController::flush_all() {
+    for (auto& ch : channels_) {
+        for (auto& d : ch.drives) {
+            if (d.dirty) flush_drive(d);
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ATA data transfers
 // ---------------------------------------------------------------------------
@@ -1615,6 +1644,7 @@ void AtaController::bmi_write(u16 offset, u8 value) {
 std::string AtaController::status() const {
     auto describe = [](const IdeDrive& d) {
         if (!d.present) return std::string("empty");
+        if (d.atapi && d.sectors == 0) return std::string("ATAPI CD-ROM (tray empty)");
         std::string s = d.atapi ? "ATAPI CD-ROM " : "ATA ";
         s += d.atapi ? "OLDBOX VIRTUAL CD-ROM" : "OLDBOX VIRTUAL HDD";
         s += std::format(" {} ({} sectors, PIO{}, {:04x})",

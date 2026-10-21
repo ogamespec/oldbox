@@ -56,6 +56,11 @@ struct SystemConfig {
     bool headless = false;
     bool trace = false;
     bool no_sdl_audio = false;
+    // Command console: by default stdin is read only when it is a terminal
+    // (interactive launch); --console forces it even for a pipe, --no-console
+    // disables it.  The in-window console (F2) is independent of these.
+    bool console = false;
+    bool no_console = false;
     int width = 800;
     int height = 600;
     double scale = 2.0;
