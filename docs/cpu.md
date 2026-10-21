@@ -144,10 +144,12 @@ MMX не разделяет физические регистры с x87 (упр
   инструкции с видимым изменением `CS/SS`, I/O, прерывании или после
   32 инструкций;
 - трансляция целочисленного ядра: MOV/LEA, ALU, INC/DEC, PUSH/POP, TEST,
-  XCHG, MUL/IMUL, сдвиги/вращения с фиксированным количеством, Jcc, LOOP,
-  CALL/RET, CBW/CWDE/CWD/CDQ, MOVZX/MOVSX, CMOVcc, SETcc, BSWAP,
-  BT/BTS/BTR/BTC (регистровые формы), а также `IN/OUT` и загрузки сегментов
-  (`MOV Sreg`, PUSH/POP Sreg, LDS/LES/LSS/LFS/LGS — экспериментально);
+  XCHG, MUL/IMUL, сдвиги/вращения на 1 (`D0/D1`), Jcc, LOOP, CALL/RET,
+  CBW/CWDE/CWD/CDQ, MOVZX/MOVSX, CMOVcc, SETcc, BSWAP, BT/BTS/BTR/BTC
+  (регистровые формы), `IN/OUT`, `MOV Sreg`/`PUSH`/`POP Sreg`. Формы с
+  произвольным/переменным сдвигом, LDS/LES/LSS/LFS/LGS, INT/IRET/RETF,
+  CLI/STI, CLD/STD и дальние `FF /3,/5` реализованы, но по умолчанию
+  выключены (см. ниже);
 - регистры гостя хранятся в `CpuState`, арифметические флаги — в `RFLAGS`
   хоста; перед выходом из блока/helper-вызовом они сливаются в
   `CpuState.eflags` с учётом особенностей эталонного интерпретатора
