@@ -59,26 +59,112 @@ void to_ext80(long double v, u8* p) {
 
 void Cpu::execute_x87(u8 opcode) {
     if ((state_.cr0 & 0x0cu) != 0) throw CpuException{7, 0, false};
+    // The FPU instruction pointer is architecturally the CS:IP of the last FPU
+    // instruction; the environment formats below expose it.
+    state_.fpu_last_ip = opcode_ip_;
+    state_.fpu_last_cs = state_.seg[unsigned(SegReg::cs)].selector;
+    state_.fpu_last_op = u16(opcode);
     const ModRm m = decode_modrm(4);
     const bool reg_form = m.mod == 3;
     auto& fs = state_.fpu_status;
     auto status_word = [&]() -> u16 { return u16(fs | (u16(state_.fpu_top & 7u) << 11)); };
+    // Environment image size: 14 bytes for 16-bit operand size, 28 bytes for
+    // 32-bit operand size.  Real/V86 and protected layouts differ, and the
+    // 32-bit real format has no selectors (Intel PRM Vol. 2, Figures 7-13
+    // through 7-16).
+    const bool env32 = opsize32_;
+    const bool env_protected = state_.mode == CpuMode::protected_mode;
+    const u32 env_size = env32 ? 28u : 14u;
     auto write_env = [&](u32 base, SegReg seg) {
-        write_mem(base, u32(state_.fpu_control | 0x003fu), 2, seg);
-        write_mem(base + 4, status_word(), 2, seg);
-        write_mem(base + 8, state_.fpu_tag, 2, seg);
-        write_mem(base + 12, state_.fpu_last_ip, 4, seg);
-        write_mem(base + 16, state_.fpu_last_op, 2, seg);
-        write_mem(base + 20, 0, 2, seg);
-        write_mem(base + 24, 0, 4, seg);
+        const u16 cw = u16(state_.fpu_control | 0x003fu);
+        const u16 sw = status_word();
+        const u16 tw = state_.fpu_tag;
+        const u32 ip_off = state_.fpu_last_ip;
+        const u16 cs = state_.fpu_last_cs;
+        const u16 fop = u16(state_.fpu_last_op & 0x07ffu);
+        if (env32 && env_protected) {
+            write_mem(base + 0, cw, 2, seg);
+            write_mem(base + 2, 0, 2, seg);
+            write_mem(base + 4, sw, 2, seg);
+            write_mem(base + 6, 0, 2, seg);
+            write_mem(base + 8, tw, 2, seg);
+            write_mem(base + 10, 0, 2, seg);
+            write_mem(base + 12, ip_off, 4, seg);
+            write_mem(base + 16, cs, 2, seg);
+            write_mem(base + 18, fop, 2, seg);
+            write_mem(base + 20, 0, 4, seg); // data operand offset (not tracked)
+            write_mem(base + 24, 0, 2, seg);
+            write_mem(base + 26, 0, 2, seg);
+        } else if (env32) { // 32-bit real-address / V86 format
+            const u32 fip = (u32(cs) << 4) + ip_off;
+            write_mem(base + 0, cw, 2, seg);
+            write_mem(base + 2, 0, 2, seg);
+            write_mem(base + 4, sw, 2, seg);
+            write_mem(base + 6, 0, 2, seg);
+            write_mem(base + 8, tw, 2, seg);
+            write_mem(base + 10, 0, 2, seg);
+            write_mem(base + 12, u16(fip), 2, seg);
+            write_mem(base + 14, 0, 2, seg);
+            write_mem(base + 16, u16(fip >> 16), 2, seg);
+            write_mem(base + 18, fop, 2, seg);
+            write_mem(base + 20, 0, 4, seg); // data operand pointer
+            write_mem(base + 24, 0, 4, seg);
+        } else if (env_protected) { // 16-bit protected format
+            write_mem(base + 0, cw, 2, seg);
+            write_mem(base + 2, sw, 2, seg);
+            write_mem(base + 4, tw, 2, seg);
+            write_mem(base + 6, u16(ip_off), 2, seg);
+            write_mem(base + 8, cs, 2, seg);
+            write_mem(base + 10, 0, 2, seg); // operand offset
+            write_mem(base + 12, 0, 2, seg); // operand selector
+        } else { // 16-bit real-address / V86 format
+            const u32 fip = (u32(cs) << 4) + ip_off;
+            write_mem(base + 0, cw, 2, seg);
+            write_mem(base + 2, sw, 2, seg);
+            write_mem(base + 4, tw, 2, seg);
+            write_mem(base + 6, u16(fip), 2, seg);
+            write_mem(base + 8, u16((((fip >> 16) & 0x0fu) << 12) | fop), 2, seg);
+            write_mem(base + 10, 0, 2, seg); // operand pointer low
+            write_mem(base + 12, 0, 2, seg); // operand pointer 19:16
+        }
     };
     auto read_env = [&](u32 base, SegReg seg) {
-        state_.fpu_control = u16(read_mem(base, 2, seg));
-        state_.fpu_status = u16(read_mem(base + 4, 2, seg) & ~0x3800u);
-        state_.fpu_top = (read_mem(base + 4, 2, seg) >> 11) & 7;
-        state_.fpu_tag = u16(read_mem(base + 8, 2, seg));
-        state_.fpu_last_ip = read_mem(base + 12, 4, seg);
-        state_.fpu_last_op = u16(read_mem(base + 16, 2, seg));
+        if (env32 && env_protected) {
+            state_.fpu_control = u16(read_mem(base + 0, 2, seg));
+            state_.fpu_status = u16(read_mem(base + 4, 2, seg) & ~0x3800u);
+            state_.fpu_top = (read_mem(base + 4, 2, seg) >> 11) & 7;
+            state_.fpu_tag = u16(read_mem(base + 8, 2, seg));
+            state_.fpu_last_ip = read_mem(base + 12, 4, seg);
+            state_.fpu_last_cs = u16(read_mem(base + 16, 2, seg));
+            state_.fpu_last_op = u16(read_mem(base + 18, 2, seg) & 0x07ffu);
+        } else if (env32) { // 32-bit real format
+            state_.fpu_control = u16(read_mem(base + 0, 2, seg));
+            state_.fpu_status = u16(read_mem(base + 4, 2, seg) & ~0x3800u);
+            state_.fpu_top = (read_mem(base + 4, 2, seg) >> 11) & 7;
+            state_.fpu_tag = u16(read_mem(base + 8, 2, seg));
+            state_.fpu_last_ip = u32(read_mem(base + 12, 2, seg)) |
+                                 (u32(read_mem(base + 16, 2, seg)) << 16);
+            state_.fpu_last_cs = 0;
+            state_.fpu_last_op = u16(read_mem(base + 18, 2, seg) & 0x07ffu);
+        } else if (env_protected) { // 16-bit protected format
+            state_.fpu_control = u16(read_mem(base + 0, 2, seg));
+            state_.fpu_status = u16(read_mem(base + 2, 2, seg) & ~0x3800u);
+            state_.fpu_top = (read_mem(base + 2, 2, seg) >> 11) & 7;
+            state_.fpu_tag = u16(read_mem(base + 4, 2, seg));
+            state_.fpu_last_ip = read_mem(base + 6, 2, seg);
+            state_.fpu_last_cs = u16(read_mem(base + 8, 2, seg));
+            state_.fpu_last_op = 0;
+        } else { // 16-bit real format
+            state_.fpu_control = u16(read_mem(base + 0, 2, seg));
+            state_.fpu_status = u16(read_mem(base + 2, 2, seg) & ~0x3800u);
+            state_.fpu_top = (read_mem(base + 2, 2, seg) >> 11) & 7;
+            state_.fpu_tag = u16(read_mem(base + 4, 2, seg));
+            const u16 ip_lo = u16(read_mem(base + 6, 2, seg));
+            const u16 hi = u16(read_mem(base + 8, 2, seg));
+            state_.fpu_last_ip = u32(ip_lo) | (u32((hi >> 12) & 0x0fu) << 16);
+            state_.fpu_last_cs = 0;
+            state_.fpu_last_op = u16(hi & 0x07ffu);
+        }
     };
     auto set_c = [&](bool c0, bool c2, bool c3) {
         fs = u16((fs & ~0x4700u) | (c0 ? 0x0100u : 0) | (c2 ? 0x0400u : 0) | (c3 ? 0x4000u : 0));
@@ -320,8 +406,10 @@ void Cpu::execute_x87(u8 opcode) {
             else take = !pf;
             if (take) fpu_set_st(0, fpu_st(m.rm));
         } else if (m.raw == 0xe2) { fs &= ~0x0080u; }
-        else if (m.raw == 0xe3) {
+        else if (m.raw == 0xe3) { // FINIT
             state_.fpu_control = 0x037f; state_.fpu_status = 0; state_.fpu_top = 0; state_.fpu_tag = 0xffff;
+            state_.fpu_last_ip = 0; state_.fpu_last_cs = 0; state_.fpu_last_op = 0;
+            state_.fpu_invalid = false;
             for (auto& r : state_.fpu) r.empty = true;
         }
         else if ((m.raw & 0xf8) == 0xe8 || (m.raw & 0xf8) == 0xf0) {
@@ -364,10 +452,11 @@ void Cpu::execute_x87(u8 opcode) {
                 read_env(m.offset, m.segment);
                 for (int i = 0; i < 8; ++i) {
                     u8 b[10]{};
-                    for (int j = 0; j < 10; ++j) b[j] = u8(read_mem(m.offset + 28 + u32(i * 10 + j), 1, m.segment));
+                    for (int j = 0; j < 10; ++j) b[j] = u8(read_mem(m.offset + env_size + u32(i * 10 + j), 1, m.segment));
                     const int idx = (state_.fpu_top + i) & 7;
                     state_.fpu[idx].value = from_ext80(b);
-                    state_.fpu[idx].empty = ((state_.fpu_tag >> (i * 2)) & 3) == 3;
+                    // The tag word is indexed by physical register number.
+                    state_.fpu[idx].empty = ((state_.fpu_tag >> (idx * 2)) & 3) == 3;
                 }
                 break;
             }
@@ -377,11 +466,17 @@ void Cpu::execute_x87(u8 opcode) {
                     u8 b[10]{};
                     const int idx = (state_.fpu_top + i) & 7;
                     to_ext80(state_.fpu[idx].empty ? 0.0L : state_.fpu[idx].value, b);
-                    for (int j = 0; j < 10; ++j) write_mem(m.offset + 28 + u32(i * 10 + j), b[j], 1, m.segment);
+                    for (int j = 0; j < 10; ++j) write_mem(m.offset + env_size + u32(i * 10 + j), b[j], 1, m.segment);
                 }
-                state_.fpu_control |= 0x3f;
+                // FNSAVE re-initializes the FPU to its FINIT defaults.
+                state_.fpu_control = 0x037f;
+                state_.fpu_status = 0;
                 state_.fpu_top = 0;
                 state_.fpu_tag = 0xffff;
+                state_.fpu_last_ip = 0;
+                state_.fpu_last_cs = 0;
+                state_.fpu_last_op = 0;
+                state_.fpu_invalid = false;
                 for (auto& r : state_.fpu) r.empty = true;
                 break;
             }

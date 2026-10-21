@@ -12,7 +12,9 @@
 |---|---|
 | Real-address mode, 16-битные умолчания, A20, wrap 64K | реализовано |
 | Protected mode: GDT/LDT, DPL/RPL/CPL, expand-down, conforming | реализовано |
-| Загрузка сегментов, null-селекторы, hidden-часть | реализовано |
+| Загрузка сегментов, null-селекторы, hidden-часть | реализовано; accessed-bit выставляется, code-сегмент нельзя загрузить в SS |
+| Operand/address-size префиксы 66h/67h | реализовано; повторный префикс идемпотентен, стек определяется SS.B, а не 67h |
+| Descriptor #NP/#SS/#TS | реализовано для загрузки сегментов, LLDT/LTR, CS/IDT-target; порядок редких ошибок TSS упрощён |
 | Virtual-8086: 8086-сегментация, CPL=3, IDT/TSS, IRET | реализовано |
 | VME: redirection bitmap, VIF/VIP, method 4/5/6 | реализовано, method 3 для аппаратных прерываний упрощён |
 | PVI: VIF/VIP для ring 3 protected mode | реализовано |
@@ -33,8 +35,9 @@
 | Alignment check (CR0.AM + EFLAGS.AC + CPL3) | реализовано |
 | PSE-36 (36-бит physical) | не наблюдаемо: Bus 32-битный, физической RAM >4G нет |
 | Кэши L1/L2, write buffer, когерентность | не моделируются |
-| MTRR fixed/variable, MTRRdefType, MTRRcap | регистры сохраняются; влияния на кэш нет |
+| MTRR fixed/variable, MTRRdefType, MTRRcap | регистры сохраняются (fixed 0x250–0x26F); влияния на кэш нет |
 | PAT | MSR сохраняется; влияния на кэш нет |
+| MSR ниже 0x200 (PII BBL/L2, last-branch/ROB) | хранятся как регистры; неизвестные MSR вне диапазона дают #GP |
 
 ## Прерывания, задачи, системные инструкции
 
@@ -65,12 +68,13 @@
 
 | Возможность | Статус |
 |---|---|
-| Загрузка/сохранение 32/64/80/BCD/целых, env/save | реализовано |
+| Загрузка/сохранение 32/64/80/BCD/целых, env/save | реализовано; 14/28-байтные real/protected форматы, tag word по физическим регистрам |
+| FNSAVE/FINIT сброс состояния | реализовано (CW=037F, SW=0, TOP=0, tag=FFFF, указатели=0) |
 | Арифметика, сравнения, FCOMI/FCMOVcc (EFLAGS), константы | реализовано |
 | FPREM/FPREM1, FSINCOS, FPTAN, FXTRACT, FYL2XP1 | реализовано |
 | FPU status IE/ZE/ES, диапазоны FIST/FSQRT/FYL2X | частично (без точного #MF и полного набора OE/UE/PE) |
 | Округление по CW для арифметики и store | частично (host long double) |
-| MMX: packed arithmetic, saturation, compare, pack/unpack, shifts, PSHUFW, PMOVMSKB, MASKMOVQ | реализовано |
+| MMX: packed arithmetic, saturation, compare, pack/unpack, shifts, PSHUFW, PMOVMSKB, MASKMOVQ | реализовано; сдвиги с count ≥ ширины lane дают 0/знак, PMADDWD с 32-битным wrap |
 | SSE/SSE2/FXSR | отсутствуют у Klamath/Deschutes, CPUID не выставляет |
 
 ## Не моделируется сознательно

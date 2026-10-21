@@ -77,6 +77,10 @@ CMOV, PAT, PSE36, MMX; SSE/SSE2/FXSR не выставляются.
 считаются через host long double, а не по таблицам Intel; FPREM/FPREM1
 выполняют полное уменьшение за один шаг, а не пошагово; #MF не доставляется,
 флаги OE/UE/PE и округление арифметики по CW моделируются частично.
+`FISTTP` (`DB/DD/DF /1`) реализован как удобное расширение, хотя на
+Pentium II эта форма не определена. MSR-пространство ниже `0x200` (включая
+PII BBL/L2 MSR) хранится как обычные регистры, поскольку у модели нет
+кэша; `#GP` для неизвестных MSR выдаётся выше этого диапазона.
 `FF /7` даёт #UD. VME method-6 для исключений реализован; порядок редких
 ошибок повреждённого TSS упрощён. Эти пункты отмечены как TODO, а не выданы за
 готовые.
@@ -92,16 +96,29 @@ SHLD/SHRD, IDIV overflow, адрес возобновления после ис�
 task gate и запрет эскалации привилегий через FAR JMP/CALL. Далее добавлены
 call gates, task switching через TSS/IRET NT, 16-битные TSS/gates,
 debug-регистры и breakpoints, PGE/PVI/AC, machine check, MTRR/perf MSR,
-APIC priority/timer, SMM LDT/auto-HALT/NMI и исправления x87. Полная
-матрица — [docs/cpu-features.md](cpu-features.md), детали — [docs/cpu-audit.md](cpu-audit.md).
+APIC priority/timer, SMM LDT/auto-HALT/NMI и исправления x87. Аудит 2026
+добавил zero-extension `MOV r32,Sreg`, #NP/#SS для отсутствующих сегментов,
+STI shadow, маску EIP LOOP/JCXZ по operand-size, проверку границы 64K в V86,
+#GP для IRET в V86 с CPL>0, #UD для невалидных форм групп 6/7/8, C6/C7,
+0F C7 и LEA, исправление PACKSSDW и насыщение MMX-сдвигов, wrap PMADDWD,
+строгий #GP для незадействованных MSR (с хранением PII BBL/fixed-MTRR),
+PE/PG в SMM, 14/28-байтовые x87 env-форматы, сброс FNSAVE/FINIT и
+физическую индексацию FPU tag word. Последующая проверка 66/67-префиксов
+и дескрипторов добавила идемпотентность повторных префиксов, 24-битный
+base у 16-битных SGDT/SIDT, запрет code-сегмента в SS, #NP для
+отсутствующих LDT/TSS/CS/IDT-target, поддержку expand-down SS в
+call gate/task switch и выставление accessed-bit. Полная матрица —
+[docs/cpu-features.md](cpu-features.md), детали — [docs/cpu-audit.md](cpu-audit.md).
 
 ## MSR
 
 Реализованы: TSC (0x10), APIC_BASE (0x1B, только хранение), EBL_CR_POWERON
-(0x2A), MTRRCAP (0xFE), SYSENTER_CS/ESP/EIP (0x174–0x176), MCG_CAP/STATUS
-(0x179/0x17A), EVNTSEL/PERFCTR (0x186–0x18A), DEBUGCTLMSR (0x1D9),
-LASTBRANCH (0x1DB), PAT (0x277), MTRRdef (0x2FF), MTRRphysBase/Mask
-(0x200–0x20F). Неизвестный MSR даёт #GP(0).
+(0x2A), BIOS_UPDT_TRIG/BIOS_SIGN (0x79/0x8B), MTRRCAP (0xFE),
+SYSENTER_CS/ESP/EIP (0x174–0x176), MCG_CAP/STATUS (0x179/0x17A),
+EVNTSEL/PERFCTR (0x186–0x18A), DEBUGCTLMSR (0x1D9), LASTBRANCH (0x1DB),
+PAT (0x277), MTRRdef (0x2FF), MTRRphysBase/Mask (0x200–0x20F),
+fixed-MTRR (0x250–0x26F). Пространство ниже 0x200 (включая PII BBL/L2 MSR)
+хранится как регистры; неизвестный MSR вне его даёт #GP(0).
 
 ## FPU/MMX
 
@@ -111,9 +128,10 @@ MMX не разделяет физические регистры с x87 (упр
 
 ## Тесты
 
-219 тестов: `tests/test_cpu*.cpp` (CPU-инструкции, режимы, система, FPU/MMX),
-`tests/test_io.cpp` (I/O-привилегии и A20) и `tests/test_machine.cpp`
-(сквозная загрузка FreeDOS до `A:\>`). Полный список — `./build/oldbox_tests`.
+354 теста: `tests/test_cpu*.cpp` (CPU-инструкции, режимы, система, FPU/MMX),
+`tests/test_cpu_audit.cpp` (регрессии аудита 2026), `tests/test_io.cpp`
+(I/O-привилегии и A20) и `tests/test_machine.cpp` (сквозная загрузка
+FreeDOS). Полный список — `./build/oldbox_tests`.
 
 Аудит инструкций, найденные ошибки и остаточные пробелы описаны в
 [docs/cpu-audit.md](cpu-audit.md).

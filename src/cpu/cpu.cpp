@@ -260,9 +260,11 @@ u32 Cpu::near_ip(u32 v) const {
     return v & 0xffffu;
 }
 
-u32 Cpu::near_ip_addr(u32 v) const {
-    if (addrsize32_) {
-        if (state_.mode != CpuMode::protected_mode && v > 0xffffu) throw CpuException{13, 0, true};
+u32 Cpu::loop_ip(u32 v) const {
+    if (opsize32_) {
+        // LOOP has no real-mode fault for a 32-bit target, but a V86 task
+        // still cannot leave its 64 KiB CS window.
+        if (state_.mode == CpuMode::virtual86 && v > 0xffffu) throw CpuException{13, 0, true};
         return v;
     }
     return v & 0xffffu;
@@ -293,10 +295,11 @@ void Cpu::check_segment(SegReg s, u32 offset, u32 size, bool write) {
         return;
     }
     if (state_.mode == CpuMode::virtual86) {
-        // V86 segments are real 64 KiB windows: a 32-bit address-size override
-        // beyond 64 KiB raises #GP/#SS.
+        // V86 segments are real 64 KiB windows: any byte of the access outside
+        // offset 0..FFFF raises #GP/#SS, not just an offset above FFFF.
         (void)write;
-        if (size > 0 && u64(offset) > 0xffffu) {
+        const u32 n = size == 0 ? 1u : u32(size);
+        if (u64(offset) + n - 1u > 0xffffu) {
             if (s == SegReg::ss) exception_ss(sg.selector & ~3u);
             else exception_gp(sg.selector & ~3u);
         }
@@ -352,6 +355,8 @@ void Cpu::clear_prefixes() {
                       (state_.seg[unsigned(SegReg::cs)].flags & 0x40) != 0;
     opsize32_ = cs32;
     addrsize32_ = cs32;
+    opsize_prefix_seen_ = false;
+    addrsize_prefix_seen_ = false;
     rep_ = false;
     repne_ = false;
     lock_ = false;
@@ -586,6 +591,18 @@ Descriptor Cpu::read_descriptor_checked(u16 selector) {
     return read_descriptor(base, selector);
 }
 
+void Cpu::set_descriptor_accessed(u16 selector) {
+    // The processor sets the Accessed bit when a code/data descriptor is
+    // loaded (Intel PRM Vol. 3, 3.4.3).  It only writes when the bit is clear.
+    if (state_.mode != CpuMode::protected_mode) return;
+    const u32 table = (selector & 4u) ? ldt_base_ : state_.gdtr_base;
+    const u32 limit = (selector & 4u) ? ldt_limit_ : state_.gdtr_limit;
+    if ((selector & ~7u) + 7u > limit) return;
+    const u32 lin = table + (selector & 0xfff8u) + 5;
+    const u8 access = read_linear8_super(lin);
+    if ((access & 0x10) && !(access & 0x01)) write_linear8_super(lin, u8(access | 0x01));
+}
+
 Descriptor Cpu::read_descriptor(u32 base, u16 selector) {
     const u32 off = selector & 0xfff8u;
     if (off + 7 > (selector & 4 ? 0xffffu : 0xffffu)) {
@@ -648,6 +665,7 @@ void Cpu::load_segment_raw(SegReg seg, u16 selector) {
     if (!(d.access & 0x80)) { // present
         exception_gp(selector & ~3u);
     }
+    set_descriptor_accessed(selector);
     s.base = d.base;
     s.limit = d.limit;
     s.access = d.access;
@@ -689,14 +707,20 @@ void Cpu::load_segment(SegReg seg, u16 selector) {
     const Descriptor d = read_descriptor(table_base, selector);
     const u8 type = d.access & 0x1f;
     const bool code = (type & 0x18) == 0x18;
-    const bool data = (type & 0x10) != 0;
-    if (!(d.access & 0x80)) exception_gp(selector & ~3u);
+    // A data segment has S=1 and the code/data type bit (bit 3) clear.  The
+    // S bit alone is also set for code segments and must not make a code
+    // segment acceptable for SS.
+    const bool data = (type & 0x10) != 0 && (type & 0x08) == 0;
     const int dpl = (d.access >> 5) & 3;
+    // Type and privilege checks precede the present check (Intel PRM Vol. 2,
+    // MOV): a non-present SS descriptor gives #SS, a non-present DS/ES/FS/GS
+    // descriptor gives #NP.
     if (seg == SegReg::ss) {
         // SS must be a writable data segment; expand-down stacks are valid.
         if (!data || !(type & 2)) exception_gp(selector & ~3u);
         if (dpl != cpl()) exception_gp(selector & ~3u);
         if ((selector & 3) != cpl()) exception_gp(selector & ~3u);
+        if (!(d.access & 0x80)) throw CpuException{12, u32(selector & ~3u), true};
     } else {
         if (!data && !(code && (type & 2))) exception_gp(selector & ~3u);
         // The E bit in a data descriptor is the expand-down flag, not the
@@ -705,6 +729,7 @@ void Cpu::load_segment(SegReg seg, u16 selector) {
         if (data || !(type & 0x04)) {
             if (dpl < std::max(cpl(), int(selector & 3))) exception_gp(selector & ~3u);
         }
+        if (!(d.access & 0x80)) throw CpuException{11, u32(selector & ~3u), true};
     }
     load_segment_raw(seg, selector);
 }
@@ -746,7 +771,8 @@ void Cpu::load_cs_far_raw(u16 selector, u32 offset, int cpl_override) {
     const u32 lim = (selector & 4u) ? ldt_limit_ : state_.gdtr_limit;
     if ((selector & ~7u) + 7 > lim) exception_gp(selector & ~3u);
     const Descriptor d = read_descriptor(base, selector);
-    if (!(d.access & 0x80) || !(d.access & 0x08) || !(d.access & 0x10)) exception_gp(selector & ~3u);
+    if (!(d.access & 0x08) || !(d.access & 0x10)) exception_gp(selector & ~3u); // not code
+    if (!(d.access & 0x80)) throw CpuException{11, u32(selector & ~3u), true};  // not present
     const int cpl_now = cpl_override >= 0 ? cpl_override : cpl();
     const int rpl = selector & 3;
     const int dpl = (d.access >> 5) & 3;
@@ -760,6 +786,7 @@ void Cpu::load_cs_far_raw(u16 selector, u32 offset, int cpl_override) {
         if (dpl != cpl_now) exception_gp(selector & ~3u);
     }
     if (offset > d.limit) exception_gp(0);
+    set_descriptor_accessed(selector);
     // CS.RPL always reflects the new CPL, even if the selector image used a
     // smaller RPL (interrupt gates, conforming transfers, returns).
     cs.selector = u16((selector & ~3u) | u16(cpl_now & 3));
@@ -858,7 +885,7 @@ void Cpu::do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bo
         if ((new_ss & ~7u) == 0) throw CpuException{10, u32(new_ss & ~3u), true};
         const Descriptor sd = read_descriptor_checked(new_ss);
         if (((sd.access >> 5) & 3) != target_dpl || (new_ss & 3) != target_dpl ||
-            !(sd.access & 0x10) || !(sd.access & 0x02) || (sd.access & 0x0c) != 0)
+            !(sd.access & 0x10) || !(sd.access & 0x02) || (sd.access & 0x08) != 0)
             throw CpuException{10, u32(new_ss & ~3u), true};
         if (!(sd.access & 0x80)) throw CpuException{12, u32(new_ss & ~3u), true};
         const u32 nparams = gate.param_count;
@@ -956,6 +983,9 @@ void Cpu::do_iret(int size) {
     const u16 sel = u16(pop_value(size));
     u32 flags = pop_value(size);
     if (size == 2) { off &= 0xffffu; flags &= 0xffffu; }
+    // Only a CPL-0 IRET may return to virtual-8086 mode.  At CPL>0 a VM bit in
+    // the popped image is a #GP(0), not silently ignored.
+    if ((flags & VM) && old_cpl != 0) exception_gp(0);
     const bool to_v86 = (flags & VM) != 0 && old_cpl == 0;
     if (to_v86) {
         // Return to virtual-8086 mode.  Read the complete frame from the ring-0
@@ -1144,8 +1174,9 @@ void Cpu::deliver_interrupt(int vector, bool software) {
     if ((sel & ~7u) == 0 || (sel & ~7u) + 7 > ((sel & 4) ? ldt_limit_ : state_.gdtr_limit))
         throw CpuException{13, u32(sel & ~3u), true};
     const Descriptor target = read_descriptor((sel & 4) ? ldt_base_ : state_.gdtr_base, sel);
-    if (!(target.access & 0x80) || !(target.access & 0x10) || !(target.access & 0x08))
+    if (!(target.access & 0x10) || !(target.access & 0x08))
         throw CpuException{13, u32(sel & ~3u), true};
+    if (!(target.access & 0x80)) throw CpuException{11, u32(sel & ~3u), true};
     const int new_cpl = (target.access >> 5) & 3;
     if (v86 && new_cpl != 0) throw CpuException{13, u32(sel & ~3u), true};
     const bool change_privilege = (new_cpl < old_cpl) || (old_flags & VM) != 0;
@@ -1392,8 +1423,11 @@ void Cpu::trace_control(const char* what, u32 target, u32 sp) {
 void Cpu::step() {
     cpl_override_ = -1;
     if (state_.shutdown) { state_.cycles += 1; return; }
-    const bool ss_shadow = ss_inhibit_;
+    // MOV SS/POP SS/LSS and STI inhibit maskable interrupts for exactly one
+    // following instruction.  NMI and exceptions are not affected.
+    const bool irq_shadow = ss_inhibit_ || sti_inhibit_;
     ss_inhibit_ = false;
+    sti_inhibit_ = false;
     if (state_.halted) {
         state_.cycles += 1;
         if (state_.smi_pending && !state_.smm) { enter_smm(); return; }
@@ -1417,7 +1451,7 @@ void Cpu::step() {
         state_.nmi_pending = false;
         deliver_interrupt(2);
         state_.halted = false;
-    } else if (!state_.smm && !ss_shadow && interrupts_enabled() && irq_ack_) {
+    } else if (!state_.smm && !irq_shadow && interrupts_enabled() && irq_ack_) {
         const int v = irq_ack_();
         if (v >= 0) {
             deliver_interrupt(v);
@@ -1512,8 +1546,17 @@ void Cpu::execute_one() {
     last_opcode_ = op;
     cycles_ += 2;
     switch (op) {
-    case 0x66: opsize32_ = !opsize32_; execute_one(); break;
-    case 0x67: addrsize32_ = !addrsize32_; execute_one(); break;
+    // A prefix marks its attribute as overridden; a repeated prefix of the
+    // same group does not toggle the attribute back (the effective size is
+    // selected by prefix presence, not by parity).
+    case 0x66:
+        if (!opsize_prefix_seen_) { opsize32_ = !opsize32_; opsize_prefix_seen_ = true; }
+        execute_one();
+        break;
+    case 0x67:
+        if (!addrsize_prefix_seen_) { addrsize32_ = !addrsize32_; addrsize_prefix_seen_ = true; }
+        execute_one();
+        break;
     case 0xf0: lock_ = true; execute_one(); break;
     case 0xf2: rep_ = true; repne_ = true; execute_one(); break;
     case 0xf3: rep_ = true; repne_ = false; execute_one(); break;
@@ -1738,8 +1781,15 @@ void Cpu::execute_one() {
     case 0x86: case 0x87: { const int size = (op & 1) ? opsize() : 1; const ModRm m = decode_modrm(size); u32 a = read_rm(m, size), b = read_reg_field(m, size); write_rm(m, b, size); write_reg_field(m, a, size); break; }
     case 0x88: case 0x89: { const int size = (op & 1) ? opsize() : 1; const ModRm m = decode_modrm(size); write_rm(m, read_reg_field(m, size), size); break; }
     case 0x8a: case 0x8b: { const int size = (op & 1) ? opsize() : 1; const ModRm m = decode_modrm(size); write_reg_field(m, read_rm(m, size), size); break; }
-    case 0x8c: { const ModRm m = decode_modrm(2); write_rm(m, state_.seg[m.reg_field & 7].selector, 2); break; }
-    case 0x8d: { const ModRm m = decode_modrm(opsize(), false); if (m.is_register) exception_gp(0); write_reg_field(m, m.offset, opsize()); break; }
+    case 0x8c: { // MOV r/m16,Sreg; a 32-bit register destination is zero-extended
+        const ModRm m = decode_modrm(2);
+        if (m.reg_field > 5) raise_exception(6); // no ES..GS register 6/7
+        const u16 sel = state_.seg[m.reg_field].selector;
+        if (m.is_register && opsize32_) write_reg_index(m.rm, sel, 4);
+        else write_rm(m, sel, 2);
+        break;
+    }
+    case 0x8d: { const ModRm m = decode_modrm(opsize(), false); if (m.is_register) raise_exception(6); write_reg_field(m, m.offset, opsize()); break; }
     case 0x8e: { const ModRm m = decode_modrm(2); if (m.reg_field > 5 || m.reg_field == 1) raise_exception(6); load_segment(SegReg(m.reg_field), u16(read_rm(m, 2))); break; }
     case 0x8f: { const ModRm m = decode_modrm(opsize()); write_rm(m, pop_value(opsize()), opsize()); break; }
     case 0x90: break;
@@ -1816,7 +1866,14 @@ void Cpu::execute_one() {
         write_reg_field(m, off, psize);
         break;
     }
-    case 0xc6: case 0xc7: { const int size = (op & 1) ? opsize() : 1; const ModRm m = decode_modrm(size); const u32 imm = (size == 1) ? fetch8() : fetch_imm(); write_rm(m, imm, size); break; }
+    case 0xc6: case 0xc7: {
+        const int size = (op & 1) ? opsize() : 1;
+        const ModRm m = decode_modrm(size);
+        if (m.reg_field != 0) raise_exception(6); // MOV r/m,imm has only /0
+        const u32 imm = (size == 1) ? fetch8() : fetch_imm();
+        write_rm(m, imm, size);
+        break;
+    }
     case 0xc8: {
         const u16 alloc = fetch16(); const u8 level = u8(fetch8() & 31);
         const int opsz = opsize();
@@ -1845,10 +1902,13 @@ void Cpu::execute_one() {
     case 0xd6: set_reg8(0, get_flag(CF) ? 0xff : 0); break;
     case 0xd7: { const u8 al = reg8(0); const u32 off = ((addrsize32_ ? state_.gpr[3] : reg16(3)) + al) & (addrsize32_ ? 0xffffffffu : 0xffffu); set_reg8(0, u8(read_mem(off, 1, seg_override_.value_or(SegReg::ds)))); break; }
     case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf: execute_x87(op); break;
-    case 0xe0: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0 && !get_flag(ZF)) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
-    case 0xe1: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0 && get_flag(ZF)) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
-    case 0xe2: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
-    case 0xe3: { const i8 d = i8(fetch8()); const u32 c = addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu); if (c == 0) state_.eip = near_ip_addr(state_.eip + u32(i32(d))); break; }
+    // LOOP/JCXZ select CX or ECX by address size, but the target EIP is
+    // masked according to the operand-size attribute (Intel PRM Vol. 2,
+    // LOOP/LOOPcc and Jcc: "IF OperandSize = 16 THEN EIP <- EIP AND FFFFH").
+    case 0xe0: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0 && !get_flag(ZF)) state_.eip = loop_ip(state_.eip + u32(i32(d))); break; }
+    case 0xe1: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0 && get_flag(ZF)) state_.eip = loop_ip(state_.eip + u32(i32(d))); break; }
+    case 0xe2: { const i8 d = i8(fetch8()); u32 c = (addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu)) - 1; if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c)); if (c != 0) state_.eip = loop_ip(state_.eip + u32(i32(d))); break; }
+    case 0xe3: { const i8 d = i8(fetch8()); const u32 c = addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu); if (c == 0) state_.eip = loop_ip(state_.eip + u32(i32(d))); break; }
     case 0xe4: { const u16 p = fetch8(); check_io_privilege(p, 1); set_reg8(0, bus_.io_read8(p)); cycles_ += 24; break; }
     case 0xe5: { const u16 port = fetch8(); const int sz = opsize32_ ? 4 : 2; check_io_privilege(port, u32(sz)); if (sz == 4) set_reg(0, bus_.io_read32(port)); else set_reg16(0, bus_.io_read16(port)); cycles_ += 16 + 8 * sz; break; }
     case 0xe6: { const u16 p = fetch8(); check_io_privilege(p, 1); bus_.io_write8(p, reg8(0)); cycles_ += 24; break; }
@@ -1888,7 +1948,7 @@ void Cpu::execute_one() {
         break;
     }
     case 0xfb: { // STI
-        if (state_.mode == CpuMode::real) { set_flag(IF, true); break; }
+        if (state_.mode == CpuMode::real) { set_flag(IF, true); sti_inhibit_ = true; break; }
         const u32 iopl = (state_.eflags >> 12) & 3u;
         if (state_.mode == CpuMode::virtual86) {
             if (state_.cr4 & 1u) {
@@ -1903,15 +1963,18 @@ void Cpu::execute_one() {
             } else {
                 raise_exception(13, 0, true);
             }
+            sti_inhibit_ = true;
             break;
         }
         if ((state_.cr4 & 2u) && cpl() == 3 && iopl < 3u) {
             if (state_.eflags & VIP) raise_exception(13, 0, true);
             state_.eflags |= VIF;
+            sti_inhibit_ = true;
             break;
         }
         if (cpl() > int(iopl)) raise_exception(13, 0, true);
         set_flag(IF, true);
+        sti_inhibit_ = true;
         break;
     }
     case 0xfc: set_flag(DF, false); break;
@@ -2142,10 +2205,11 @@ void Cpu::fpu_set_st(int i, long double v) {
     fpu_update_tag();
 }
 void Cpu::fpu_update_tag() {
+    // Tag bits are indexed by physical register R0..R7, not by stack position
+    // (Intel PRM Vol. 2, 7.3.6).
     state_.fpu_tag = 0;
-    for (int i = 0; i < 8; ++i) {
-        const int phys = (state_.fpu_top + i) & 7;
-        if (state_.fpu[phys].empty) state_.fpu_tag |= u16(3u << (i * 2));
+    for (int phys = 0; phys < 8; ++phys) {
+        if (state_.fpu[phys].empty) state_.fpu_tag |= u16(3u << (phys * 2));
     }
 }
 

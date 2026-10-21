@@ -10,8 +10,10 @@ void fail(const char* file, int line, const std::string& msg) {
 std::vector<TestCase>& registry() { static std::vector<TestCase> r; return r; }
 }
 
-int main() {
+int main(int argc, char** argv) {
+    const std::string filter = argc > 1 ? argv[1] : std::string();
     for (auto& t : oldbox::test::registry()) {
+        if (!filter.empty() && std::string(t.name).find(filter) == std::string::npos) continue;
         std::printf("[ RUN ] %s\n", t.name);
         try {
             t.fn();

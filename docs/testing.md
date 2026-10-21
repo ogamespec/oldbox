@@ -4,13 +4,16 @@
 ctest --test-dir build --output-on-failure
 # или
 ./build/oldbox_tests
+# только тесты, в имени которых есть подстрока:
+./build/oldbox_tests audit_
 ```
 
-326 тестов, сгруппированных по файлам:
+354 теста, сгруппированных по файлам:
 
 | Файл | Что проверяет |
 |---|---|
 | `test_cpu.cpp` | базовые ALU/флаги, строки, FPU, protected/paging/PAE, MSR |
+| `test_cpu_audit.cpp` | регрессии аудита 2026: MOV Sreg (#UD/#NP/#SS, zero-extension, запрет code→SS), STI shadow, LOOP/JCXZ EIP mask, 66/67 (включая повторные префиксы), стек по SS.B, V86 64K-доступ, IRET в V86 с CPL>0, невалидные кодировки, PACKSSDW, MMX-сдвиги, PMADDWD, MSR #GP, PE/PG в SMM, FPU 16-bit env/FNSAVE/FINIT, SGDT/SIDT 16-bit, accessed-bit, expand-down SS в call gate/task switch, #NP для LDT/TSS/CS |
 | `test_cpu_instructions.cpp` | ALU всех размеров, INC/DEC, NEG/NOT, MUL/DIV, сдвиги/вращения, BT/BTS/BTR/BTC со знаковыми смещениями, BSF/BSR, SETcc/CMOVcc, MOVZX/MOVSX, стек/call/popad, строки + REPZ/REPNE, BCD, ENTER/LEAVE/XLAT, IN/OUT, 16-битные near-переходы и LOOP |
 | `test_cpu_modes.cpp` | real 16/32, segment wrap, A20, protected limits, LDT, IDT error code 16/32, TSS ring3→ring0→ring3, call gates 16/32, task switching/IRET NT/TSS T-bit, 4K/PSE/PAE, WP, V86-сегментация/прерывания/IRET/VME, SGDT/LGDT layout |
 | `test_cpu_system.cpp` | CPUID 233/333/VME/кэш-дескрипторы, MSR PAT/MTRR/MCA/perf, unknown MSR #GP, SYSENTER/SYSEXIT, RDTSC/RDPMC, CMPXCHG/CMPXCHG8B, BOUND, LDS/LSS/LFS/LGS, far call, #NM, CR/DR/CLTS, debug-регистры и breakpoints, CLI privilege, ARPL/VERR/VERW/LAR/LSL, PUSHF/POPF/LAHF/SAHF/CMC, INTO, SMSW/LMSW/SIDT, XCHG/XADD/BSWAP, SMM |
@@ -48,6 +51,14 @@ ctest --test-dir build --output-on-failure
   `MOV CS`/BOUND (#UD), wrap IP в real mode, XLAT, SHLD/SHRD, IDIV overflow,
   адрес возобновления после исключения, V86/VME, BSWAP, группа 0F 01,
   VERR/VERW, task gate, FAR-переходы. Подробности — `docs/cpu-audit.md`.
+- Аудит 2026 (Pentium Pro Vol. 1–3 + Pentium II datasheet): zero-extension
+  `MOV r32,Sreg` и #UD для `/6,/7`, #NP/#SS при загрузке отсутствующего
+  сегмента, задержка STI, маска EIP у LOOP/JCXZ по operand-size, доступ
+  через границу 64K в V86, IRET в V86 только с CPL0, #UD для невалидных
+  форм групп 6/7/8, C6/C7, 0F C7 и LEA, PACKSSDW, насыщение MMX-сдвигов,
+  wrap PMADDWD, #GP для незадействованных MSR и fixed-MTRR, PE/PG в SMM,
+  форматы x87 environment 14/28 байт, сброс состояния FNSAVE/FINIT и
+  физическая индексация tag word. Регрессии — `test_cpu_audit.cpp`.
 
 Сквозной тест FreeDOS пропускается, если в `assets/` нет `EP-ZXA.bin` или
 `freedos1440.img` (они не входят в репозиторий). Он запускает машину на

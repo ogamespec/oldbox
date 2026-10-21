@@ -19,7 +19,8 @@ u64 Cpu::read_msr(u32 index) {
         const u64 v = deschutes_ ? 0x0000000000280000ull : 0x00000000001c0000ull;
         if (std::getenv("OLDBOX_MSR_TRACE")) std::fprintf(stderr, "MSR rd 0x2a = %016llx\n", (unsigned long long)v);
         return v; }
-    case 0x8b: return 0; // BIOS_UPDT_TRIG
+    case 0x79: return 0; // IA32_BIOS_UPDT_TRIG (write-only trigger; reads as zero)
+    case 0x8b: return msr_[0x8b]; // IA32_BIOS_SIGN_ID
     case 0xfe: return state_.mtrrcap; // fixed + 8 variable ranges + WC
     case 0x174: return state_.sysenter_cs;
     case 0x175: return state_.sysenter_esp;
@@ -37,6 +38,14 @@ u64 Cpu::read_msr(u32 index) {
     case 0x2ff: return state_.mtrrdef;
     default:
         if (index >= 0x200 && index <= 0x20f) return state_.mtrr[index - 0x200];
+        // IA32_MTRR_FIX64K/16K/4K (0x250-0x26F).  The emulator has no cache,
+        // so only the architectural storage is modelled.
+        if (index >= 0x250 && index <= 0x26f) return msr_[index];
+        // The P6/Pentium II MSR space below 0x200 contains several
+        // model-specific cache/BBL registers that are not listed in the
+        // Pentium Pro appendix; the firmware probes them.  Model them as
+        // plain storage (there is no cache to configure).
+        if (index < 0x200) return msr_[index];
         if (index >= 0x400 && index <= 0x413) {
             const u32 rel = index - 0x400;
             const u32 bank = rel < 12 ? rel / 4 : (rel < 16 ? 4 : 3);
@@ -47,7 +56,8 @@ u64 Cpu::read_msr(u32 index) {
             default: return mc_misc_[bank];
             }
         }
-        if (index < msr_.size()) return msr_[index];
+        // Unimplemented model-specific registers are not aliases of a
+        // scratch array: RDMSR raises #GP(0) for them (Intel PRM Vol. 2).
         throw CpuException{13, 0, true};
     }
 }
@@ -57,6 +67,7 @@ void Cpu::write_msr(u32 index, u64 value) {
     case 0x10: state_.tsc = value; return;
     case 0x1b: apic_base_ = (u32(value) & 0xfffff000u) | (u32(value) & 0x00000f00u); return;
     case 0x2a: msr_[index] = value; return;
+    case 0x79: return; // microcode update trigger; no microcode in the model
     case 0x8b: msr_[index] = value; return;
     case 0x174: state_.sysenter_cs = u32(value) & 0xfffffff8u; return;
     case 0x175: state_.sysenter_esp = u32(value); return;
@@ -75,6 +86,8 @@ void Cpu::write_msr(u32 index, u64 value) {
             state_.mtrr[index - 0x200] = value & 0x0000000fffffffffull;
             return;
         }
+        if (index >= 0x250 && index <= 0x26f) { msr_[index] = value; return; }
+        if (index < 0x200) { msr_[index] = value; return; }
         if (index >= 0x400 && index <= 0x413) {
             const u32 rel = index - 0x400;
             const u32 bank = rel < 12 ? rel / 4 : (rel < 16 ? 4 : 3);
@@ -90,12 +103,12 @@ void Cpu::write_msr(u32 index, u64 value) {
             default: mc_misc_[bank] = value; return;
             }
         }
-        if (index < msr_.size()) { msr_[index] = value; return; }
         throw CpuException{13, 0, true};
     }
 }
 
 void Cpu::load_ldt(u16 selector) {
+    if (selector & 4u) throw CpuException{13, u32(selector & ~3u), true}; // LLDT uses the GDT
     if ((selector & ~7u) == 0) {
         state_.ldtr = selector;
         ldt_base_ = ldt_limit_ = 0;
@@ -104,20 +117,21 @@ void Cpu::load_ldt(u16 selector) {
     if ((selector & ~7u) + 7 > state_.gdtr_limit) throw CpuException{13, selector & ~3u, true};
     const Descriptor d = read_descriptor(state_.gdtr_base, selector);
     const u8 type = d.access & 0x1f;
-    if (!(d.access & 0x80) || type != 0x02) throw CpuException{13, selector & ~3u, true};
+    if (type != 0x02) throw CpuException{13, selector & ~3u, true};
+    if (!(d.access & 0x80)) throw CpuException{11, u32(selector & ~3u), true};
     state_.ldtr = selector;
     ldt_base_ = d.base;
     ldt_limit_ = d.limit;
 }
 
 void Cpu::load_tr(u16 selector) {
-    if ((selector & ~7u) == 0 || (selector & ~7u) + 7 > state_.gdtr_limit)
-        throw CpuException{13, selector & ~3u, true};
+    if ((selector & ~7u) == 0 || (selector & 4u) || (selector & ~7u) + 7 > state_.gdtr_limit)
+        throw CpuException{13, selector & ~3u, true}; // LTR uses the GDT
     const Descriptor d = read_descriptor(state_.gdtr_base, selector);
     const u8 type = d.access & 0x0f;
     // LTR accepts only an available 16- or 32-bit TSS and marks it busy.
-    if (!(d.access & 0x80) || (type != 0x09 && type != 0x01))
-        throw CpuException{13, selector & ~3u, true};
+    if (type != 0x09 && type != 0x01) throw CpuException{13, selector & ~3u, true};
+    if (!(d.access & 0x80)) throw CpuException{11, u32(selector & ~3u), true};
     const u32 off = state_.gdtr_base + (selector & 0xfff8u);
     const u8 access = read_linear8_super(off + 5) | 0x02;
     write_linear8_super(off + 5, access);
@@ -258,7 +272,8 @@ void Cpu::do_task_switch(u16 selector, bool call, bool interrupt, bool iret) {
     if (state_.eip > cd.limit) throw CpuException{13, 0, true};
     if ((new_ss & ~7u) == 0) throw CpuException{10, u32(new_ss & ~3u), true};
     const Descriptor sd = read_descriptor_checked(new_ss);
-    if (!(sd.access & 0x10) || !(sd.access & 0x02) || (sd.access & 0x0c) != 0 ||
+    // SS must be a writable data segment; expand-down stacks are legal.
+    if (!(sd.access & 0x10) || !(sd.access & 0x02) || (sd.access & 0x08) != 0 ||
         ((sd.access >> 5) & 3) != new_cpl || (new_ss & 3) != new_cpl)
         throw CpuException{10, u32(new_ss & ~3u), true};
     if (!(sd.access & 0x80)) throw CpuException{11, u32(new_ss & ~3u), true};
@@ -328,6 +343,10 @@ void Cpu::enter_smm() {
     state_.smm = true;
     state_.smi_pending = false;
     state_.halted = false;
+    // The SMM execution environment has PE=0 and PG=0 (Intel PRM Vol. 3,
+    // 9.5).  The original CR0 stays in the state-save area and is restored
+    // by RSM.
+    state_.cr0 &= ~(1u | 0x80000000u);
     state_.mode = CpuMode::real;
     state_.seg[1].selector = 0;
     state_.seg[1].base = b;

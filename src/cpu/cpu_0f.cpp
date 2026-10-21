@@ -74,24 +74,29 @@ void Cpu::execute_0f() {
             set_flag(ZF, ok);
             break;
         }
-        default: exception_gp(0);
+        default: raise_exception(6); // group 6 has only /0../5
         }
         break;
     }
     case 0x01: { // group 7
         ModRm m = decode_modrm(opsize());
         switch (m.reg_field) {
-        case 0: { // SGDT: 16-bit limit followed by 32-bit base
+        case 0: { // SGDT: 16-bit limit followed by a 24- or 32-bit base
+            if (m.is_register) raise_exception(6); // pseudo-descriptor is memory-only
+            const u32 base = opsize() == 2 ? (state_.gdtr_base & 0x00ffffffu) : state_.gdtr_base;
             write_mem(m.offset, state_.gdtr_limit, 2, m.segment);
-            write_mem(m.offset + 2, state_.gdtr_base, 4, m.segment);
+            write_mem(m.offset + 2, base, 4, m.segment);
             break;
         }
         case 1: { // SIDT
+            if (m.is_register) raise_exception(6);
+            const u32 base = opsize() == 2 ? (state_.idtr_base & 0x00ffffffu) : state_.idtr_base;
             write_mem(m.offset, state_.idtr_limit, 2, m.segment);
-            write_mem(m.offset + 2, state_.idtr_base, 4, m.segment);
+            write_mem(m.offset + 2, base, 4, m.segment);
             break;
         }
         case 2: { // LGDT
+            if (m.is_register) raise_exception(6);
             if (cpl() != 0) exception_gp(0);
             const u16 limit = u16(read_mem(m.offset, 2, m.segment));
             u32 base = read_mem(m.offset + 2, 4, m.segment);
@@ -101,6 +106,7 @@ void Cpu::execute_0f() {
             state_.gdtr_base = base; state_.gdtr_limit = limit; flush_tlb(); break;
         }
         case 3: { // LIDT
+            if (m.is_register) raise_exception(6);
             if (cpl() != 0) exception_gp(0);
             const u16 limit = u16(read_mem(m.offset, 2, m.segment));
             u32 base = read_mem(m.offset + 2, 4, m.segment);
@@ -109,8 +115,9 @@ void Cpu::execute_0f() {
         }
         case 4: write_rm(m, state_.cr0 & 0xffffu, 2); break; // SMSW
         case 5:
-            logf(LogLevel::debug, "cpu", "0F 01 /5 reserved");
-            break;
+            // /5 is not defined on the Pentium Pro/Pentium II (MONITOR/MWAIT
+            // were introduced with SSE3-era processors).
+            raise_exception(6);
         case 6: { // LMSW
             if (cpl() != 0) exception_gp(0);
             const u16 v = u16(read_rm(m, 2));
@@ -119,15 +126,14 @@ void Cpu::execute_0f() {
             flush_tlb();
             break;
         }
-        case 7: { // INVLPG
+        case 7: { // INVLPG (memory operand only)
+            if (m.is_register) raise_exception(6);
             if (cpl() != 0) exception_gp(0);
             invalidate_tlb_page(m.linear);
             break;
         }
         default:
-            // MONITOR/MWAIT/SWAPGS/RDTSCP/CLAC/STAC encodings share this group.
-            logf(LogLevel::debug, "cpu", "0F 01 /{} ignored", m.reg_field);
-            break;
+            raise_exception(6);
         }
         break;
     }
@@ -282,7 +288,9 @@ void Cpu::execute_0f() {
         const u16 cs = u16(state_.sysenter_cs);
         if ((cs & ~7u) == 0 || (cs & ~7u) + 7 > state_.gdtr_limit) exception_gp(0);
         const Descriptor d = read_descriptor(state_.gdtr_base, cs);
-        if (!(d.access & 0x80) || !(d.access & 0x08)) exception_gp(0);
+        if (!(d.access & 0x08)) exception_gp(0);
+        if (!(d.access & 0x80)) throw CpuException{11, u32(cs & ~3u), true};
+        set_descriptor_accessed(cs);
         state_.seg[unsigned(SegReg::cs)].selector = cs;
         state_.seg[unsigned(SegReg::cs)].base = d.base;
         state_.seg[unsigned(SegReg::cs)].limit = d.limit;
@@ -292,6 +300,7 @@ void Cpu::execute_0f() {
         const u16 ss = u16(cs + 8);
         if ((ss & ~7u) + 7 <= state_.gdtr_limit) {
             const Descriptor sd = read_descriptor(state_.gdtr_base, ss);
+            set_descriptor_accessed(ss);
             state_.seg[unsigned(SegReg::ss)].selector = ss;
             state_.seg[unsigned(SegReg::ss)].base = sd.base;
             state_.seg[unsigned(SegReg::ss)].limit = sd.limit;
@@ -313,6 +322,8 @@ void Cpu::execute_0f() {
         if ((cs & ~7u) + 7 > state_.gdtr_limit || (ss & ~7u) + 7 > state_.gdtr_limit) exception_gp(0);
         const Descriptor cd = read_descriptor(state_.gdtr_base, cs);
         const Descriptor sd = read_descriptor(state_.gdtr_base, ss);
+        set_descriptor_accessed(cs);
+        set_descriptor_accessed(ss);
         state_.seg[unsigned(SegReg::cs)] = Segment{cs, cd.base, cd.limit, cd.access, cd.flags, true};
         state_.seg[unsigned(SegReg::ss)] = Segment{ss, sd.base, sd.limit, sd.access, sd.flags, true};
         state_.eip = state_.gpr[2];
@@ -510,6 +521,7 @@ void Cpu::execute_0f() {
     case 0xba: { // group 8 BT/BTS/BTR/BTC imm8
         const int size = opsize();
         ModRm m = decode_modrm(size);
+        if (m.reg_field < 4) raise_exception(6); // /0../3 undefined
         const u32 bit = fetch8();
         u32 v = read_rm(m, size);
         // The immediate field only encodes the low 3/5 bits; the processor
@@ -549,8 +561,9 @@ void Cpu::execute_0f() {
     }
     case 0xc7: { // CMPXCHG8B / RDRAND etc.
         const ModRm m = decode_modrm(4);
-        if (m.reg_field == 1) {
-            if (m.is_register) exception_gp(0);
+        if (m.reg_field != 1) raise_exception(6); // only /1 is defined on P6
+        if (m.is_register) raise_exception(6);    // m64 operand is memory-only
+        {
             const u32 lo = read_mem(m.offset, 4, m.segment);
             const u32 hi = read_mem(m.offset + 4, 4, m.segment);
             const u64 value = (u64(hi) << 32) | lo;
@@ -563,7 +576,7 @@ void Cpu::execute_0f() {
                 set_flag(ZF, false);
                 state_.gpr[0] = lo; state_.gpr[2] = hi;
             }
-        } else log(LogLevel::warn, "cpu", "unsupported 0F C7 group");
+        }
         break;
     }
     case 0xc8: case 0xc9: case 0xca: case 0xcb: case 0xcc: case 0xcd: case 0xce: case 0xcf: {
@@ -610,7 +623,10 @@ void Cpu::execute_0f() {
             const u64 packed_a = out_unit == 1 ? u64(sat_s8(i16(as))) : u64(sat_s16(as));
             const u64 packed_b = out_unit == 1 ? u64(sat_s8(i16(bs))) : u64(sat_s16(bs));
             r |= packed_a << (i * out_unit * 8);
-            r |= packed_b << ((i + 4) * out_unit * 8);
+            // The second operand is packed after the first: a dword->word
+            // pack has only two source lanes per operand, so B starts at word
+            // 2, not at word 4.
+            r |= packed_b << ((i + 64 / (unit * 8)) * out_unit * 8);
         }
         write_mmx_field(m, r);
         break;
@@ -672,44 +688,47 @@ void Cpu::execute_0f() {
     }
     case 0x71: case 0x72: case 0x73: { // shift groups by imm8
         const ModRm m = decode_modrm(4);
-        u64 v = (m.is_register ? state_.mmx[m.rm] : read64(m));
-        const u8 imm = fetch8();
+        if (!m.is_register) raise_exception(6); // immediate form requires an MMX register
+        u64 v = state_.mmx[m.rm];
+        const u32 count = fetch8();
         const int unit = op == 0x71 ? 2 : (op == 0x72 ? 4 : 8);
+        const int bits = unit * 8;
+        const u64 mask = (bits == 64) ? ~0ull : ((1ull << bits) - 1);
         switch (m.reg_field) {
-        case 2: // PSRL
-            for (int i = 0; i < 64 / (unit * 8); ++i) {
-                const u64 mask = (unit * 8 == 64) ? ~0ull : ((1ull << (unit * 8)) - 1);
-                u64 lane = (v >> (i * unit * 8)) & mask;
-                lane = (lane >> imm) & mask;
-                v = (v & ~(mask << (i * unit * 8))) | (lane << (i * unit * 8));
+        case 2: // PSRL: a count at or above the lane width shifts in zeros
+            for (int i = 0; i < 64 / bits; ++i) {
+                u64 lane = (v >> (i * bits)) & mask;
+                lane = count >= u32(bits) ? 0 : (lane >> count);
+                v = (v & ~(mask << (i * bits))) | ((lane & mask) << (i * bits));
             }
             break;
-        case 4: // PSRA
-            for (int i = 0; i < 64 / (unit * 8); ++i) {
-                const u64 mask = (unit * 8 == 64) ? ~0ull : ((1ull << (unit * 8)) - 1);
-                i64 lane = i64((v >> (i * unit * 8)) & mask);
-                if (lane & (1ll << (unit * 8 - 1))) lane -= i64(1ull << (unit * 8));
-                lane >>= imm;
-                v = (v & ~(mask << (i * unit * 8))) | ((u64(lane) & mask) << (i * unit * 8));
+        case 4: // PSRA: shifts in the sign bit
+            for (int i = 0; i < 64 / bits; ++i) {
+                i64 lane = i64((v >> (i * bits)) & mask);
+                if (lane & (1ll << (bits - 1))) lane -= i64(1ull << bits);
+                if (count >= u32(bits)) lane = lane < 0 ? -1 : 0;
+                else lane >>= count;
+                v = (v & ~(mask << (i * bits))) | ((u64(lane) & mask) << (i * bits));
             }
             break;
         case 3: // PSRLDQ (only opcode 73)
-            if (op == 0x73) v = imm >= 8 ? 0 : (v >> (imm * 8));
+            if (op != 0x73) raise_exception(6);
+            v = count >= 8 ? 0 : (v >> (count * 8));
             break;
         case 7: // PSLLDQ (only opcode 73)
-            if (op == 0x73) v = imm >= 8 ? 0 : (v << (imm * 8));
+            if (op != 0x73) raise_exception(6);
+            v = count >= 8 ? 0 : (v << (count * 8));
             break;
-        case 6: // PSLL
-            for (int i = 0; i < 64 / (unit * 8); ++i) {
-                const u64 mask = (unit * 8 == 64) ? ~0ull : ((1ull << (unit * 8)) - 1);
-                u64 lane = (v >> (i * unit * 8)) & mask;
-                lane = (lane << imm) & mask;
-                v = (v & ~(mask << (i * unit * 8))) | (lane << (i * unit * 8));
+        case 6: // PSLL: a count at or above the lane width shifts in zeros
+            for (int i = 0; i < 64 / bits; ++i) {
+                u64 lane = (v >> (i * bits)) & mask;
+                lane = count >= u32(bits) ? 0 : (lane << count) & mask;
+                v = (v & ~(mask << (i * bits))) | (lane << (i * bits));
             }
             break;
-        default: break;
+        default: raise_exception(6);
         }
-        if (m.is_register) state_.mmx[m.rm] = v; else write64(m, v);
+        state_.mmx[m.rm] = v;
         break;
     }
     case 0x77: break; // EMMS
@@ -726,21 +745,23 @@ void Cpu::execute_0f() {
     case 0xd1: case 0xd2: case 0xd3: case 0xe1: case 0xe2: case 0xf1: case 0xf2: case 0xf3: { // MMX shifts by mm/m64
         const ModRm m = decode_modrm(4);
         u64 v = state_.mmx[m.reg_field];
-        const u64 count = read64(m) & 0x3f;
+        const u64 count = read64(m);
         const bool left = (op & 0xf0) == 0xf0;
         const bool arithmetic = op == 0xe1 || op == 0xe2;
         const int unit = (op == 0xd1 || op == 0xe1 || op == 0xf1) ? 2 : ((op == 0xd2 || op == 0xe2 || op == 0xf2) ? 4 : 8);
-        for (int i = 0; i < 64 / (unit * 8); ++i) {
-            const u64 mask = (unit * 8 == 64) ? ~0ull : ((1ull << (unit * 8)) - 1);
-            u64 lane = (v >> (i * unit * 8)) & mask;
-            if (left) lane = (lane << count) & mask;
+        const int bits = unit * 8;
+        const u64 mask = (bits == 64) ? ~0ull : ((1ull << bits) - 1);
+        for (int i = 0; i < 64 / bits; ++i) {
+            u64 lane = (v >> (i * bits)) & mask;
+            if (left) lane = count >= u64(bits) ? 0 : ((lane << count) & mask);
             else if (arithmetic) {
                 i64 sl = i64(lane);
-                if (sl & (1ll << (unit * 8 - 1))) sl -= i64(1ull << (unit * 8));
-                sl >>= count;
+                if (sl & (1ll << (bits - 1))) sl -= i64(1ull << bits);
+                if (count >= u64(bits)) sl = sl < 0 ? -1 : 0;
+                else sl >>= count;
                 lane = u64(sl) & mask;
-            } else lane >>= count;
-            v = (v & ~(mask << (i * unit * 8))) | (lane << (i * unit * 8));
+            } else lane = count >= u64(bits) ? 0 : (lane >> count);
+            v = (v & ~(mask << (i * bits))) | (lane << (i * bits));
         }
         write_mmx_field(m, v);
         break;
@@ -873,10 +894,10 @@ void Cpu::execute_0f() {
         case 0xf4: // PMULUDQ
             r = u64(u32(a)) * u64(u32(b));
             break;
-        case 0xf5: { // PMADDWD
+        case 0xf5: { // PMADDWD: the two 32-bit products are added with modulo-2^32 wrap
             for (int i = 0; i < 2; ++i) {
-                const i32 p0 = i32(i16(u16(a >> (i * 32)))) * i32(i16(u16(b >> (i * 32))));
-                const i32 p1 = i32(i16(u16(a >> (i * 32 + 16)))) * i32(i16(u16(b >> (i * 32 + 16))));
+                const i64 p0 = i64(i16(u16(a >> (i * 32)))) * i64(i16(u16(b >> (i * 32))));
+                const i64 p1 = i64(i16(u16(a >> (i * 32 + 16)))) * i64(i16(u16(b >> (i * 32 + 16))));
                 r |= u64(u32(p0 + p1)) << (i * 32);
             }
             break;

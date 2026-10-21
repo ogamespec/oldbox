@@ -103,8 +103,9 @@ py -3 tools\make_freedos_floppy.py
 `prepare_assets.py` извлекает BIOS/VGA ROM из `specs\` и создаёт пустую
 дискету. `make_freedos_floppy.py` по умолчанию берёт FreeDOS-образ
 `assets\floppy\awardflash1440.img`; если его нет, укажите любой
-FreeDOS 1.2 floppy через `--base`. Если `freedos1440.img` отсутствует,
-сквозной тест FreeDOS просто пропускается, остальные 219 тестов идут.
+FreeDOS 1.2 floppy через `--base`. Если `freedos1440.img` отсутствует
+(или это установочная дискета FD-SETUP без оболочки), сквозной тест FreeDOS
+просто пропускается, остальные 354 теста идут.
 
 ## Запуск
 

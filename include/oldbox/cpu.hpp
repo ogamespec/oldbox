@@ -89,6 +89,7 @@ struct CpuState {
     u16 fpu_status = 0;
     u16 fpu_tag = 0xffff;
     u32 fpu_last_ip = 0;
+    u16 fpu_last_cs = 0;
     u16 fpu_last_op = 0;
     bool fpu_invalid = false;
 };
@@ -249,6 +250,7 @@ private:
     std::function<void(const CpuState&, u16)> trace_;
     bool memory_logging_ = false;
     bool ss_inhibit_ = false;
+    bool sti_inhibit_ = false;
     int cpl_override_ = -1;
     bool debug_suppress_ = false;
     u32 debug_pending_ = 0;
@@ -261,6 +263,8 @@ private:
     // Prefixes for the current instruction.
     bool opsize32_ = false;
     bool addrsize32_ = false;
+    bool opsize_prefix_seen_ = false;
+    bool addrsize_prefix_seen_ = false;
     bool rep_ = false;
     bool repne_ = false;
     bool lock_ = false;
@@ -288,7 +292,7 @@ private:
     [[nodiscard]] u32 seg_limit(SegReg s) const { return state_.seg[unsigned(s)].limit; }
     [[nodiscard]] u32 offset_mask(int address_size) const;
     [[nodiscard]] u32 near_ip(u32 v) const;
-    [[nodiscard]] u32 near_ip_addr(u32 v) const;
+    [[nodiscard]] u32 loop_ip(u32 v) const;
     [[nodiscard]] bool stack32() const {
         return state_.mode == CpuMode::protected_mode && (state_.seg[unsigned(SegReg::ss)].flags & 0x40) != 0;
     }
@@ -331,6 +335,7 @@ private:
     void load_cs_far_8086(u16 selector, u32 offset, bool wide);
     [[nodiscard]] Descriptor read_descriptor(u32 base, u16 selector);
     [[nodiscard]] Descriptor read_descriptor_checked(u16 selector);
+    void set_descriptor_accessed(u16 selector);
     void do_far_transfer(u16 selector, u32 offset, bool call, int size);
     void do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bool call, int size);
     void do_task_switch(u16 tss_selector, bool call, bool interrupt, bool iret);

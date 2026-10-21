@@ -1013,14 +1013,15 @@ TEST(cpu_near_branch_16bit_operand_masks_eip) {
     CHECK_EQ(g.eip(), 2u);
 }
 
-TEST(cpu_loop_uses_address_size_for_eip_mask) {
+TEST(cpu_loop_uses_operand_size_for_eip_mask) {
     CpuHarness h;
     h.enter_flat_protected();
     h.set_eip(0x10000); h.code = 0x10000;
     h.set_r(1, 2); // ECX
-    // Address-size override selects CX and a 16-bit EIP update.  After the
-    // instruction EIP is 0x10003, so displacement -2 lands at offset 1.
-    h.emit(0x67); h.emit(0xe2); h.emit(0xfe); // loop rel8
+    // The 16-bit operand-size prefix changes the target EIP masking, while the
+    // address-size attribute (32 bits here) still selects ECX as the counter.
+    // After the instruction EIP is 0x10003, so displacement -2 wraps to 1.
+    h.emit(0x66); h.emit(0xe2); h.emit(0xfe); // loop rel8
     h.bus.write8(0x00001, 0xf4);
     h.run(4);
     CHECK(h.cpu.halted());

@@ -206,7 +206,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 328 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 354 теста — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -214,7 +214,8 @@ BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, ст�
 V86-monitor и VME (IDT/TSS-стек, IOPL, redirection bitmap, VIF/VIP),
 call/task gates, 16/32-битные TSS, IRET NT, debug-регистры и breakpoints,
 PGE/PVI/AC, machine check, MTRR/perf MSR, APIC priority/timer, SMM
-(LDT/auto-HALT/NMI), x87 FPREM/FSINCOS/FPTAN/FXTRACT, paging 4K/PSE/PAE,
+(LDT/auto-HALT/NMI), x87 FPREM/FSINCOS/FPTAN/FXTRACT, 16/32-битные
+real/protected форматы FPU environment, paging 4K/PSE/PAE,
 page-fault error code, MSR/CPUID/SYSENTER, I/O-привилегии и bitmap,
 A20/port 0x92/8042, PCI/BAR, Voodoo-растеризация, S3/VGA (CRTC
 start/cursor high/low, byte mode, CR9 DBL SCN), клавиатура (SDL scancode ->
