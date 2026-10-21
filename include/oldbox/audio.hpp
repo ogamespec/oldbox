@@ -2,6 +2,9 @@
 #include "oldbox/bus.hpp"
 #include "oldbox/config.hpp"
 #include <functional>
+#include <span>
+#include <string>
+#include <vector>
 
 namespace oldbox {
 
@@ -22,6 +25,11 @@ public:
     [[nodiscard]] u16 read_data();
     void render(i16* out, u32 frames, u32 host_rate);
     void set_rom(std::span<const u8> rom);
+    // Load an SF2 SoundFont and lay its sample data out in sound ROM.  The
+    // 1 MiB E-mu "1mgm" bank shipped in assets/audio is the AWE32-class GM
+    // set; SF2 is used because the raw AWE64 ROM dump is not available.
+    bool load_sf2(std::span<const u8> data);
+    bool load_sf2_file(const std::string& path);
     [[nodiscard]] std::span<const u8> rom() const { return rom_; }
     [[nodiscard]] u32 active_voices() const;
 
@@ -74,24 +82,48 @@ private:
 
         u32 address = 0;         // 24-bit sound memory word address
         u32 loop_start = 0, loop_end = 0;
+        u32 sample_end = 0;      // one past the last word of a one-shot
         u32 env_stage = env_off, env_count = 0;
         u32 mod_stage = env_off, mod_count = 0;
-        float env_coeff = 0.0f;
+        float env_coeff = 0.0f, mod_coeff = 0.0f;
+        bool env_coeff_valid = false, mod_coeff_valid = false;
+        u32 lfo1_delay = 0, lfo2_delay = 0;
         bool active = false;
         bool released = false;
         bool note_held = false;
+        bool one_shot = false;
         int midi_note = -1;
         int midi_channel = -1;
         int program = 0;
     };
 
     struct RomSample {
-        u32 start = 0;
-        u32 loop_start = 0;
-        u32 loop_end = 0;
+        u32 start = 0;           // first word of sample data in sound ROM
+        u32 loop_start = 0;      // first word of the loop (actual address)
+        u32 loop_end = 0;        // one past the last looped word
+        u32 sample_end = 0;      // one past the last word for one-shots
         u32 root_note = 60;
+        u32 sample_rate = 44100;
+        i32 tune_cents = 0;
+        u16 attenuation = 0;     // SoundFont centibels (0.1 dB)
+        i16 pan = 0;             // SoundFont pan, -500..+500
         u16 program = 0;
         bool loop = false;
+        bool one_shot = false;
+    };
+
+    // One selectable layer of an SF2 preset.
+    struct Sf2Zone {
+        RomSample sample;
+        u8 key_lo = 0, key_hi = 127;
+        u8 vel_lo = 0, vel_hi = 127;
+    };
+    struct Sf2Preset {
+        u16 bank = 0, program = 0;
+        std::vector<Sf2Zone> zones;
+    };
+    struct SampleChoice {
+        const RomSample* sample = nullptr;
     };
 
     static constexpr int voice_count = 32;
@@ -102,6 +134,8 @@ private:
     std::vector<u16> dram_;
     std::array<RomSample, 16> bank_{};
     u32 bank_count_ = 0;
+    std::vector<Sf2Preset> sf2_presets_;
+    u32 zero_loop_start_ = 0;
     bool external_rom_ = false;
 
     u16 pointer_ = 0;
@@ -112,13 +146,19 @@ private:
     u8 midi_volume_[16]{};
     u8 midi_pan_[16]{};
     i16 midi_bend_[16]{};
+    bool midi_sustain_[16]{};
 
     // Global registers implemented by the card.
     u32 hwcf4_ = 0, hwcf5_ = 0, hwcf6_ = 0;
-    u32 smalr_ = 0, smarr_ = 0, smalw_ = 0, smarw_ = 0;
-    u16 smld_write_ = 0, smrd_write_ = 0, smld_read_ = 0, smrd_read_ = 0;
+    // Sound-memory DMA read addresses and prefetch registers are updated by
+    // register reads, so they are mutable in the const register view.
+    mutable u32 smalr_ = 0, smarr_ = 0;
+    u32 smalw_ = 0, smarw_ = 0;
+    u16 smld_write_ = 0, smrd_write_ = 0;
+    mutable u16 smld_read_ = 0, smrd_read_ = 0;
     u16 hwcf1_ = 0, hwcf2_ = 0, hwcf3_ = 0;
-    std::array<u16, 4> init_regs_{};
+    // INIT1..INIT4 are 32-entry word arrays, one entry per channel.
+    std::array<std::array<u16, voice_count>, 4> init_regs_{};
 
     std::array<float, render_ring_size * 2> ring_{};
     u64 generated_ = 0;
@@ -141,6 +181,7 @@ private:
     void start_voice(unsigned ch);
     void release_voice(unsigned ch);
     void update_envelope(Voice& v, u32 samples);
+    void update_mod_envelope(Voice& v, u32 samples);
     [[nodiscard]] float pitch_ratio(const Voice& v) const;
     [[nodiscard]] float volume_gain(const Voice& v) const;
     [[nodiscard]] float cutoff_hz(const Voice& v) const;
@@ -148,7 +189,8 @@ private:
     [[nodiscard]] float sample_at(u32 address) const;
     void render_internal(float& l, float& r);
     void generate_internal(u32 frames);
-    [[nodiscard]] const RomSample& sample_for(u32 midi_channel, u32 note) const;
+    [[nodiscard]] SampleChoice choose_sample(u32 midi_channel, u32 note, u32 velocity) const;
+    [[nodiscard]] bool dma_stream_active(u8 mode) const;
     [[nodiscard]] int allocate_voice(u32 midi_channel, u32 note);
 };
 

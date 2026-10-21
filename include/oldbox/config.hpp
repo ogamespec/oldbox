@@ -23,6 +23,9 @@ struct AudioConfig {
     u8 dma16 = 5;
     bool enabled = true;
     u32 sample_rate = 44100;
+    // SF2 wavetable bank used to build the EMU8000 sound ROM.  The E-mu
+    // "1mgm" 1 MiB General MIDI set matches the AWE32-class ROM size.
+    std::string wavetable = "assets/audio/1mgm.sf2";
 };
 
 struct StorageConfig {
