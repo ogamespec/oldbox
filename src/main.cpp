@@ -223,6 +223,7 @@ int main(int argc, char** argv) {
             }
         }
         std::printf("%s\n", machine.status_text().c_str());
+        if (cli.config.jit_stats) std::printf("%s", machine.cpu().jit_statistics().c_str());
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "oldbox: %s\n", e.what());

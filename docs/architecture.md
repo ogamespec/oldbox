@@ -32,10 +32,18 @@
     прерывания, строковые операции;
   - `cpu_0f.cpp` — двухбайтовые опкоды, CPUID, MSR-доступы, CMOV, MMX;
   - `cpu_system.cpp` — MSR, LDT/TR, TSS switch;
-  - `cpu_x87.cpp` — x87 FPU.
+  - `cpu_x87.cpp` — x87 FPU;
+  - `jit.cpp` — опциональный baseline-JIT IA-32 -> x86-64 (`--jit`):
+    кэш базовых блоков, трансляция целочисленного ядра, helper-вызовы для
+    памяти/стека/сегментов/I/O и fallback в интерпретатор. JIT не заменяет
+    эталонную модель: `Cpu::step()` сначала пробует блок, а при
+    неподдержанной инструкции выполняет один шаг интерпретатором.
 - `src/chipset/` — i440BX/PIIX4, PIC, PIT, RTC, DMA, 8042, SMBus.
 - `src/cpu/apic.cpp` — локальный APIC Pentium II (это блок процессора,
   не чипсета).
+- `src/cpu/jit.cpp` — транслятор и кэш блоков; тесты
+  `tests/test_jit.cpp` сравнивают состояние после одних и тех же программ,
+  исполненных интерпретатором и JIT.
 - `src/video/` — S3 Trio64 (VGA + 2D engine) и Voodoo SST-1 (FBI/TMU).
 - `src/audio/` — SB16 DSP, CT1745 mixer, MPU-401, EMU8000, OPL3.
 - `src/storage/` — PIIX4 IDE/ATA/ATAPI и 82077AA FDC.
