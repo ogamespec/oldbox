@@ -20,6 +20,10 @@ public:
     void set_dreq(int channel, bool level);
     std::optional<u8> read_byte(int channel);
     bool write_byte(int channel, u8 value);
+    // 16-bit ISA DMA channels transfer words: the address advances by two
+    // bytes and the count decrements once per 16-bit transfer.
+    std::optional<u16> read_word16(int channel);
+    bool write_word16(int channel, u16 value);
     bool advance(int channel, u32 bytes);
     [[nodiscard]] bool active(int channel) const { return channels_[channel & 7].active; }
     [[nodiscard]] std::string status() const;

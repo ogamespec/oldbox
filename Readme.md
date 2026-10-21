@@ -206,7 +206,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 354 теста — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 366 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -267,8 +267,11 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
   реализованы; упрощён порядок редких ошибок #TS/#GP при повреждённых TSS и
   VME method 3 для аппаратных прерываний.
 - SSE/FXSR не эмулируются (у выбранных Klamath/Deschutes их нет).
-- AWE64 Gold ROM (4 MiB) отсутствует в `specs/`; по умолчанию генерируется
-  1 MiB банк, `load_rom()` принимает внешний дамп.
+- AWE64 Gold ROM (4 MiB) отсутствует в `specs/`; по умолчанию загружается
+  1 MiB E-mu GM SoundFont [assets/audio/1mgm.sf2](assets/audio/1mgm.sf2),
+  из которого собирается wavetable-банк EMU8000. Если файл не найден,
+  используется встроенный процедурный банк; `load_rom()` по-прежнему
+  принимает внешний дамп.
 - Voodoo: tDetail, часть texture-combine, NCC I/Q, gamma CLUT и triple
   buffering не реализованы; см. docs/voodoo.md.
 - ATA bus-master/UDMA и CD-DA не реализованы; PIO/ATAPI достаточно для

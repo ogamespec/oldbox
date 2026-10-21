@@ -10,6 +10,7 @@
 #include "oldbox/dma.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace oldbox {
@@ -26,11 +27,19 @@ constexpr float kTwoPi = 6.283185307179586f;
     return i16(std::lround(clampf(v, -32768.0f, 32767.0f)));
 }
 
-// 0..max mixer level to a linear gain, about 60 dB of range.
-[[nodiscard]] float level_gain(u8 value, u8 maximum) {
+[[nodiscard]] u32 adpcm_frame_count(u32 bytes, u8 bits, bool reference) {
+    if (bytes == 0 || bits == 0) return 0;
+    const u32 data_bytes = bytes - (reference ? 1u : 0u);
+    return (reference ? 1u : 0u) + (data_bytes * 8u) / bits;
+}
+
+// Mixer level to linear gain.  The CT1745 uses 2 dB steps over 62 dB for
+// the 5-bit controls, 4 dB steps over 60 dB for the compatibility controls
+// and 6 dB steps over 18 dB for the PC-speaker control.
+[[nodiscard]] float level_gain(u8 value, u8 maximum, float range_db) {
     if (maximum == 0 || value == 0) return 0.0f;
     if (value >= maximum) return 1.0f;
-    return std::pow(10.0f, -60.0f * (1.0f - float(value) / float(maximum)) / 20.0f);
+    return std::pow(10.0f, -range_db * (1.0f - float(value) / float(maximum)) / 20.0f);
 }
 
 } // namespace
@@ -45,6 +54,16 @@ Awe64::Awe64(Bus& bus, Dma& dma, const AudioConfig& cfg, u32 cpu_mhz, IrqFn irq)
     bus_.map_io(0x388, 4, this, "OPL3");
     reset_mixer();
     reset();
+    // The AWE64 Gold ROM dump is not available; use the 1 MiB E-mu GM
+    // SoundFont shipped with the project.  A relative path is enough for
+    // the normal run-from-the-repository layout, and the parent fallbacks
+    // cover starting the binary from build/ or a preset directory.
+    const std::array<std::string, 4> candidates = {
+        cfg_.wavetable, "assets/audio/1mgm.sf2",
+        "../assets/audio/1mgm.sf2", "../../assets/audio/1mgm.sf2"};
+    for (const std::string& path : candidates) {
+        if (!path.empty() && emu_.load_sf2_file(path)) break;
+    }
 }
 
 Awe64::~Awe64() {
@@ -79,9 +98,9 @@ void Awe64::reset_mixer() {
     mixer_[0x39] = 0x00;
     mixer_[0x3a] = 0x00;
     mixer_[0x3b] = 0x00;
-    mixer_[0x3c] = 0x1f;
-    mixer_[0x3d] = 0x51;
-    mixer_[0x3e] = 0xa2;
+    mixer_[0x3c] = 0x1f; // output switches: Line.L/R, CD.L/R, Mic
+    mixer_[0x3d] = 0x15; // input L: Line.L, CD.L, Mic
+    mixer_[0x3e] = 0x0b; // input R: Line.R, CD.R, Mic
     mixer_[0x3f] = 0x00;
     mixer_[0x40] = 0x00;
     mixer_[0x41] = 0x00;
@@ -119,6 +138,7 @@ void Awe64::reset_mixer() {
 void Awe64::reset() {
     stop_dma();
     reset_mixer();
+    mixer_index_ = 0;
     if (irq_pending_) {
         irq_pending_ = false;
         if (irq_) irq_(cfg_.irq, false);
@@ -135,7 +155,6 @@ void Awe64::reset() {
     dma_record_ = false;
     dma_stereo_ = false;
     dma_signed_ = false;
-    dma_bytes_per_sample_ = 1;
     dma_block_frames_ = 0;
     dma_frames_left_ = 0;
     dsp_block_size_ = 0;
@@ -147,12 +166,20 @@ void Awe64::reset() {
     dma_adpcm_ref_ = false;
     dma_adpcm_first_ = true;
     dma_adpcm_half_ = 0;
+    dma_adpcm_byte_ = 0;
+    dma_adpcm_acc_ = 0;
+    dma_adpcm_bits_left_ = 0;
     direct_l_ = direct_r_ = 0;
     last_dac_l_ = last_dac_r_ = 0;
     direct_active_ = false;
     speaker_on_ = false;
     sb_uart_ = false;
+    sb_midi_in_ = false;
+    dsp_high_speed_ = false;
     midi_out_pending_ = false;
+    dsp_time_constant_ = 0;
+    rate_from_tc_ = false;
+    dma_word_channel_ = false;
     silence_samples_ = 0;
     silence_irq_ = false;
     mpu_uart_ = false;
@@ -195,6 +222,11 @@ void Awe64::dsp_reset() {
     dsp_queue(0xaa);
     sample_rate_ = 22050;
     speaker_on_ = false;
+    sb_uart_ = false;
+    sb_midi_in_ = false;
+    dsp_high_speed_ = false;
+    midi_out_pending_ = false;
+    rate_from_tc_ = false;
     silence_samples_ = 0;
     silence_irq_ = false;
     clear_irq(0x01);
@@ -219,6 +251,9 @@ u8 Awe64::dsp_read() {
 }
 
 void Awe64::dsp_write(u8 value) {
+    // In high-speed DMA mode the DSP accepts no commands (a reset is
+    // performed through port 2x6h instead).
+    if (dsp_high_speed_) return;
     if (midi_out_pending_) {
         midi_out_pending_ = false;
         midi_feed(value);
@@ -232,15 +267,15 @@ void Awe64::dsp_write(u8 value) {
         dsp_command_ = value;
         dsp_params_.clear();
         u8 need = 0;
-        if (value == 0x10 || value == 0x38 || value == 0x40) {
+        if (value == 0x10 || value == 0x40) {
             need = 1;
         } else if (value == 0x14 || value == 0x16 || value == 0x17 || value == 0x24 ||
-                   value == 0x74 || value == 0x75 || value == 0x76 || value == 0x77) {
-            need = 2;
-        } else if (value == 0x41 || value == 0x42 || value == 0x48 || value == 0x80) {
+                   value == 0x74 || value == 0x75 || value == 0x76 || value == 0x77 ||
+                   value == 0x41 || value == 0x42 || value == 0x48 || value == 0x80) {
             need = 2;
         } else if (value >= 0xb0 && value <= 0xcf) {
-            need = 4;
+            // Bxh/Cxh: bMode, wLength.LowByte, wLength.HighByte.
+            need = 3;
         }
         dsp_params_needed_ = need;
         if (need == 0) dsp_execute();
@@ -280,20 +315,25 @@ void Awe64::dsp_execute() {
         start_dma(0, frames, 0x81);
         break;
     }
-    case 0x40: { // time constant
-        const u32 tc = p(0);
-        const u32 divisor = 65536u - (tc << 8);
+    case 0x20: // direct 8-bit ADC, no analog input modelled
+        dsp_queue(0x80);
+        break;
+    case 0x40: { // time constant (re-applied when the DMA mode is known)
+        dsp_time_constant_ = p(0);
+        rate_from_tc_ = true;
+        const u32 divisor = 65536u - (u32(dsp_time_constant_) << 8);
         const u32 channels = dma_stereo_ ? 2u : 1u;
         if (divisor > 0) {
-            u32 rate = 256000000u / (divisor * channels);
-            sample_rate_ = std::clamp(rate, 4000u, 45000u);
+            const u32 rate = 256000000u / (divisor * channels);
+            sample_rate_ = std::clamp(rate, 5000u, 45000u);
         }
         break;
     }
     case 0x41: // output sample rate
     case 0x42: { // input sample rate
-        u32 rate = (u32(p(0)) << 8) | p(1);
-        sample_rate_ = std::clamp(rate, 4000u, 45000u);
+        const u32 rate = (u32(p(0)) << 8) | p(1);
+        sample_rate_ = std::clamp(rate, 5000u, 45000u);
+        rate_from_tc_ = false;
         break;
     }
     case 0x48:
@@ -304,15 +344,19 @@ void Awe64::dsp_execute() {
         silence_irq_ = true;
         break;
     case 0x90: // high speed 8-bit auto-init output
+        dsp_high_speed_ = true;
         start_dma(0, u32(dsp_block_size_) + 1, 0x01);
         break;
     case 0x91: // high speed 8-bit single-cycle output
+        dsp_high_speed_ = true;
         start_dma(0, u32(dsp_block_size_) + 1, 0x00);
         break;
-    case 0x98:
+    case 0x98: // high speed 8-bit auto-init input
+        dsp_high_speed_ = true;
         start_dma(0, u32(dsp_block_size_) + 1, 0x81);
         break;
-    case 0x99:
+    case 0x99: // high speed 8-bit single-cycle input
+        dsp_high_speed_ = true;
         start_dma(0, u32(dsp_block_size_) + 1, 0x80);
         break;
     case 0xd0:
@@ -362,17 +406,26 @@ void Awe64::dsp_execute() {
         dsp_queue(dsp_version_major_);
         dsp_queue(dsp_version_minor_);
         break;
-    case 0x30:
-    case 0x31:
+    case 0x30: // MIDI input, polling
+        sb_midi_in_ = true;
         break;
-    case 0x34:
-    case 0x35:
-    case 0x36:
-    case 0x37:
-        sb_uart_ = true;
+    case 0x31: // MIDI input, interrupt
+        sb_midi_in_ = true;
         break;
+    case 0x32: // MIDI output (polling/interrupt variants)
+    case 0x33:
     case 0x38:
         midi_out_pending_ = true;
+        break;
+    case 0x34: // UART MIDI, polling
+    case 0x36: // UART MIDI, polling with time stamp
+        sb_uart_ = true;
+        sb_midi_in_ = true;
+        break;
+    case 0x35: // UART MIDI, interrupt
+    case 0x37: // UART MIDI, interrupt with time stamp
+        sb_uart_ = true;
+        sb_midi_in_ = true;
         break;
     case 0x16:
     case 0x17:
@@ -380,45 +433,52 @@ void Awe64::dsp_execute() {
     case 0x75:
     case 0x76:
     case 0x77: {
-        const u32 frames = (u32(p(0)) | (u32(p(1)) << 8)) + 1;
-        dma_adpcm_bits_ = (cmd == 0x16 || cmd == 0x17) ? 2 : ((cmd == 0x74 || cmd == 0x75) ? 4 : 3);
-        dma_adpcm_ref_ = (cmd == 0x17 || cmd == 0x75 || cmd == 0x77);
+        const u32 bytes = (u32(p(0)) | (u32(p(1)) << 8)) + 1;
+        const u8 bits = (cmd == 0x16 || cmd == 0x17)
+                            ? 2
+                            : ((cmd == 0x74 || cmd == 0x75) ? 4 : 3);
+        const bool reference = (cmd == 0x17 || cmd == 0x75 || cmd == 0x77);
+        dma_adpcm_bits_ = bits;
+        dma_adpcm_ref_ = reference;
         dma_adpcm_first_ = true;
         dma_adpcm_half_ = 0;
+        dma_adpcm_byte_ = 0;
+        dma_adpcm_acc_ = 0;
+        dma_adpcm_bits_left_ = 0;
         dma_adpcm_step_ = 16;
         dma_adpcm_sample_ = 0;
-        start_dma(0, frames, 0x40);
+        start_dma(0, adpcm_frame_count(bytes, bits, reference), 0x40);
         break;
     }
     case 0x1f:
     case 0x7d:
     case 0x7f: {
-        const u32 frames = u32(dsp_block_size_) + 1;
-        dma_adpcm_bits_ = cmd == 0x1f ? 2 : (cmd == 0x7d ? 4 : 3);
+        const u32 bytes = u32(dsp_block_size_) + 1;
+        const u8 bits = cmd == 0x1f ? 2 : (cmd == 0x7d ? 4 : 3);
+        dma_adpcm_bits_ = bits;
         dma_adpcm_ref_ = true;
         dma_adpcm_first_ = true;
         dma_adpcm_half_ = 0;
+        dma_adpcm_byte_ = 0;
+        dma_adpcm_acc_ = 0;
+        dma_adpcm_bits_left_ = 0;
         dma_adpcm_step_ = 16;
         dma_adpcm_sample_ = 0;
-        start_dma(0, frames, 0x41);
+        start_dma(0, adpcm_frame_count(bytes, bits, true), 0x41);
         break;
     }
     default:
-        if (cmd >= 0xb0 && cmd <= 0xbf) {
+        if (cmd >= 0xb0 && cmd <= 0xcf) {
+            const bool is16 = cmd < 0xc0;
+            const bool input = (cmd & 0x08) != 0;   // D3: A/D
+            const bool auto_init = (cmd & 0x04) != 0; // D2: auto-init
             const u8 mode = p(0);
             const u32 frames = (u32(p(1)) | (u32(p(2)) << 8)) + 1;
-            u8 flags = 0x02; // 16-bit
-            if (cmd & 0x08) flags |= 0x01;
-            if (mode & 0x20) flags |= 0x04;
-            if (mode & 0x10) flags |= 0x08;
-            start_dma(0, frames, flags);
-        } else if (cmd >= 0xc0 && cmd <= 0xcf) {
-            const u8 mode = p(0);
-            const u32 frames = (u32(p(1)) | (u32(p(2)) << 8)) + 1;
-            u8 flags = 0x00;
-            if (cmd & 0x08) flags |= 0x01;
-            if (mode & 0x20) flags |= 0x04;
-            if (mode & 0x10) flags |= 0x08;
+            u8 flags = is16 ? 0x02 : 0x00;
+            if (auto_init) flags |= 0x01;
+            if (mode & 0x20) flags |= 0x04; // stereo
+            if (mode & 0x10) flags |= 0x08; // signed
+            if (input) flags |= 0x80;
             start_dma(0, frames, flags);
         }
         break;
@@ -440,7 +500,15 @@ void Awe64::start_dma(u32 addr, u32 len, u8 mode) {
     dma_stereo_ = (mode & 0x04) != 0;
     dma_signed_ = (mode & 0x08) != 0;
     dma_channel_ = dma16_ ? cfg_.dma16 : cfg_.dma8;
-    dma_bytes_per_sample_ = dma16_ ? 2 : 1;
+    dma_word_channel_ = dma16_ && dma_channel_ >= 4;
+    if (rate_from_tc_) {
+        const u32 divisor = 65536u - (u32(dsp_time_constant_) << 8);
+        const u32 channels = dma_stereo_ ? 2u : 1u;
+        if (divisor > 0) {
+            const u32 rate = 256000000u / (divisor * channels);
+            sample_rate_ = std::clamp(rate, 5000u, 45000u);
+        }
+    }
     dma_block_frames_ = len ? len : 1;
     dma_frames_left_ = dma_block_frames_;
     dma_addr_ = addr;
@@ -467,12 +535,36 @@ void Awe64::dma_block_end() {
     if (dma_auto_ && !dma_exit_auto_) {
         dma_frames_left_ = dma_block_frames_;
         dma_pos_ = 0;
+        if (dma_adpcm_bits_ != 0) {
+            dma_adpcm_first_ = true;
+            dma_adpcm_half_ = 0;
+            dma_adpcm_byte_ = 0;
+            dma_adpcm_acc_ = 0;
+            dma_adpcm_bits_left_ = 0;
+            dma_adpcm_step_ = 16;
+            dma_adpcm_sample_ = 0;
+        }
         dma_.set_dreq(dma_channel_, true);
     } else {
         dma_running_ = false;
         dma_paused_ = false;
+        dsp_high_speed_ = false;
         dma_.set_dreq(dma_channel_, false);
     }
+}
+
+std::optional<u16> Awe64::fetch_dma_word() {
+    if (auto w = dma_.read_word16(dma_channel_)) {
+        dma_pos_ += 2;
+        return w;
+    }
+    if (dma_addr_ != 0) {
+        const u16 v = bus_.read16(dma_addr_);
+        dma_addr_ += 2;
+        dma_pos_ += 2;
+        return v;
+    }
+    return std::nullopt;
 }
 
 std::optional<u8> Awe64::fetch_dma_byte() {
@@ -518,53 +610,103 @@ void Awe64::read_dma_frame(i16& l, i16& r) {
 
         if (dma_record_) {
             // No analog input is modelled; consume the programmed byte count
-            // and feed silence back to the DMA controller.
-            for (u8 i = 0; i < (dma_stereo_ ? 2 : 1); ++i)
-                for (u8 b = 0; b < dma_bytes_per_sample_; ++b)
-                    dma_.write_byte(dma_channel_, 0x80);
-        } else if (dma_adpcm_bits_ != 0) {
-            const auto byte = fetch_dma_byte();
-            if (!byte) {
-                l = r = 0;
+            // and feed the PCM midpoint back to the DMA controller.
+            const u8 channels = dma_stereo_ ? 2 : 1;
+            if (dma16_) {
+                const u16 silence = dma_signed_ ? 0x0000u : 0x8000u;
+                for (u8 i = 0; i < channels; ++i) {
+                    if (dma_word_channel_) {
+                        dma_.write_word16(dma_channel_, silence);
+                    } else {
+                        dma_.write_byte(dma_channel_, u8(silence & 0xff));
+                        dma_.write_byte(dma_channel_, u8(silence >> 8));
+                    }
+                }
             } else {
-                const u8 bits = dma_adpcm_bits_;
-                int nibble = 0;
-                if (dma_adpcm_first_ && dma_adpcm_ref_) {
+                const u8 silence = dma_signed_ ? 0x00 : 0x80;
+                for (u8 i = 0; i < channels; ++i)
+                    dma_.write_byte(dma_channel_, silence);
+            }
+        } else if (dma_adpcm_bits_ != 0) {
+            const u8 bits = dma_adpcm_bits_;
+            bool have = true;
+            if (dma_adpcm_first_ && dma_adpcm_ref_) {
+                const auto byte = fetch_dma_byte();
+                if (!byte) {
+                    have = false;
+                } else {
                     dma_adpcm_first_ = false;
                     dma_adpcm_sample_ = (int(*byte) - 128) << 8;
-                    l = r = clamp_i16(float(dma_adpcm_sample_));
-                } else {
+                    dma_adpcm_half_ = 0;
+                    dma_adpcm_acc_ = 0;
+                    dma_adpcm_bits_left_ = 0;
+                }
+            } else {
+                int nibble = 0;
+                if (bits == 4) {
                     if (dma_adpcm_half_ == 0) {
-                        nibble = *byte & 0x0f;
-                        dma_adpcm_half_ = 1;
+                        const auto byte = fetch_dma_byte();
+                        if (!byte) {
+                            have = false;
+                        } else {
+                            dma_adpcm_byte_ = *byte;
+                            nibble = dma_adpcm_byte_ & 0x0f;
+                            dma_adpcm_half_ = 1;
+                        }
                     } else {
-                        nibble = (*byte >> 4) & 0x0f;
+                        nibble = (dma_adpcm_byte_ >> 4) & 0x0f;
                         dma_adpcm_half_ = 0;
                     }
+                } else {
+                    // 2/3-bit Creative ADPCM packs samples LSB-first into a
+                    // continuous bit stream: 4 samples per byte for 2-bit and
+                    // 8 samples per 3 bytes for 3-bit data.
+                    while (dma_adpcm_bits_left_ < bits) {
+                        const auto byte = fetch_dma_byte();
+                        if (!byte) {
+                            have = false;
+                            break;
+                        }
+                        dma_adpcm_acc_ |= u32(*byte) << dma_adpcm_bits_left_;
+                        dma_adpcm_bits_left_ += 8;
+                    }
+                    if (have) {
+                        const u32 mask = (1u << bits) - 1u;
+                        nibble = int(dma_adpcm_acc_ & mask);
+                        dma_adpcm_acc_ >>= bits;
+                        dma_adpcm_bits_left_ -= bits;
+                    }
+                }
+                if (have) {
                     const int sign = nibble & (1 << (bits - 1));
                     const int mag = nibble & ((1 << (bits - 1)) - 1);
-                    int delta = mag * int(dma_adpcm_step_);
+                    const int delta = mag * int(dma_adpcm_step_);
                     dma_adpcm_sample_ += sign ? -delta : delta;
                     dma_adpcm_sample_ = std::clamp(dma_adpcm_sample_, -32768, 32767);
                     if (mag >= ((1 << (bits - 1)) - 1))
                         dma_adpcm_step_ = u8(std::min(4096, int(dma_adpcm_step_) + int(dma_adpcm_step_) / 4));
                     else
                         dma_adpcm_step_ = u8(std::max(8, int(dma_adpcm_step_) - int(dma_adpcm_step_) / 8));
-                    l = r = clamp_i16(float(dma_adpcm_sample_));
                 }
             }
+            l = r = have ? clamp_i16(float(dma_adpcm_sample_)) : 0;
         } else if (dma16_) {
             i16 left = 0, right = 0;
             auto get16 = [&](i16& out) {
-                const auto lo = fetch_dma_byte();
-                const auto hi = fetch_dma_byte();
-                if (!lo || !hi) {
+                std::optional<u16> raw;
+                if (dma_word_channel_) {
+                    raw = fetch_dma_word();
+                } else {
+                    const auto lo = fetch_dma_byte();
+                    const auto hi = fetch_dma_byte();
+                    if (lo && hi) raw = u16(*lo) | (u16(*hi) << 8);
+                }
+                if (!raw) {
                     out = 0;
                     return;
                 }
-                u16 raw = u16(*lo) | (u16(*hi) << 8);
-                if (dma_signed_) out = i16(raw);
-                else out = i16(int(raw) - 32768);
+                if (dma_signed_) out = i16(*raw);
+                else out = i16(int(*raw) - 32768);
             };
             get16(left);
             if (dma_stereo_) get16(right);
@@ -591,8 +733,10 @@ void Awe64::read_dma_frame(i16& l, i16& r) {
 
         // The 8237 terminal count and the DSP block boundary normally
         // coincide; honour the DMA controller if it finishes first.
-        if (!dma_record_ && dma_.terminal_count(dma_channel_) &&
-            dma_frames_left_ > 1) {
+        if (!dma_record_ && dma_adpcm_bits_ == 0 &&
+            dma_.terminal_count(dma_channel_) && dma_frames_left_ > 1) {
+            // ADPCM packs several output samples into one DMA byte, so its
+            // DSP block ends on the decoded frame count, not on the byte TC.
             dma_frames_left_ = 1;
         }
         if (dma_frames_left_ > 0) {
@@ -629,20 +773,96 @@ void Awe64::update_irq() {
 
 u8 Awe64::mixer_read(u8 reg) const {
     if (reg == 0x82) return irq_source_;
-    return mixer_[reg];
+    // 0x04/0x22/0x26/0x28/0x2E and 0x0A are compatibility views of the
+    // fine 5-bit controls, not independent registers.
+    switch (reg) {
+    case 0x04: return u8(((mixer_[0x32] >> 1) << 4) | (mixer_[0x33] >> 1));
+    case 0x22: return u8(((mixer_[0x30] >> 1) << 4) | (mixer_[0x31] >> 1));
+    case 0x26: return u8(((mixer_[0x34] >> 1) << 4) | (mixer_[0x35] >> 1));
+    case 0x28: return u8(((mixer_[0x36] >> 1) << 4) | (mixer_[0x37] >> 1));
+    case 0x2E: return u8(((mixer_[0x38] >> 1) << 4) | (mixer_[0x39] >> 1));
+    case 0x0A: return u8((u32(mixer_[0x3A]) * 7u + 15u) / 31u);
+    default: return mixer_[reg];
+    }
 }
 
 void Awe64::mixer_write(u8 reg, u8 value) {
-    if (reg == 0x00) {
+    switch (reg) {
+    case 0x00:
         reset_mixer();
         return;
+    case 0x80:
+    case 0x81:
+        return; // AWE64 is a PnP board: IRQ/DMA setup is read-only
+    case 0x82:
+        return; // interrupt status is read-only
+    case 0x04:
+        mixer_[0x04] = value & 0xff;
+        mixer_[0x32] = (value >> 4) & 0x0f;
+        mixer_[0x33] = value & 0x0f;
+        mixer_[0x32] = u8(mixer_[0x32] << 1);
+        mixer_[0x33] = u8(mixer_[0x33] << 1);
+        return;
+    case 0x22:
+        mixer_[0x22] = value & 0xff;
+        mixer_[0x30] = u8(((value >> 4) & 0x0f) << 1);
+        mixer_[0x31] = u8((value & 0x0f) << 1);
+        return;
+    case 0x26:
+        mixer_[0x26] = value & 0xff;
+        mixer_[0x34] = u8(((value >> 4) & 0x0f) << 1);
+        mixer_[0x35] = u8((value & 0x0f) << 1);
+        return;
+    case 0x28:
+        mixer_[0x28] = value & 0xff;
+        mixer_[0x36] = u8(((value >> 4) & 0x0f) << 1);
+        mixer_[0x37] = u8((value & 0x0f) << 1);
+        return;
+    case 0x2E:
+        mixer_[0x2E] = value & 0xff;
+        mixer_[0x38] = u8(((value >> 4) & 0x0f) << 1);
+        mixer_[0x39] = u8((value & 0x0f) << 1);
+        return;
+    case 0x0A:
+        mixer_[0x0A] = value & 0x07;
+        mixer_[0x3A] = u8((u32(value & 0x07) * 31u + 3u) / 7u);
+        return;
+    case 0x30: case 0x31:
+        mixer_[reg] = value & 0x1f;
+        mixer_[0x22] = u8(((mixer_[0x30] >> 1) << 4) | (mixer_[0x31] >> 1));
+        return;
+    case 0x32: case 0x33:
+        mixer_[reg] = value & 0x1f;
+        mixer_[0x04] = u8(((mixer_[0x32] >> 1) << 4) | (mixer_[0x33] >> 1));
+        return;
+    case 0x34: case 0x35:
+        mixer_[reg] = value & 0x1f;
+        mixer_[0x26] = u8(((mixer_[0x34] >> 1) << 4) | (mixer_[0x35] >> 1));
+        return;
+    case 0x36: case 0x37:
+        mixer_[reg] = value & 0x1f;
+        mixer_[0x28] = u8(((mixer_[0x36] >> 1) << 4) | (mixer_[0x37] >> 1));
+        return;
+    case 0x38: case 0x39:
+        mixer_[reg] = value & 0x1f;
+        mixer_[0x2E] = u8(((mixer_[0x38] >> 1) << 4) | (mixer_[0x39] >> 1));
+        return;
+    case 0x3A:
+        mixer_[0x3A] = value & 0x1f;
+        mixer_[0x0A] = u8((u32(mixer_[0x3A]) * 7u + 15u) / 31u);
+        return;
+    case 0x3B: mixer_[reg] = value & 0x03; return;
+    case 0x3C: case 0x3D: case 0x3E: mixer_[reg] = value & 0x7f; return;
+    case 0x3F: case 0x40: case 0x41: case 0x42: mixer_[reg] = value & 0x03; return;
+    case 0x43: mixer_[reg] = value & 0x01; return;
+    case 0x44: case 0x45: case 0x46: case 0x47: mixer_[reg] = value & 0x0f; return;
+    default: mixer_[reg] = value; return;
     }
-    if (reg == 0x82) return;
-    mixer_[reg] = value;
 }
 
 float Awe64::mixer_gain(u8 value, u8 maximum) const {
-    return level_gain(value, maximum);
+    const float range = maximum == 31 ? 62.0f : (maximum == 15 ? 60.0f : 18.0f);
+    return level_gain(value, maximum, range);
 }
 
 void Awe64::midi_feed(u8 byte) {
@@ -694,7 +914,7 @@ void Awe64::midi_message(u8 status, u8 d1, u8 d2) {
     case 0xa0:
         break;
     case 0xb0:
-        if (d1 == 123 || d1 == 120) emu_.all_notes_off();
+        if (d1 == 123 || d1 == 120) emu_.all_notes_off(ch);
         else emu_.control_change(ch, d1, d2);
         break;
     case 0xc0:
@@ -748,8 +968,6 @@ void Awe64::fm_tick_timers(u64 cpu_cycles) {
             }
         }
     }
-    if (fm_status_ & 0x60) fm_status_ |= 0x80;
-    else fm_status_ &= ~0x80;
 }
 
 void Awe64::fm_write_timer_control(u8 value) {
@@ -777,7 +995,13 @@ void Awe64::fm_write_timer_control(u8 value) {
 }
 
 u8 Awe64::fm_status_read() const {
-    return fm_status_ & 0xE0;
+    // D6/D5 are the FT1/FT2 flags; D7 is the IRQ line and is gated by the
+    // corresponding mask bits in register 04h.
+    const bool masked1 = (fm_regs_[0x04] & 0x40) != 0;
+    const bool masked2 = (fm_regs_[0x04] & 0x20) != 0;
+    const bool irq = ((fm_status_ & 0x40) && !masked1) ||
+                     ((fm_status_ & 0x20) && !masked2);
+    return u8((fm_status_ & 0x60) | (irq ? 0x80 : 0x00));
 }
 
 void Awe64::fm_refresh_operator(unsigned index) {
@@ -811,7 +1035,6 @@ void Awe64::fm_write_data(bool secondary, u8 value) {
         if (local < 18) {
             FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
             op.mult = value & 0x0f;
-            op.ksl = (value >> 6) & 0x03;
             fm_refresh_operator((secondary ? 18u : 0u) + local);
         }
     } else if (reg >= 0x40 && reg <= 0x55) {
@@ -984,6 +1207,8 @@ void Awe64::render_internal_frame(i16& out_l, i16& out_r) {
     const float voice_r = mixer_gain(mixer_[0x33], 31);
     const float music_l = mixer_gain(mixer_[0x34], 31);
     const float music_r = mixer_gain(mixer_[0x35], 31);
+    const float out_gain_l = std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
+    const float out_gain_r = std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
 
     // The card's analog output stage restores the level lost by the mixer's
     // conservative (-14 dB) defaults.
@@ -992,8 +1217,8 @@ void Awe64::render_internal_frame(i16& out_l, i16& out_r) {
               float(dac_l) * voice_l;
     float r = float(emu_frame[1]) * music_r + float(fm_frame[1]) * music_r +
               float(dac_r) * voice_r;
-    l *= master_l * output_gain;
-    r *= master_r * output_gain;
+    l *= master_l * out_gain_l * output_gain;
+    r *= master_r * out_gain_r * output_gain;
     l = std::tanh(l / 32768.0f) * 32767.0f;
     r = std::tanh(r / 32768.0f) * 32767.0f;
     out_l = clamp_i16(l);
@@ -1074,7 +1299,7 @@ u8 Awe64::io_read8(u16 port) {
         case 0x8: return 0x00;                 // FM status alias
         case 0x9: return 0xff;
         case 0xa: return dsp_read();
-        case 0xc: return 0x7f;                 // write buffer empty
+        case 0xc: return (dsp_high_speed_ || reset_state_) ? 0xff : 0x7f;
         case 0xe: {
             clear_irq(0x01);
             return dsp_out_pos_ < dsp_out_.size() ? 0xff : 0x7f;
@@ -1097,7 +1322,7 @@ u8 Awe64::io_read8(u16 port) {
             clear_irq(0x04);
             return v;
         }
-        clear_irq(0x04);
+        // SB16 documentation defines bit 7 as 0 = data available, 1 = none.
         return mpu_rx_pos_ < mpu_rx_.size() ? 0x00 : 0x80;
     }
     if (port_in_range(port, 0x388, 4)) {
@@ -1148,12 +1373,6 @@ void Awe64::io_write8(u16 port, u8 value) {
             // Reset: leave UART mode and acknowledge with 0FEh.
             mpu_uart_ = false;
             mpu_cmd_ = 0;
-            mpu_rx_.clear();
-            mpu_rx_pos_ = 0;
-            mpu_rx_.push_back(0xfe);
-            clear_irq(0x04);
-        } else if (value == 0xaa) {
-            // Compatibility ack used by some drivers; stays in UART mode.
             mpu_rx_.clear();
             mpu_rx_pos_ = 0;
             mpu_rx_.push_back(0xfe);

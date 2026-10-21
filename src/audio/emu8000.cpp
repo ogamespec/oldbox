@@ -541,38 +541,21 @@ bool Emu8000::load_sf2(std::span<const u8> data) {
     if (sample_count == 0) return false;
     const u32 smpl_words = u32(v.smpl.size() / 2);
 
-    struct Copy {
-        u32 base = 0;
-        u32 frames = 0;
-    };
-    std::vector<Copy> copies(sample_count);
-    u32 cursor = 0;
-    for (u32 i = 0; i < sample_count; ++i) {
-        const sf2::SampleHeader h = sf2::sample_header(v, i);
-        const u32 start = std::min(h.start, smpl_words);
-        const u32 end = std::min(std::max(h.end, start), smpl_words);
-        copies[i] = Copy{cursor, end - start};
-        cursor += end - start;
-    }
-    if (cursor + 64 > 0x1000000u) return false;
+    if (smpl_words + 64 > 0x1000000u) return false;
 
-    // The 1mgm bank is exactly 1 MiB; keep that size when it fits so the
-    // legacy ROM window at 000000h..0FFFFFh behaves like an AWE32.
+    // Copy the SF2 sample chunk verbatim so its offsets remain the sound
+    // memory addresses the bank was built for.  The 1mgm chunk is 1 MiB;
+    // keep that window when it fits so it behaves like an AWE32 ROM.
     u32 rom_words = kRomWords;
-    while (rom_words < cursor + 64 && rom_words < 0x1000000u) rom_words <<= 1;
-    if (rom_words < cursor + 64) return false;
+    while (rom_words < smpl_words + 64 && rom_words < 0x1000000u) rom_words <<= 1;
+    if (rom_words < smpl_words + 64) return false;
 
     rom_.assign(std::size_t(rom_words) * 2, 0);
-    zero_loop_start_ = cursor;
-    for (u32 i = 0; i < sample_count; ++i) {
-        const sf2::SampleHeader h = sf2::sample_header(v, i);
-        const u32 start = std::min(h.start, smpl_words);
-        for (u32 f = 0; f < copies[i].frames; ++f) {
-            const u16 s = sf2::rd16(v.smpl, std::size_t(start + f) * 2);
-            const u32 word = copies[i].base + f;
-            rom_[std::size_t(word) * 2] = u8(s & 0xff);
-            rom_[std::size_t(word) * 2 + 1] = u8(s >> 8);
-        }
+    zero_loop_start_ = smpl_words;
+    for (u32 i = 0; i < smpl_words; ++i) {
+        const u16 s = sf2::rd16(v.smpl, std::size_t(i) * 2);
+        rom_[std::size_t(i) * 2] = u8(s & 0xff);
+        rom_[std::size_t(i) * 2 + 1] = u8(s >> 8);
     }
 
     sf2_presets_.clear();
@@ -635,14 +618,16 @@ bool Emu8000::load_sf2(std::span<const u8> data) {
                 if (key_lo > key_hi || vel_lo > vel_hi) continue;
 
                 const sf2::SampleHeader h = sf2::sample_header(v, u32(zp.sample));
-                const u32 len = copies[u32(zp.sample)].frames;
+                const u32 sample_begin = std::min(h.start, smpl_words);
+                const u32 sample_limit = std::min(std::max(h.end, sample_begin), smpl_words);
+                const u32 len = sample_limit - sample_begin;
                 if (len == 0) continue;
                 int start_off = std::clamp(zp.start_add, 0, int(len - 1));
                 int end_off = std::clamp(int(len) + zp.end_add, start_off + 1, int(len));
 
                 RomSample rs;
-                rs.start = copies[u32(zp.sample)].base + u32(start_off);
-                rs.sample_end = copies[u32(zp.sample)].base + u32(end_off);
+                rs.start = sample_begin + u32(start_off);
+                rs.sample_end = sample_begin + u32(end_off);
                 const int loop_start =
                     int(h.loop_start) - int(h.start) + zp.loop_start_add;
                 const int loop_end = int(h.loop_end) - int(h.start) + zp.loop_end_add;
@@ -651,8 +636,8 @@ bool Emu8000::load_sf2(std::span<const u8> data) {
                     const int ls = std::clamp(loop_start, start_off, end_off - 1);
                     const int le = std::clamp(loop_end, ls + 1, end_off);
                     rs.loop = true;
-                    rs.loop_start = copies[u32(zp.sample)].base + u32(ls);
-                    rs.loop_end = copies[u32(zp.sample)].base + u32(le);
+                    rs.loop_start = sample_begin + u32(ls);
+                    rs.loop_end = sample_begin + u32(le);
                     rs.one_shot = false;
                 } else {
                     rs.loop = false;
@@ -694,9 +679,12 @@ bool Emu8000::load_sf2_file(const std::string& path) {
     const std::streamoff size = file.tellg();
     if (size <= 0) return false;
     file.seekg(0, std::ios::beg);
-    std::vector<u8> data(std::size_t(size));
-    if (!file.read(reinterpret_cast<char*>(data.data()), size)) return false;
-    return load_sf2(data);
+    std::vector<u8> data;
+    data.resize(static_cast<std::size_t>(size));
+    if (!file.read(reinterpret_cast<char*>(data.data()),
+                   static_cast<std::streamsize>(size)))
+        return false;
+    return load_sf2(std::span<const u8>(data.data(), data.size()));
 }
 
 void Emu8000::reset() {
@@ -707,8 +695,10 @@ void Emu8000::reset() {
     next_voice_ = 0;
     hwcf4_ = hwcf5_ = hwcf6_ = 0;
     smalr_ = smarr_ = smalw_ = smarw_ = 0;
+    smalr_empty_ = smarr_empty_ = true;
     smld_write_ = smrd_write_ = smld_read_ = smrd_read_ = 0;
     hwcf1_ = hwcf2_ = hwcf3_ = 0;
+    hwcf3_written_ = false;
     for (auto& reg : init_regs_) reg.fill(0);
     generated_ = 0;
     source_pos_ = 0.0;
@@ -737,6 +727,7 @@ void Emu8000::set_rom(std::span<const u8> rom) {
         rom_.assign(rom.begin(), rom.end());
         if (rom_.size() & 1) rom_.push_back(0);
         sf2_presets_.clear();
+        bank_count_ = 0;
         zero_loop_start_ = 0;
         external_rom_ = true;
     }
@@ -839,7 +830,11 @@ void Emu8000::io_write32(u16 offset, u32 value) {
         write_voice(0, reg, ch, value);
         break;
     case 0x400:
-        if (reg <= 1) {
+        if (reg == 1 && ch == 26) {
+            // SMLD (Data1) and SMRD (Data2) are separate word registers.
+            write_voice_word(1, 1, ch, u16(value));
+            write_voice_word(2, 1, ch, u16(value >> 16));
+        } else if (reg <= 1) {
             write_voice(1, reg, ch, value);
         } else {
             write_voice_word(1, reg, ch, u16(value));
@@ -863,6 +858,9 @@ u32 Emu8000::io_read32(u16 offset) {
     case 0x000:
         return read_voice(0, reg, ch);
     case 0x400:
+        if (reg == 1 && ch == 26)
+            return u32(read_voice_word(1, 1, ch)) |
+                   (u32(read_voice_word(2, 1, ch)) << 16);
         if (reg <= 1) return read_voice(1, reg, ch);
         return u32(read_voice_word(1, reg, ch)) | (u32(read_voice_word(2, reg, ch)) << 16);
     case 0x800:
@@ -976,7 +974,19 @@ void Emu8000::write_voice_word(unsigned port, unsigned reg, unsigned ch, u16 val
                 if (!v.active) v.phase = 0.0f;
             }
             break;
-        case 1: case 2: case 3:
+        case 1:
+            switch (ch) {
+            case 9: hwcf4_ = (hwcf4_ & 0xffff0000u) | value; break;
+            case 10: hwcf5_ = (hwcf5_ & 0xffff0000u) | value; break;
+            case 13: hwcf6_ = (hwcf6_ & 0xffff0000u) | value; break;
+            case 20: smalr_ = (smalr_ & 0xffff0000u) | value; break;
+            case 21: smarr_ = (smarr_ & 0xffff0000u) | value; break;
+            case 22: smalw_ = (smalw_ & 0xffff0000u) | value; break;
+            case 23: smarw_ = (smarw_ & 0xffff0000u) | value; break;
+            default: write_global(1, 1, ch, value); break;
+            }
+            break;
+        case 2: case 3:
             write_global(1, reg, ch, value);
             break;
         case 4: v.envvol = value; break;
@@ -1028,7 +1038,26 @@ void Emu8000::write_voice_word(unsigned port, unsigned reg, unsigned ch, u16 val
                 if (!v.active) v.phase = 0.0f;
             }
             break;
-        case 1: write_global(2, 1, ch, value); break;
+        case 1:
+            switch (ch) {
+            case 9: hwcf4_ = (hwcf4_ & 0x0000ffffu) | (u32(value) << 16); break;
+            case 10: hwcf5_ = (hwcf5_ & 0x0000ffffu) | (u32(value) << 16); break;
+            case 13: hwcf6_ = (hwcf6_ & 0x0000ffffu) | (u32(value) << 16); break;
+            case 20:
+                smalr_ = (smalr_ & 0x0000ffffu) | ((u32(value) & 0xffu) << 16);
+                break;
+            case 21:
+                smarr_ = (smarr_ & 0x0000ffffu) | ((u32(value) & 0xffu) << 16);
+                break;
+            case 22:
+                smalw_ = (smalw_ & 0x0000ffffu) | ((u32(value) & 0xffu) << 16);
+                break;
+            case 23:
+                smarw_ = (smarw_ & 0x0000ffffu) | ((u32(value) & 0xffu) << 16);
+                break;
+            default: write_global(2, 1, ch, value); break;
+            }
+            break;
         case 2: write_global(2, 2, ch, value); break;
         case 3: write_global(2, 3, ch, value); break;
         case 4:
@@ -1085,7 +1114,13 @@ u16 Emu8000::read_voice_word(unsigned port, unsigned reg, unsigned ch) const {
     if (port == 2) {
         switch (reg) {
         case 0: return u16(v.ccca >> 16);
-        case 1: return u16(read_global(2, 1, ch));
+        case 1:
+            switch (ch) {
+            case 9: case 10: case 13: case 20: case 21: case 22: case 23:
+                return u16(read_global(1, 1, ch) >> 16);
+            default:
+                return u16(read_global(2, 1, ch));
+            }
         case 2: return u16(read_global(2, 2, ch));
         case 3: return u16(read_global(2, 3, ch));
         case 4: return v.atkhldv;
@@ -1115,23 +1150,33 @@ void Emu8000::write_global(unsigned port, unsigned reg, unsigned ch, u32 value) 
         case 9: hwcf4_ = value; break;
         case 10: hwcf5_ = value; break;
         case 13: hwcf6_ = value; break;
-        case 20: smalr_ = value & 0xffffffu; break;
-        case 21: smarr_ = value & 0xffffffu; break;
+        case 20:
+            smalr_ = value & 0xffffffu;
+            smalr_empty_ = true;
+            break;
+        case 21:
+            smarr_ = value & 0xffffffu;
+            smarr_empty_ = true;
+            break;
         case 22:
             smalw_ = value & 0xffffffu;
             break;
         case 23: smarw_ = value & 0xffffffu; break;
         case 26:
             smld_write_ = u16(value);
-            if (smalw_ >= kDramBase) {
-                const u32 idx = (smalw_ - kDramBase) & (kDramWords - 1);
-                dram_[idx] = smld_write_;
+            if (dma_stream_active(6)) {
+                if (smalw_ >= kDramBase && smalw_ - kDramBase < dram_.size())
+                    dram_[smalw_ - kDramBase] = smld_write_;
+                smalw_ = (smalw_ + 1) & 0xffffffu;
             }
-            smalw_ = (smalw_ + 1) & 0xffffffu;
             break;
         case 29: hwcf1_ = u16(value); break;
         case 30: hwcf2_ = u16(value); break;
-        case 31: hwcf3_ = u16(value); break;
+        case 31:
+            hwcf3_ = u16(value);
+            hwcf3_written_ = true;
+            convenience_output_ = false;
+            break;
         default: break;
         }
         return;
@@ -1142,11 +1187,11 @@ void Emu8000::write_global(unsigned port, unsigned reg, unsigned ch, u32 value) 
     if (port == 2 && reg == 3) { init_regs_[3][ch & 31] = u16(value); return; }
     if (port == 2 && reg == 1 && ch == 26) {
         smrd_write_ = u16(value);
-        if (smarw_ >= kDramBase) {
-            const u32 idx = (smarw_ - kDramBase) & (kDramWords - 1);
-            dram_[idx] = smrd_write_;
+        if (dma_stream_active(7)) {
+            if (smarw_ >= kDramBase && smarw_ - kDramBase < dram_.size())
+                dram_[smarw_ - kDramBase] = smrd_write_;
+            smarw_ = (smarw_ + 1) & 0xffffffu;
         }
-        smarw_ = (smarw_ + 1) & 0xffffffu;
     }
 }
 
@@ -1156,8 +1201,10 @@ u32 Emu8000::read_global(unsigned port, unsigned reg, unsigned ch) const {
         case 9: return hwcf4_;
         case 10: return hwcf5_;
         case 13: return hwcf6_;
-        case 20: return smalr_ & 0xffffffu; // empty bit clear
-        case 21: return smarr_ & 0xffffffu;
+        case 20:
+            return (smalr_ & 0xffffffu) | (smalr_empty_ ? 0x80000000u : 0u);
+        case 21:
+            return (smarr_ & 0xffffffu) | (smarr_empty_ ? 0x80000000u : 0u);
         case 22: return smalw_ & 0xffffffu;
         case 23: return smarw_ & 0xffffffu;
         case 26: {
@@ -1168,6 +1215,7 @@ u32 Emu8000::read_global(unsigned port, unsigned reg, unsigned ch) const {
             if (dma_stream_active(4)) {
                 smld_read_ = word_at(smalr_);
                 smalr_ = (smalr_ + 1) & 0xffffffu;
+                smalr_empty_ = false;
             }
             return ret;
         }
@@ -1187,6 +1235,7 @@ u32 Emu8000::read_global(unsigned port, unsigned reg, unsigned ch) const {
         if (dma_stream_active(5)) {
             smrd_read_ = word_at(smarr_);
             smarr_ = (smarr_ + 1) & 0xffffffu;
+            smarr_empty_ = false;
         }
         return ret;
     }
@@ -1269,11 +1318,14 @@ void Emu8000::start_voice(unsigned ch) {
     v.env_coeff_valid = false;
     v.mod_coeff_valid = false;
 
+    // ATKHLDV/ATKHLD bit 15 = 1 means no attack is started.
     const float delay = envelope_delay_samples(v.envvol);
-    v.env_stage = delay > 1.0f ? env_delay : env_attack;
+    v.env_stage = (v.atkhldv & 0x8000u) ? env_off
+                                         : (delay > 1.0f ? env_delay : env_attack);
     v.env_count = u32(delay);
     const float mod_delay = envelope_delay_samples(v.envval);
-    v.mod_stage = mod_delay > 1.0f ? env_delay : env_attack;
+    v.mod_stage = (v.atkhld & 0x8000u) ? env_off
+                                       : (mod_delay > 1.0f ? env_delay : env_attack);
     v.mod_count = u32(mod_delay);
 
     v.lfo1_delay = u32(envelope_delay_samples(v.lfo1val));
@@ -1339,7 +1391,7 @@ void Emu8000::update_envelope(Voice& v, u32) {
         }
         if (v.env_coeff > 0.0f) {
             v.env -= v.env * v.env_coeff;
-            if (v.env <= sus) {
+            if (v.env <= sus || (sus == 0.0f && v.env < 1.6e-5f)) {
                 v.env = sus;
                 v.env_stage = env_sustain;
             }
@@ -1414,7 +1466,7 @@ void Emu8000::update_mod_envelope(Voice& v, u32) {
         }
         if (v.mod_coeff > 0.0f) {
             v.mod_env -= v.mod_env * v.mod_coeff;
-            if (v.mod_env <= sus) {
+            if (v.mod_env <= sus || (sus == 0.0f && v.mod_env < 1.6e-5f)) {
                 v.mod_env = sus;
                 v.mod_stage = env_sustain;
             }
@@ -1556,7 +1608,8 @@ void Emu8000::render_internal(float& out_l, float& out_r) {
         v.cpf = (u32(cur_pitch) << 16) | u16(clampf(v.phase * 65536.0f, 0.0f, 65535.0f));
         const u16 cur_vol =
             u16(clampf(v.volume * v.env * trem, 0.0f, 1.0f) * 65535.0f);
-        v.cvcf = (u32(cur_vol) << 16) | (v.ifatn & 0xff00u);
+        const u16 cur_fc = u16(u8(v.ifatn >> 8) * 0x0101u); // 0x00..0xFFFF
+        v.cvcf = (u32(cur_vol) << 16) | cur_fc;
     }
 
     // Simple, stable reverb (about 46 ms) and chorus (about 23 ms).  The real
@@ -1585,6 +1638,15 @@ void Emu8000::render_internal(float& out_l, float& out_r) {
         r += cr * 0.18f;
     }
 
+    // HWCF3 bit 2 enables the audio output; it is cleared on reset.  The
+    // convenience MIDI front end is allowed to enable output until software
+    // programs HWCF3 explicitly.
+    const bool output_enabled =
+        hwcf3_written_ ? (hwcf3_ & 0x0004u) != 0 : convenience_output_;
+    if (!output_enabled) {
+        l = 0.0f;
+        r = 0.0f;
+    }
     out_l = clampf(l * master_volume_, -1.0f, 1.0f);
     out_r = clampf(r * master_volume_, -1.0f, 1.0f);
 }
@@ -1690,8 +1752,7 @@ Emu8000::SampleChoice Emu8000::choose_sample(u32 midi_channel, u32 note,
     }
 
     // Procedural fallback bank (used when no SF2 file is present).
-    static const RomSample empty{};
-    if (bank_count_ == 0) return SampleChoice{&empty};
+    if (bank_count_ == 0) return SampleChoice{};
     const RomSample* chosen = nullptr;
     if (ch == 9) {
         if (note <= 37) chosen = &bank_[7];                       // kick
@@ -1747,41 +1808,52 @@ void Emu8000::note_on(u32 midi_channel, u32 note, u32 velocity) {
     const u32 channel = midi_channel & 15;
     const u32 n = std::min(note, 127u);
     const u32 vel = std::min(velocity, 127u);
-    const RomSample& s = sample_for(channel, n);
-    if (s.start == 0) return;
+    const SampleChoice choice = choose_sample(channel, n, vel);
+    if (!choice.sample) return;
+    const RomSample& s = *choice.sample;
 
+    if (!hwcf3_written_) convenience_output_ = true; // convenience MIDI output
     const int ch = allocate_voice(channel, n);
     Voice& v = voices_[ch];
     v = Voice{};
 
-    const float semis = float(int(n) - int(s.root_note));
-    const float ratio = std::exp2(semis / 12.0f);
-    const float gain = (float(vel) / 127.0f) * (float(midi_volume_[channel]) / 127.0f);
-    const u32 volume16 = u32(clampf(gain, 0.0f, 1.0f) * 32767.0f);
+    const float semis = float(int(n) - int(s.root_note)) + float(s.tune_cents) / 100.0f;
+    const float ratio = std::exp2(semis / 12.0f) *
+                        (float(s.sample_rate) / kSampleRate);
+    const float zone_gain = std::pow(10.0f, -(float(s.attenuation) / 10.0f) / 20.0f);
+    const float gain = (float(vel) / 127.0f) *
+                       (float(midi_volume_[channel]) / 127.0f) * zone_gain;
+    const u32 volume16 = u32(clampf(gain, 0.0f, 1.0f) * 65535.0f);
+
+    int pan_byte = int(midi_pan_[channel]) * 2;
+    if (s.pan != 0)
+        pan_byte = int(std::lround(128.0f - float(s.pan) * 127.0f / 500.0f));
+    pan_byte = std::clamp(pan_byte, 0, 255);
 
     v.cpf = 0x40000000u;
     v.ptrx = 0x40003000u;                    // unity pitch target, reverb send 0x30
     v.cvcf = (volume16 << 16) | 0xffffu;
     v.vtft = (volume16 << 16) | 0xffffu;
-    v.psst = (u32(midi_pan_[channel]) * 2u) << 24;
-    if (s.loop_start > 0) v.psst = (v.psst & 0xff000000u) | (s.loop_start - 1);
-    v.csl = (0x20u << 24) | (s.loop_end > 0 ? s.loop_end - 1 : 0);
-    v.ccca = (s.start > 0 ? s.start - 1 : 0);
+    v.psst = (u32(pan_byte) << 24) | (s.loop ? (s.loop_start - 1) & 0xffffffu : 0u);
+    v.csl = (0x20u << 24) | (s.loop ? (s.loop_end - 1) & 0xffffffu : 0u);
+    v.ccca = (s.start - 1) & 0xffffffu;      // actual start is CCCA + 1
+    v.sample_end = s.sample_end;
+    v.one_shot = s.one_shot;
     v.envvol = 0x8000;                       // no volume-envelope delay
     v.envval = 0x8000;
-    v.dcysusv = 0x7f7fu;                     // sustain 0x7F, fast decay
+    v.dcysusv = 0x7f7fu;                     // sustain 0x7F
     v.atkhldv = 0x7f7fu;                     // no hold, 6 ms attack
     v.lfo1val = 0x8000;
     v.atkhld = 0x7f7f;
     v.lfo2val = 0x8000;
     v.dcysus = 0x7f7f;
-    v.ifatn = 0xff00u;                       // filter bypass, no attenuation
+    v.ifatn = 0xff00u;                       // cutoff 0xFF, no attenuation
     v.pefe = 0;
     v.fmmod = 0;
     v.tremfrq = 0x0010;
     v.fm2frq2 = 0x0010;
 
-    const float ip_f = 57344.0f + 4096.0f * std::log2(ratio); // 0xE000 = no shift
+    const float ip_f = 57344.0f + 4096.0f * std::log2(std::max(ratio, 1.0e-6f));
     v.ip = u16(std::lround(clampf(ip_f, 0.0f, 65535.0f)));
     v.midi_channel = int(channel);
     v.midi_note = int(n);
@@ -1795,7 +1867,16 @@ void Emu8000::note_off(u32 midi_channel, u32 note) {
     for (auto& v : voices_) {
         if (v.active && v.midi_channel == c && v.midi_note == n) {
             v.dcysusv = 0x805cu; // release, about 100 ms per the guide example
-            release_voice(u32(&v - voices_.data()));
+            v.dcysus = 0x805cu;
+            v.env_coeff_valid = false;
+            v.mod_coeff_valid = false;
+            if (midi_sustain_[c]) {
+                // Hold pedal: the note stops but the envelope keeps running
+                // until CC64 is released.
+                v.note_held = false;
+            } else {
+                release_voice(u32(&v - voices_.data()));
+            }
         }
     }
 }
@@ -1816,20 +1897,25 @@ void Emu8000::control_change(u32 midi_channel, u32 controller, u32 value) {
         midi_pan_[c] = u8(std::min(value, 127u));
         for (auto& v : voices_) {
             if (v.midi_channel != int(c)) continue;
-            v.psst = (u32(midi_pan_[c]) * 2u) << 24 | (v.psst & 0x00ffffffu);
-            v.pan_left = float(midi_pan_[c] * 2u) / 255.0f;
+            const u32 pan = u32(midi_pan_[c]) * 2u;
+            v.psst = (pan << 24) | (v.psst & 0x00ffffffu);
+            v.pan_left = float(pan) / 255.0f;
             v.pan_right = 1.0f - v.pan_left;
         }
     } else if (controller == 64) {
-        if (value == 0) {
+        const bool on = value >= 64;
+        midi_sustain_[c] = on;
+        if (!on) {
             for (auto& v : voices_)
-                if (v.midi_channel == int(c) && v.active && !v.note_held)
+                if (v.midi_channel == int(c) && v.active && !v.note_held &&
+                    !v.released)
                     release_voice(u32(&v - voices_.data()));
         }
     } else if (controller == 121) {
         midi_volume_[c] = 100;
         midi_pan_[c] = 64;
         midi_bend_[c] = 0;
+        midi_sustain_[c] = false;
     }
 }
 
@@ -1847,6 +1933,13 @@ void Emu8000::pitch_bend(u32 midi_channel, i32 bend) {
 void Emu8000::all_notes_off() {
     for (u32 i = 0; i < u32(voice_count); ++i)
         if (voices_[i].active) release_voice(i);
+}
+
+void Emu8000::all_notes_off(u32 midi_channel) {
+    const int channel = int(midi_channel & 15);
+    for (u32 i = 0; i < u32(voice_count); ++i)
+        if (voices_[i].active && voices_[i].midi_channel == channel)
+            release_voice(i);
 }
 
 void Emu8000::set_master_volume(u32 volume) {

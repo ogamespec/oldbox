@@ -88,6 +88,40 @@ bool Dma::write_byte(int channel, u8 value) {
     return true;
 }
 
+std::optional<u16> Dma::read_word16(int channel) {
+    Channel& c = channels_[channel & 7];
+    if (masked(channel) || dma_disabled_) return std::nullopt;
+    const u32 addr = physical(channel);
+    const u16 v = bus_.read16_raw(addr);
+    c.active = true;
+    c.base_cur = u16(c.base_cur + 2);
+    if (--c.count_cur == 0xffffu) {
+        c.tc = true;
+        c.request = 0;
+        status_ |= u8(1u << (channel & 7));
+        if (c.auto_init) { c.base_cur = c.base; c.count_cur = c.count; }
+        else { c.active = false; c.masked = true; }
+    }
+    return v;
+}
+
+bool Dma::write_word16(int channel, u16 value) {
+    Channel& c = channels_[channel & 7];
+    if (masked(channel) || dma_disabled_) return false;
+    const u32 addr = physical(channel);
+    bus_.write16_raw(addr, value);
+    c.active = true;
+    c.base_cur = u16(c.base_cur + 2);
+    if (--c.count_cur == 0xffffu) {
+        c.tc = true;
+        c.request = 0;
+        status_ |= u8(1u << (channel & 7));
+        if (c.auto_init) { c.base_cur = c.base; c.count_cur = c.count; }
+        else { c.active = false; c.masked = true; }
+    }
+    return true;
+}
+
 bool Dma::advance(int channel, u32 bytes) {
     Channel& c = channels_[channel & 7];
     c.base_cur = u16(c.base_cur + bytes);

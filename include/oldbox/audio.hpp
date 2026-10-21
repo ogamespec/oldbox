@@ -30,6 +30,8 @@ public:
     // set; SF2 is used because the raw AWE64 ROM dump is not available.
     bool load_sf2(std::span<const u8> data);
     bool load_sf2_file(const std::string& path);
+    [[nodiscard]] bool has_sf2_bank() const { return !sf2_presets_.empty(); }
+    [[nodiscard]] std::size_t sf2_preset_count() const { return sf2_presets_.size(); }
     [[nodiscard]] std::span<const u8> rom() const { return rom_; }
     [[nodiscard]] u32 active_voices() const;
 
@@ -49,6 +51,7 @@ public:
     void program_change(u32 midi_channel, u32 program);
     void pitch_bend(u32 midi_channel, i32 bend);
     void all_notes_off();
+    void all_notes_off(u32 midi_channel);
     void set_master_volume(u32 volume);
     [[nodiscard]] u16 sample_counter() const { return u16(sample_counter_); }
 
@@ -153,10 +156,13 @@ private:
     // Sound-memory DMA read addresses and prefetch registers are updated by
     // register reads, so they are mutable in the const register view.
     mutable u32 smalr_ = 0, smarr_ = 0;
+    mutable bool smalr_empty_ = true, smarr_empty_ = true;
     u32 smalw_ = 0, smarw_ = 0;
     u16 smld_write_ = 0, smrd_write_ = 0;
     mutable u16 smld_read_ = 0, smrd_read_ = 0;
     u16 hwcf1_ = 0, hwcf2_ = 0, hwcf3_ = 0;
+    bool hwcf3_written_ = false;
+    bool convenience_output_ = false;
     // INIT1..INIT4 are 32-entry word arrays, one entry per channel.
     std::array<std::array<u16, voice_count>, 4> init_regs_{};
 
@@ -265,13 +271,18 @@ private:
     u8 dsp_version_major_ = 4, dsp_version_minor_ = 16;
     bool speaker_on_ = false;
     bool sb_uart_ = false;
+    bool sb_midi_in_ = false;
+    bool dsp_high_speed_ = false;
     bool midi_out_pending_ = false;
+    u8 dsp_time_constant_ = 0;
+    bool rate_from_tc_ = false;
     u32 silence_samples_ = 0;
     bool silence_irq_ = false;
 
     // Digitized audio DMA.
     u8 dma_channel_ = 1;
     bool dma16_ = false;
+    bool dma_word_channel_ = false; // 16-bit ISA channel (word count)
     bool dma_auto_ = false;
     bool dma_paused_ = false;
     bool dma_running_ = false;
@@ -279,7 +290,6 @@ private:
     bool dma_signed_ = false;
     bool dma_stereo_ = false;
     bool dma_exit_auto_ = false;
-    u8 dma_bytes_per_sample_ = 1;
     u32 dma_block_frames_ = 0;
     u32 dma_frames_left_ = 0;
     u16 dsp_block_size_ = 0;
@@ -293,6 +303,9 @@ private:
     i32 dma_adpcm_sample_ = 0;
     bool dma_adpcm_first_ = true;
     u8 dma_adpcm_half_ = 0;
+    u8 dma_adpcm_byte_ = 0;
+    u32 dma_adpcm_acc_ = 0;
+    u8 dma_adpcm_bits_left_ = 0;
     i16 direct_l_ = 0, direct_r_ = 0;
     i16 last_dac_l_ = 0, last_dac_r_ = 0;
     bool direct_active_ = false;
@@ -359,6 +372,7 @@ private:
     void dma_block_end();
     void read_dma_frame(i16& l, i16& r);
     [[nodiscard]] std::optional<u8> fetch_dma_byte();
+    [[nodiscard]] std::optional<u16> fetch_dma_word();
     void reset_mixer();
     [[nodiscard]] u8 mixer_read(u8 reg) const;
     void mixer_write(u8 reg, u8 value);

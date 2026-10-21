@@ -120,9 +120,21 @@ TEST(audio_mixer_defaults) {
     CHECK_EQ(read_reg(0x33), 0x18);
     CHECK_EQ(read_reg(0x34), 0x18); // MIDI/EMU
     CHECK_EQ(read_reg(0x22), 0xcc); // CT1345-compatible master
+    CHECK_EQ(read_reg(0x3c), 0x1f); // Line.L/R, CD.L/R and Mic switches
+    CHECK_EQ(read_reg(0x3d), 0x15); // input L: Line.L, CD.L, Mic
+    CHECK_EQ(read_reg(0x3e), 0x0b); // input R: Line.R, CD.R, Mic
     CHECK_EQ(read_reg(0x80), 0x02); // IRQ 5
     CHECK_EQ(read_reg(0x81), 0x22); // DMA1 + DMA5
     CHECK_EQ(read_reg(0x82), 0x00); // no pending interrupt
+
+    // The old CT1345 registers are aliases of the 5-bit controls.
+    write_reg(0x22, 0x7a);
+    CHECK_EQ(read_reg(0x30), 0x0e);
+    CHECK_EQ(read_reg(0x31), 0x14);
+    write_reg(0x30, 0x1f);
+    CHECK_EQ(read_reg(0x22), 0xfa);
+    write_reg(0x0a, 0x07);
+    CHECK_EQ(read_reg(0x3a), 0x1f);
 
     write_reg(0x30, 0x1f);
     CHECK_EQ(read_reg(0x30), 0x1f);
@@ -155,6 +167,55 @@ TEST(audio_emu8000_rom_note_is_audible) {
     emu.render(buffer.data(), 4096, 44100);
 }
 
+TEST(audio_emu8000_sf2_bank_loaded) {
+    Rig rig;
+    Emu8000& emu = rig.card.emu();
+    // The repository ships the E-mu 1 MiB GM SoundFont for the EMU8000.
+    CHECK(emu.has_sf2_bank());
+    CHECK(emu.sf2_preset_count() >= 128);
+    CHECK_EQ(emu.rom().size(), size_t(1u << 20));
+
+    // The generated sound ROM must actually contain the SF2 sample data.
+    bool nonzero = false;
+    const auto rom = emu.rom();
+    for (std::size_t i = 0; i < 4096 && i < rom.size(); ++i)
+        if (rom[i] != 0) { nonzero = true; break; }
+    CHECK(nonzero);
+
+    emu.program_change(0, 0);
+    emu.note_on(0, 60, 100);
+    CHECK(emu.active_voices() > 0);
+    std::vector<i16> buffer(size_t(4096) * 2);
+    emu.render(buffer.data(), 2048, 44100);
+    CHECK(peak(buffer) > 100);
+}
+
+TEST(audio_emu8000_hwcf3_enables_output) {
+    Rig rig;
+    Emu8000& emu = rig.card.emu();
+    emu.note_on(0, 60, 100);
+    std::vector<i16> buffer(size_t(1024) * 2);
+    emu.render(buffer.data(), 1024, 44100);
+    CHECK(peak(buffer) > 0);
+
+    // HWCF3 bit 2 gates the audio output.
+    rig.card.io_write16(u16(kSb + 0xc02), u16(31 | (1u << 5)));
+    rig.card.io_write16(u16(kSb + 0x800), 0x0000);
+    std::fill(buffer.begin(), buffer.end(), 0);
+    emu.render(buffer.data(), 1024, 44100);
+    // One sample may still sit in the resampler ring from before the write.
+    int muted_peak = 0;
+    for (std::size_t i = 8; i < buffer.size(); ++i)
+        muted_peak = std::max(muted_peak, std::abs(int(buffer[i])));
+    CHECK_EQ(muted_peak, 0);
+
+    rig.card.io_write16(u16(kSb + 0xc02), u16(31 | (1u << 5)));
+    rig.card.io_write16(u16(kSb + 0x800), 0x0004);
+    std::fill(buffer.begin(), buffer.end(), 0);
+    emu.render(buffer.data(), 1024, 44100);
+    CHECK(peak(buffer) > 0);
+}
+
 TEST(audio_emu8000_register_interface) {
     Rig rig;
     // Pointer: channel 0, register 0 (CPF at Data0).  The pointer is a word
@@ -181,6 +242,47 @@ TEST(audio_emu8000_register_interface) {
     emu.write_pointer(u16(4u << 5)); // channel 0, register 4 (ENVVOL)
     emu.write_data(0x8000);
     CHECK_EQ(emu.read_data(), 0x8000);
+}
+
+TEST(audio_emu8000_sound_memory_streams) {
+    Rig rig;
+    const u16 data1 = u16(kSb + 0x800);
+    auto select = [&](u16 pointer) { rig.card.io_write16(u16(kSb + 0xc02), pointer); };
+
+    // Allocate channel 0 for left writes and channel 1 for left reads.
+    select(0); // channel 0, register 0 (CCCA)
+    rig.card.io_write32(data1, 0x06000000);
+    select(1); // channel 1, register 0
+    rig.card.io_write32(data1, 0x04000000);
+
+    // SMALW = 0x200000, then push two words through SMLD.
+    select(22 | (1u << 5));
+    rig.card.io_write32(data1, 0x00200000);
+    select(26 | (1u << 5));
+    rig.card.io_write16(data1, 0x1234);
+    select(26 | (1u << 5));
+    rig.card.io_write16(data1, 0x5678);
+
+    // SMALR = 0x200000.  The first read is the documented stale word; the
+    // read itself starts the prefetch for the following transfer.
+    select(20 | (1u << 5));
+    rig.card.io_write32(data1, 0x00200000);
+    // Before the first read the prefetch register is empty.
+    CHECK((rig.card.io_read32(data1) & 0x80000000u) != 0);
+    select(26 | (1u << 5));
+    CHECK_EQ(rig.card.io_read16(data1), 0x0000);
+    // The stale read started the prefetch, so the empty bit is now clear.
+    select(20 | (1u << 5));
+    CHECK((rig.card.io_read32(data1) & 0x80000000u) == 0);
+    select(26 | (1u << 5));
+    CHECK_EQ(rig.card.io_read16(data1), 0x1234);
+    CHECK_EQ(rig.card.io_read16(data1), 0x5678);
+
+    // The address registers auto-increment after each transfer.
+    select(20 | (1u << 5));
+    CHECK_EQ(rig.card.io_read32(data1) & 0xffffffu, 0x200003u);
+    select(22 | (1u << 5));
+    CHECK_EQ(rig.card.io_read32(data1) & 0xffffffu, 0x200002u);
 }
 
 TEST(audio_opl3_adlib_detection_sequence) {
@@ -214,7 +316,8 @@ TEST(audio_opl3_adlib_detection_sequence) {
     rig.card.tick(76000); // 326 us: only one tick elapsed so far
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
     rig.card.tick(76000); // 652 us: two ticks elapsed
-    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xA0); // IRQ + FT2
+    // Timer 2 is masked by bit 5 of register 04h, so only FT2 is set.
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x20);
 
     // Stopping a timer freezes its counter; restarting reloads the preset.
     fm_write(0x04, 0x80);
@@ -259,6 +362,23 @@ TEST(audio_opl3_note_is_audible) {
     rig.card.io_write8(u16(kSb + 1), 0x01);
 }
 
+TEST(audio_dsp_reset_exits_sb_midi_uart) {
+    Rig rig;
+    rig.card.io_write8(u16(kSb + 6), 1);
+    rig.card.io_write8(u16(kSb + 6), 0);
+    (void)rig.dsp_read();
+    rig.dsp_write(0x34); // enter SB-MIDI UART mode
+    rig.dsp_write(0x90); // would be relayed as MIDI data in UART mode
+
+    // A DSP reset must leave UART mode; E1h is then a normal command again.
+    rig.card.io_write8(u16(kSb + 6), 1);
+    rig.card.io_write8(u16(kSb + 6), 0);
+    CHECK_EQ(rig.dsp_read_checked(), 0xaa);
+    rig.dsp_write(0xe1);
+    CHECK_EQ(rig.dsp_read_checked(), 4);
+    CHECK_EQ(rig.dsp_read_checked(), 16);
+}
+
 TEST(audio_mpu401_uart_feeds_emu) {
     Rig rig;
     // Reset the MPU-401: 0FEh acknowledgement on the data port.
@@ -266,10 +386,14 @@ TEST(audio_mpu401_uart_feeds_emu) {
     CHECK((rig.card.io_read8(u16(kMpu + 1)) & 0x80) == 0);
     CHECK_EQ(rig.card.io_read8(kMpu), 0xfe);
 
-    // Enter UART mode: another 0FEh acknowledgement.
+    // Enter UART mode: another 0FEh acknowledgement and an interrupt.
     rig.card.io_write8(u16(kMpu + 1), 0x3f);
+    CHECK(rig.card.irq_pending());
+    // Reading the status port is not an interrupt acknowledge.
     CHECK((rig.card.io_read8(u16(kMpu + 1)) & 0x80) == 0);
+    CHECK(rig.card.irq_pending());
     CHECK_EQ(rig.card.io_read8(kMpu), 0xfe);
+    CHECK(!rig.card.irq_pending());
 
     // A note-on played on MIDI channel 2 should start an EMU8000 voice.
     rig.card.io_write8(kMpu, 0x92);
@@ -312,6 +436,62 @@ TEST(audio_dsp_direct_and_silence) {
     CHECK(!rig.card.irq_pending());
 }
 
+TEST(audio_dsp_16bit_command_takes_three_bytes) {
+    Rig rig;
+    rig.card.io_write8(u16(kSb + 6), 1);
+    rig.card.io_write8(u16(kSb + 6), 0);
+    (void)rig.dsp_read();
+
+    // Bxh: command, mode, length low, length high (exactly three params).
+    rig.dsp_write(0xb0);
+    rig.dsp_write(0x00); // mono, unsigned
+    rig.dsp_write(0x03); // 4 samples
+    rig.dsp_write(0x00);
+    CHECK(rig.card.status().find("dma=16") != std::string::npos);
+
+    // The next byte must be a new command, not a fourth parameter.
+    rig.dsp_write(0xd1);
+    rig.dsp_write(0xd8);
+    CHECK_EQ(rig.dsp_read_checked(), 0xff);
+}
+
+TEST(audio_dsp_16bit_dma_playback) {
+    Rig rig;
+    constexpr u32 base = 0x0B0000;
+    const i16 samples[4] = {0x1000, 0x2000, 0x3000, 0x4000};
+    for (u32 i = 0; i < 4; ++i) rig.bus.write16(base + i * 2, u16(samples[i]));
+
+    // 16-bit ISA DMA channel 5, single transfer, memory -> device.
+    rig.dma.io_write8(0xd4, 0x05); // mask channel 5
+    rig.dma.io_write8(0xda, 0x00); // master clear
+    rig.dma.io_write8(0xc4, 0x00); // address low
+    rig.dma.io_write8(0xc4, 0x00); // address high
+    rig.dma.io_write8(0x8b, 0x0b); // page
+    rig.dma.io_write8(0xc6, 0x03); // count = 4 words - 1
+    rig.dma.io_write8(0xc6, 0x00);
+    rig.dma.io_write8(0xd6, 0x49); // single, read, increment
+    rig.dma.io_write8(0xd4, 0x01); // unmask channel 5
+
+    rig.card.io_write8(u16(kSb + 6), 1);
+    rig.card.io_write8(u16(kSb + 6), 0);
+    (void)rig.dsp_read();
+    rig.dsp_write(0x41);
+    rig.dsp_write(0xac);
+    rig.dsp_write(0x44);
+    rig.dsp_write(0xb0);
+    rig.dsp_write(0x10); // mono, signed
+    rig.dsp_write(0x03); // 4 samples
+    rig.dsp_write(0x00);
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    rig.card.render(buffer, 44100);
+    CHECK(peak(buffer) > 0);
+    CHECK(rig.card.irq_pending());
+    CHECK_EQ(rig.dma.address(5), base + 8); // two bytes per word
+    rig.card.io_read8(u16(kSb + 0x0f));     // acknowledge 16-bit IRQ
+    CHECK(!rig.card.irq_pending());
+}
+
 TEST(audio_load_rom_dump) {
     Rig rig;
     std::vector<u8> dump(size_t(64) * 1024, 0);
@@ -345,7 +525,7 @@ TEST(audio_dsp_dma_playback_and_irq) {
     rig.card.io_write8(u16(kSb + 6), 0);
     (void)rig.dsp_read();
     rig.dsp_write(0x40); // time constant for roughly 22 kHz
-    rig.dsp_write(0xd3);
+    rig.dsp_write(0xd2);
     rig.dsp_write(0x41); // 44100 Hz output rate
     rig.dsp_write(0xac);
     rig.dsp_write(0x44);
