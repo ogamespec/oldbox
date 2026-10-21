@@ -807,14 +807,26 @@ static u32 aperture_offset(u32 off) {
 
 u32 S3Trio64::display_start_word() const {
     const u32 low = u32(crtc_[0x0D]) | (u32(crtc_[0x0C]) << 8);
+    // CR31 bits 5-4 and CR51 bits 1-0 are display-start address bits 19-18.
+    // CR69 bits 3-0 replace them when programmed (Trio64 datasheet 17-13).
     if (crtc_[0x69] & 0x0F) return low | (u32(crtc_[0x69] & 0x0F) << 16);
-    return low | (u32(crtc_[0x31] & 0x30) << 12) | (u32(crtc_[0x51] & 0x03) << 18);
+    return low | (u32(crtc_[0x31] & 0x30) << 14) | (u32(crtc_[0x51] & 0x03) << 18);
 }
 
 u32 S3Trio64::cpu_base() const {
     if (!(crtc_[0x31] & 0x01)) return 0;
-    if (crtc_[0x6A] & 0x3F) return u32(crtc_[0x6A] & 0x3F) << 14;
-    return (u32(crtc_[0x35] & 0x0F) << 14) | (u32(crtc_[0x51] & 0x0C) << 16);
+    // CR6A bits 5-0 are CPU base address bits 19-14.  The S3 VBE BIOS has two
+    // conventions for the A0000 window (see its 4F05 handler):
+    //   - chain-4 modes: CR6A holds the VBE bank number directly, i.e. a
+    //     64 KiB page (800x600x8 reports 64 KiB granularity and 8 banks);
+    //   - planar modes: the BIOS writes bank*4, giving the documented 16 KiB
+    //     unit.
+    // CR35 bits 3-0 / CR51 bits 3-2 are the old CPU base bits 19-16.
+    if (crtc_[0x6A] & 0x3F) {
+        const u32 page = u32(crtc_[0x6A] & 0x3F);
+        return (seq_[0x04] & 0x08) ? (page << 16) : (page << 14);
+    }
+    return (u32(crtc_[0x35] & 0x0F) | (u32(crtc_[0x51] & 0x0C) >> 2)) << 16;
 }
 
 bool S3Trio64::screen_enabled() const { return !(seq_[0x01] & 0x20); }
@@ -892,10 +904,11 @@ void S3Trio64::update_timing() const {
     }
     m.planar = !m.text && m.bpp == 4;
     if (std::getenv("OLDBOX_S3_TRACE"))
-        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x\n",
+        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x crtc31=%02x crtc35=%02x crtc51=%02x crtc6a=%02x\n",
                      int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.chain4),
                      pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67],
-                     crtc_[0x17], crtc_[0x18], gfx_[0x05], gfx_[0x06]);
+                     crtc_[0x17], crtc_[0x18], gfx_[0x05], gfx_[0x06],
+                     crtc_[0x31], crtc_[0x35], crtc_[0x51], crtc_[0x6A]);
 
     const u32 sw = display_start_word();
     // CR17 bit 6 selects the memory-address counter unit.  In byte mode the

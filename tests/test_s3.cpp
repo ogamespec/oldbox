@@ -884,3 +884,44 @@ TEST(s3_nine_dot_text_pan_maps_eight_to_zero_shift) {
     f.attr(0x13, 0x08);                  // back to no shift
     CHECK_EQ(f.s3.pixel(8, 0), 0x00000000u);
 }
+
+TEST(s3_vesa_bank_window_selects_64k_page) {
+    // VBE mode 0x103 (800x600x8) reports a 64 KiB granularity and a 64 KiB
+    // window at A0000.  The S3 VBE BIOS programs the bank number into CR6A;
+    // it selects the 64 KiB page of display memory exposed at A0000.
+    Fix f;
+    f.linear_mode(8);              // 8bpp, chain-4, CR31 CPU base enable
+    f.crtc(0x01, 0x63);            // 100 character clocks -> 800 pixels
+    f.crtc(0x12, 0x57);            // VDE 600 (bits 9-8 in CR7)
+    f.crtc(0x07, 0x5C);
+    f.crtc(0x13, 0x64);            // pitch 100 * 8 = 800 bytes
+    f.crtc(0x09, 0x00);
+    CHECK_EQ(f.s3.width(), 800);
+    CHECK_EQ(f.s3.height(), 600);
+
+    f.crtc(0x6A, 0x02);            // page 2 starts at VRAM 0x20000
+    f.bus.write8(0xA0000 + 1234, 0x5A);
+    CHECK_EQ(f.s3.read_vram8(0x20000 + 1234), 0x5A);
+    CHECK_EQ(f.s3.read_vram8(1234), 0x00);
+
+    f.crtc(0x6A, 0x03);            // page 3 starts at VRAM 0x30000
+    CHECK_EQ(f.bus.read8(0xA0000 + 1234), 0x00);
+    f.bus.write8(0xA0000 + 1234, 0xA5);
+    CHECK_EQ(f.s3.read_vram8(0x30000 + 1234), 0xA5);
+    CHECK_EQ(f.s3.read_vram8(0x20000 + 1234), 0x5A);
+}
+
+TEST(s3_planar_cpu_base_uses_16k_units) {
+    // In planar modes the S3 VBE BIOS writes bank * 4 to CR6A, so the
+    // register keeps its documented 16 KiB units.  The chain-4 conversion
+    // above must not be applied here.
+    Fix f;
+    f.mode12h();
+    f.unlock();
+    f.crtc(0x31, 0x01);             // CPU base offset enabled, planar mapping
+    f.crtc(0x6A, 0x02);             // 2 * 16 KiB = 0x8000
+    f.seq(0x02, 0x01);              // plane 0
+    f.bus.write8(0xA0000, 0xFF);
+    CHECK_EQ(f.s3.read_vram8(0x8000), 0xFF);
+    CHECK_EQ(f.s3.read_vram8(0x20000), 0x00);
+}

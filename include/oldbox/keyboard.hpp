@@ -45,6 +45,12 @@ private:
     bool self_test_ok_ = false;
     bool keyboard_enabled_ = true; // controller command byte bit 4 (inverted)
     u8 output_port_ = 0x03;
+    // The 8042 output data register keeps its last value after the guest
+    // reads port 0x60 and clears OBF; a second read before the next byte
+    // arrives returns the same value.  Some chained INT 9 handlers read the
+    // scancode themselves and then pass control to the old handler, which
+    // reads port 0x60 again.
+    u8 output_latch_ = 0xff;
 
     std::deque<OutputByte> output_;    // device data waiting for the output buffer
     std::deque<OutputByte> responses_; // controller command responses (served first)

@@ -14,6 +14,7 @@ void Keyboard::reset() {
     self_test_ok_ = false;
     keyboard_enabled_ = true;
     output_port_ = 0x03;
+    output_latch_ = 0xff;
     output_.clear();
     responses_.clear();
     pending_.clear();
@@ -362,12 +363,17 @@ u8 Keyboard::read_data() {
     }
     const OutputByte* head = current_head();
     if (!head) {
+        // OBF is clear, but the output register still holds the byte most
+        // recently read.  A chained INT 9 handler that reads 0x60 before
+        // calling the previous handler makes the BIOS read the port a second
+        // time; on real hardware it sees the same scancode, not 0xff.
         update_status();
-        return 0xff;
+        return output_latch_;
     }
     const u8 v = head->value;
     if (!responses_.empty()) responses_.pop_front();
     else if (!output_.empty()) output_.pop_front();
+    output_latch_ = v;
     // The output buffer holds one byte at a time.  Re-assert the interrupt
     // while more bytes remain so a burst of injected input is delivered one
     // IRQ at a time instead of collapsing into one.

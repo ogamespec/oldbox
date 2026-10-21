@@ -280,3 +280,26 @@ TEST(mouse_packets_are_gated_by_reporting_and_interface) {
     CHECK_EQ(int(h.read_byte()), 2);
     CHECK_EQ(int(h.read_byte()), 0);
 }
+
+TEST(keyboard_output_register_keeps_last_byte_after_read) {
+    // Reading port 0x60 clears OBF, but the 8042 output register keeps the
+    // byte.  Chained INT 9 handlers read the scancode themselves and then
+    // call the previous handler, which reads port 0x60 again.  On real
+    // hardware that second read returns the same scancode; returning 0xff
+    // makes the BIOS treat it as a keyboard error and beep instead of
+    // queuing the key.
+    KbdHarness h;
+    h.kbd.key_event(0x1e, true);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1e);
+    CHECK_EQ(int(h.kbd.io_read8(0x64) & 0x01), 0x00); // OBF was acknowledged
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1e);        // same register value
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1e);
+
+    h.kbd.key_event(0x1e, false);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x9e);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x9e);
+
+    // The next queued byte must still be delivered, not the stale latch.
+    h.kbd.key_event(0x1c, true);
+    CHECK_EQ(int(h.kbd.io_read8(0x60)), 0x1c);
+}
