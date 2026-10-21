@@ -87,6 +87,7 @@ private:
         u32 pitch_reg = 80;       // CR13 plus extension bits
         u32 start = 0;            // byte offset of the display start
         u32 addr_limit = 0x10000; // display address counter wrap (64K/128K/...)
+        int pan = 0;              // AR13 horizontal pixel panning (0..7/8)
         int hde = 80;             // character clocks of active display
         int vde = 400;            // scan lines of active display
         int char_w = 9;

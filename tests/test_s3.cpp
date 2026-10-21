@@ -839,3 +839,28 @@ TEST(s3_planar_display_address_wraps_at_64k) {
     // Row 51 is still below the boundary and must stay empty.
     CHECK_EQ(f.s3.pixel(0, 51), 0x00000000u);
 }
+
+// AR13 (horizontal pixel panning) shifts the fetched display data left.  DD2
+// scrolls with CRTC start = pixel/8 and AR13 = pixel%8; the renderer must
+// apply the sub-byte shift or the picture moves in 8-pixel jerks and the
+// pre-compensated AMMO panel jumps by one pixel on every pan change.
+TEST(s3_attribute_pixel_pan_shifts_planar_output) {
+    Fix f;
+    f.mode12h();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x0C, 0x00);
+    f.crtc(0x0D, 0x00);
+    f.crtc(0x17, 0xCC);                  // byte address mode
+    f.seq(0x02, 0x01);                   // plane 0
+    f.bus.write8(0xA0000, 0xFF);         // memory pixels 0..7
+    f.bus.write8(0xA0001, 0x80);         // memory pixel 8
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(7, 0), 0x000000AAu);   // pan 0: pixel 7 is set
+    f.attr(0x13, 0x01);                         // shift left by one pixel
+    CHECK_EQ(f.s3.pixel(0, 0), 0x000000AAu);   // screen 0 = memory 1
+    CHECK_EQ(f.s3.pixel(6, 0), 0x000000AAu);   // screen 6 = memory 7
+    CHECK_EQ(f.s3.pixel(7, 0), 0x000000AAu);   // screen 7 = memory 8 (next byte)
+    f.bus.write8(0xA0001, 0x00);
+    CHECK_EQ(f.s3.pixel(7, 0), 0x00000000u);   // and it really is the next byte
+    f.attr(0x13, 0x00);
+}
