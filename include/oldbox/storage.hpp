@@ -22,6 +22,21 @@ public:
     bool attach_secondary_master(const std::string& path);
     bool attach_secondary_slave(const std::string& path);
     bool mount_cdrom(const std::string& iso_path);
+    // Removes the CD from the secondary-master tray.  The ATAPI device stays
+    // attached (IDENTIFY/INQUIRY keep working) but reports "medium not
+    // present" (02/3A/00) to TEST UNIT READY, READ CAPACITY and READ, exactly
+    // like a real drive with an open tray.
+    bool eject_cdrom();
+    // Writes every dirty ATA image back to the host (hard disks only).
+    void flush_all();
+    [[nodiscard]] bool cdrom_attached() const { return channels_[1].drives[0].atapi; }
+    [[nodiscard]] bool cdrom_media_present() const {
+        const auto& d = channels_[1].drives[0];
+        return d.atapi && d.sectors != 0;
+    }
+    [[nodiscard]] const std::string& cdrom_path() const { return channels_[1].drives[0].path; }
+    [[nodiscard]] u64 cdrom_bytes() const { return channels_[1].drives[0].data.size(); }
+    [[nodiscard]] u64 cdrom_sectors() const { return channels_[1].drives[0].sectors; }
     [[nodiscard]] std::string status() const;
 
     // BIOS INT 13h services for the primary master hard disk.
@@ -196,20 +211,32 @@ public:
     ~FloppyController() override;
 
     bool attach(const std::string& path);
+    // Ejects the medium without resetting the 82077AA: only the disk-change
+    // line latches, so the guest sees the same media-change sequence as on a
+    // real drive.  Dirty media is written back first.
+    void eject();
+    void eject_b();
+    void flush() { writeback(); }
     bool read_chs(u32 cylinder, u32 head, u32 sector, u8* out);
     [[nodiscard]] bool present() const { return present_; }
     [[nodiscard]] u32 tracks() const { return geo_.tracks; }
     [[nodiscard]] u32 heads() const { return geo_.heads; }
     [[nodiscard]] u32 sectors_per_track() const { return geo_.spt; }
+    [[nodiscard]] const std::string& path() const { return path_; }
+    [[nodiscard]] u64 media_bytes() const { return disk_.size(); }
+    [[nodiscard]] bool write_protected() const { return write_protect_; }
 
-    // Second drive (B:) is presented through the BIOS INT 13h hook only; the
-    // controller core still models a single drive (A:).
+    // Second drive (B:): the 82077AA selects it with the DS1 bit in every
+    // command, so the BIOS INT 13h path reaches it like drive A:.
     bool attach_b(const std::string& path);
     bool read_chs_b(u32 cylinder, u32 head, u32 sector, u8* out);
     [[nodiscard]] bool present_b() const { return present_b_; }
     [[nodiscard]] u32 tracks_b() const { return geo_b_.tracks; }
     [[nodiscard]] u32 heads_b() const { return geo_b_.heads; }
     [[nodiscard]] u32 sectors_per_track_b() const { return geo_b_.spt; }
+    [[nodiscard]] const std::string& path_b() const { return path_b_; }
+    [[nodiscard]] u64 media_bytes_b() const { return disk_b_.size(); }
+    [[nodiscard]] bool write_protected_b() const { return write_protect_b_; }
     void reset();
     void tick(u64 cpu_cycles);
     [[nodiscard]] std::string status() const;
@@ -231,11 +258,13 @@ private:
     std::string path_;
     std::vector<u8> disk_;
     std::vector<u8> disk_b_;
+    std::string path_b_;
     bool present_b_ = false;
     Geometry geo_b_;
     bool present_ = false;
     bool write_protect_ = false;
     bool dirty_ = false;
+    bool dirty_b_ = false;
     bool motor_ = false;
     u8 dor_ = 0;
     u8 data_ = 0;

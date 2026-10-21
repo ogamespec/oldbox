@@ -6,7 +6,7 @@ ctest --test-dir build --output-on-failure
 ./build/oldbox_tests
 ```
 
-219 тестов, сгруппированных по файлам:
+326 тестов, сгруппированных по файлам:
 
 | Файл | Что проверяет |
 |---|---|
@@ -22,6 +22,7 @@ ctest --test-dir build --output-on-failure
 | `test_storage.cpp` | ATA IDENTIFY/read-write, LBA48, missing drive, FDC read/write, ATAPI ISO, native BAR |
 | `test_devices.cpp` | PIC/PIT/RTC/SMBus |
 | `test_machine.cpp` | сквозная загрузка FreeDOS с настоящим `EP-ZXA.bin` до промпта `A:\>` |
+| `test_console.cpp` | токенизатор CLI, insert/eject дискет A:/B:, извлечение CD (TEST UNIT READY → `NOT READY/3Ah`), команды `floppy`/`cdrom`/`insert`/`eject`/`key`, пауза и шаг, дополнение путей |
 
 ## Принципы
 

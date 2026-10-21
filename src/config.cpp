@@ -61,6 +61,8 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--no-voodoo") c.video.voodoo_enabled = false;
         else if (a == "--no-audio") c.audio.enabled = false;
         else if (a == "--no-sdl-audio") c.no_sdl_audio = true;
+        else if (a == "--console") c.console = true;
+        else if (a == "--no-console") c.no_console = true;
         else if (a == "--headless") { c.headless = true; c.no_sdl_audio = true; }
         else if (a == "--trace") c.trace = true;
         else if (a == "--log") {
@@ -161,6 +163,8 @@ void print_usage(const char* argv0) {
         "  --boot-menu            start with the built-in boot menu\n"
         "  --screenshot FILE      write the final frame as a PPM file\n"
         "  --headless             no window, no audio device\n"
+        "  --console              read CLI commands from stdin (window: F2)\n"
+        "  --no-console           do not read CLI commands from stdin\n"
         "  --seconds N            exit after N emulated seconds (fractional ok)\n"
         "  --press-enter          inject Enter after 2 emulated seconds\n"
         "  --press-del            inject Del (Award Setup hotkey) during POST\n"

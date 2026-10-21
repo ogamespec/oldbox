@@ -4,8 +4,8 @@ cd /d "%~dp0"
 
 rem ------------------------------------------------------------------
 rem  OldBox test launcher: boots the original Award BIOS (EP-ZXA.bin)
-rem  in a window.  Use ESC to close the emulator, F11 = fullscreen,
-rem  F12 = save a screenshot (oldbox-screenshot.bmp).
+rem  in a window.  F2 = command console (floppy/CD swap, pause, ...),
+rem  F11 = fullscreen, F12 = save a screenshot (oldbox-screenshot.bmp).
 rem ------------------------------------------------------------------
 
 set "EXE=build\vs2026\Release\oldbox.exe"

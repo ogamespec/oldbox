@@ -56,6 +56,9 @@ public:
     [[nodiscard]] bool running() const { return running_; }
     void stop() { running_ = false; }
     void key_event(int sdl_scancode, bool down);
+    // Injects a raw PC/AT set-1 scancode (used by the command console, which
+    // names keys independently of the SDL frontend).
+    void set1_key_event(u8 code, bool down, bool extended = false);
     void type_text(const std::string& text);
     [[nodiscard]] u8 cmos(u8 index);
     void set_cmos(u8 index, u8 value);
