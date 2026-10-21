@@ -59,6 +59,10 @@ struct SystemConfig {
     bool headless = false;
     bool trace = false;
     bool no_sdl_audio = false;
+    // Baseline x86-64 JIT compiler for the Pentium II core (--jit).  The
+    // interpreter remains the default and the reference implementation.
+    bool jit = false;
+    bool jit_stats = false;
     // Command console: by default stdin is read only when it is a terminal
     // (interactive launch); --console forces it even for a pipe, --no-console
     // disables it.  The in-window console (F2) is independent of these.

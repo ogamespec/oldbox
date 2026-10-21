@@ -9,7 +9,7 @@ SDL3-фронтендом. Проект написан с нуля по перв
 
 | Компонент | Реализация |
 |---|---|
-| CPU | Pentium II 233 MHz (Klamath) или 333 MHz (Deschutes), интерпретатор IA-32 |
+| CPU | Pentium II 233 MHz (Klamath) или 333 MHz (Deschutes), интерпретатор IA-32 + опциональный x86-64 JIT |
 | Chipset | Intel 82443BX + 82371AB PIIX4 (PCI, ISA, IDE, PIC, PIT, RTC, DMA, SMBus, 8042) |
 | RAM | 32/64 MiB SDRAM (настраивается, 8–512 MiB), 3 slot |
 | Flash | W29C020-12 (2MBit) |
@@ -103,6 +103,8 @@ ctest --test-dir build --output-on-failure
 
 ```bash
 ./build/oldbox --headless --seconds 5 --dump-text
+./build/oldbox --jit --headless --seconds 36 --floppy assets/floppy/freedos1440.img --dump-text
+./build/oldbox --jit --jit-stats --headless --seconds 10
 ./build/oldbox --selftest
 ./build/oldbox --list-devices
 ./build/oldbox --headless --seconds 10 --screenshot screen.ppm
@@ -111,6 +113,9 @@ ctest --test-dir build --output-on-failure
 
 `--headless` не создаёт окно; `--dump-text` печатает VGA text buffer,
 `--dump-ram` сохраняет первые 1 MiB гостевой RAM, `--screenshot` пишет PPM.
+`--jit` (алиас `--jitc`) включает JIT-компилятор IA-32 -> x86-64; по
+умолчанию работает интерпретатор. `--jit-stats` дополнительно печатает
+статистику блоков и fallback-ов.
 F1 захватывает/отпускает мышь, F2 открывает консоль команд, F11 — fullscreen,
 F12 — BMP-скриншот. Выхода по горячей клавише нет: окно закрывается крестиком;
 при закрытой консоли все клавиши, включая Esc, передаются гостю.
@@ -151,6 +156,10 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 - **FreeDOS 1.2 загружается с дискеты до промпта `A:\>`** на реальном
   `EP-ZXA.bin` (Award BootBlock проверяет контрольную сумму, читает дискету,
   FreeDOS распаковывает `KERNEL.SYS` UPX-декомпрессором и запускает FreeCom).
+- **JIT-компилятор IA-32 -> x86-64** (`--jit`): базовые блоки с кэшем,
+  трансляция целочисленного ядра, I/O и загрузки сегментов, точная
+  инвалидация при записи в код, fallback в интерпретатор для всего
+  остального. Подробности и ограничения — [docs/cpu.md](docs/cpu.md#jit).
 - Интерпретатор IA-32: real mode, protected mode, полноценный V86-monitor
   (IDT/TSS, стек ring 0, IOPL-проверки, возврат через IRET), VME
   (CR4.VME, interrupt redirection bitmap, VIF/VIP), сегментация, GDT/LDT,
@@ -206,7 +215,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 366 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 374 теста — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -223,8 +232,12 @@ PC set 1, E0-расширенные стрелки/модификаторы), PI
 (униполярный динамик, 70 Гц огибающая, таймлайн порта 61h), S3 atomic palette
 table, ATA/ATAPI/FDC, консоль команд (смена дискет и CD на ходу,
 `TEST UNIT READY` → `NOT READY/3Ah`, дополнение путей, `key`/`pause`/`step`),
-SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
-(`freedos_boots_to_command_prompt_with_reference_bios`).
+SB16/EMU8000/OPL3, дифференциальные тесты JIT против интерпретатора
+(`tests/test_jit.cpp`: ALU/флаги, адресация, переходы, I/O и сегменты,
+самомодифицирующийся код, fallback) и две сквозных загрузки FreeDOS до
+`A:\>` — интерпретатором и с `--jit`
+(`freedos_boots_to_command_prompt_with_reference_bios`,
+`jit_boots_freedos_with_reference_bios`).
 
 Аудит инструкций и найденные ошибки: [docs/cpu-audit.md](docs/cpu-audit.md).
 
@@ -261,9 +274,10 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 
 ## Ограничения
 
-- CPU — функциональный интерпретатор, не cycle-accurate и без спекулятивного
-  исполнения; SMM и локальный APIC реализованы упрощённо, часть редких MSR
-  не реализована. Call-гейты, task gates и переходы на TSS через FAR JMP/CALL
+- CPU — функциональный интерпретатор (и опциональный JIT), не cycle-accurate
+  и без спекулятивного исполнения; JIT транслирует консервативное подмножество
+  и для остальных инструкций возвращается в интерпретатор. SMM и локальный
+  APIC реализованы упрощённо, часть редких MSR не реализована. Call-гейты, task gates и переходы на TSS через FAR JMP/CALL
   реализованы; упрощён порядок редких ошибок #TS/#GP при повреждённых TSS и
   VME method 3 для аппаратных прерываний.
 - SSE/FXSR не эмулируются (у выбранных Klamath/Deschutes их нет).

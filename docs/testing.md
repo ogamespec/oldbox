@@ -8,7 +8,7 @@ ctest --test-dir build --output-on-failure
 ./build/oldbox_tests audit_
 ```
 
-354 теста, сгруппированных по файлам:
+374 теста, сгруппированных по файлам:
 
 | Файл | Что проверяет |
 |---|---|
@@ -24,6 +24,7 @@ ctest --test-dir build --output-on-failure
 | `test_audio.cpp` | DSP reset/version/UART, CT1745 mixer и алиасы, EMU8000 SF2-банк/регистры/звуковая память, 8/16-бит DMA, ADPCM, OPL3, MPU-401, DAC/DMA IRQ |
 | `test_storage.cpp` | ATA IDENTIFY/read-write, LBA48, missing drive, FDC read/write, ATAPI ISO, native BAR |
 | `test_devices.cpp` | PIC/PIT/RTC/SMBus |
+| `test_jit.cpp` | дифференциальные тесты JIT против интерпретатора: ALU/флаги, адресация, переходы, I/O и сегменты, самомодифицирующийся код, fallback на неподдержанной инструкции; сквозная загрузка FreeDOS с `--jit` |
 | `test_machine.cpp` | сквозная загрузка FreeDOS с настоящим `EP-ZXA.bin` до промпта `A:\>` |
 | `test_console.cpp` | токенизатор CLI, insert/eject дискет A:/B:, извлечение CD (TEST UNIT READY → `NOT READY/3Ah`), команды `floppy`/`cdrom`/`insert`/`eject`/`key`, пауза и шаг, дополнение путей |
 

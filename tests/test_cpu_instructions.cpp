@@ -70,8 +70,8 @@ TEST(cpu_inc_dec_flags) {
                 if (r != expected) oldbox::test::fail(__FILE__, __LINE__, "INC/DEC result");
                 if (!h.flag(CF)) oldbox::test::fail(__FILE__, __LINE__, "INC/DEC must preserve CF");
                 const u32 sign = size == 1 ? 0x80u : (size == 2 ? 0x8000u : 0x80000000u);
-                const bool of = inc ? ((a & sign) != 0 && (expected & sign) == 0)
-                                    : ((a & sign) == 0 && (expected & sign) != 0);
+                const bool of = inc ? ((a & sign) == 0 && (expected & sign) != 0)
+                                    : ((a & sign) != 0 && (expected & sign) == 0);
                 if (bool(h.flag(OF)) != of) oldbox::test::fail(__FILE__, __LINE__, "INC/DEC OF");
                 if (bool(h.flag(ZF)) != (expected == 0)) oldbox::test::fail(__FILE__, __LINE__, "INC/DEC ZF");
                 if (bool(h.flag(SF)) != ((expected & sign) != 0)) oldbox::test::fail(__FILE__, __LINE__, "INC/DEC SF");

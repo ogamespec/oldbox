@@ -14,14 +14,6 @@ namespace {
 }
 }
 
-Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), deschutes_(deschutes) {
-    tlb_tag_.fill(0xffffffffu);
-    tlb_phys_.fill(0);
-    tlb_flags_.fill(0);
-    reset();
-}
-Cpu::~Cpu() = default;
-
 void Cpu::reset() {
     vme_policy_fault_ = false;
     state_ = CpuState{};
@@ -63,6 +55,8 @@ void Cpu::reset() {
     mc_ctl_.fill(0); mc_status_.fill(0); mc_addr_.fill(0); mc_misc_.fill(0);
     last_interrupt_ = 0;
     last_opcode_ = 0;
+    jit_cycle_limit_ = 0;
+    flush_jit();
 }
 
 void Cpu::reset_segments_real() {
@@ -198,7 +192,7 @@ void Cpu::write_linear32_super(u32 addr, u32 v) { bus_.write32(translate(addr, t
 
 u32 Cpu::offset_mask(int address_size) const { return address_size == 2 ? 0xffffu : 0xffffffffu; }
 
-void Cpu::update_performance_counters(bool instruction, bool interrupt) {
+void Cpu::update_performance_counters(bool instruction, bool interrupt, u64 count) {
     const u64 sel0 = msr_[0x186];
     if ((sel0 & (1ull << 22)) == 0) return; // EN is in EVNTSEL0
     for (int i = 0; i < 2; ++i) {
@@ -208,7 +202,7 @@ void Cpu::update_performance_counters(bool instruction, bool interrupt) {
         const bool usr = (sel & (1ull << 16)) != 0;
         if (cpl() == 0 ? !os : !usr) continue;
         u64 add = 0;
-        if (instruction && (event == 0xc0u || event == 0xd0u)) add = 1;
+        if (instruction && (event == 0xc0u || event == 0xd0u)) add = count;
         if (interrupt && event == 0xc8u) add = 1;
         if (add == 0) continue;
         perf_[i] = (perf_[i] + add) & 0xffffffffffull;
@@ -554,8 +548,10 @@ void Cpu::set_logic(u32 r, int size) { set_flag(CF, false); set_flag(OF, false);
 void Cpu::set_incdec(u32 a, u32 r, int size, bool inc) {
     const u32 m = size_mask(size);
     a &= m; r &= m;
-    if (inc) set_flag(OF, ((a & sign_bit(size)) == sign_bit(size)) && ((r & sign_bit(size)) == 0));
-    else set_flag(OF, ((a & sign_bit(size)) == 0) && ((r & sign_bit(size)) == sign_bit(size)));
+    // Signed overflow for INC/DEC: INC overflows when a positive value wraps
+    // to negative; DEC overflows when a negative value wraps to positive.
+    if (inc) set_flag(OF, ((a & sign_bit(size)) == 0) && ((r & sign_bit(size)) != 0));
+    else set_flag(OF, ((a & sign_bit(size)) != 0) && ((r & sign_bit(size)) == 0));
     set_flag(AF, ((a ^ r) & 0x10u) != 0);
     set_szp(r, size);
 }
@@ -1420,6 +1416,34 @@ void Cpu::trace_control(const char* what, u32 target, u32 sp) {
                                cs.selector, target, sp & 0xffffu));
 }
 
+void Cpu::handle_exception(int vector, u32 error, bool has_error) {
+    debug_pending_ = 0;
+    cpl_override_ = -1;
+    last_exception_vector_ = vector;
+    last_exception_error_ = error;
+    if (exception_hook_)
+        exception_hook_(vector, error, state_.seg[unsigned(SegReg::cs)].selector, opcode_ip_, last_opcode_);
+    logf(LogLevel::debug, "cpu", "exception {} err={} at {:04x}:{:08x} op={:04x}", vector, error,
+         state_.seg[unsigned(SegReg::cs)].selector, opcode_ip_, last_opcode_);
+    state_.eip = opcode_ip_;
+    clear_prefixes();
+    try {
+        deliver_interrupt(vector);
+        if (has_error) {
+            const int sz = last_delivery_size_;
+            const u32 sp = stack_pointer();
+            const u32 nsp = (sp - u32(sz)) & offset_mask(stack32() ? 4 : 2);
+            write_mem(nsp, error, sz, SegReg::ss);
+            set_stack_pointer(nsp);
+        }
+    } catch (const CpuException& nested) {
+        logf(LogLevel::warn, "cpu", "fault {} err={} while delivering exception {}", nested.vector, nested.error, vector);
+        state_.shutdown = true;
+    } catch (...) {
+        state_.shutdown = true;
+    }
+}
+
 void Cpu::step() {
     cpl_override_ = -1;
     if (state_.shutdown) { state_.cycles += 1; return; }
@@ -1457,6 +1481,11 @@ void Cpu::step() {
             deliver_interrupt(v);
         }
     }
+    // The JIT compiles whole basic blocks and executes them natively.  It
+    // bails out to the interpreter for unsupported instructions, single-step
+    // mode, debug breakpoints and interrupt-shadow instructions.
+    if (jit_ && !irq_shadow && !(state_.eflags & TF) && jit_attempt()) return;
+
     const bool trace_tf = (state_.eflags & TF) != 0;
     pc_ring_[pc_ring_pos_++ & 63u] = (u32(state_.seg[1].selector) << 16) | (state_.eip & 0xffffu);
     opcode_ip_ = state_.eip;
@@ -1478,34 +1507,7 @@ void Cpu::step() {
             execute_one();
             completed = true;
         } catch (const CpuException& e) {
-            debug_pending_ = 0;
-            cpl_override_ = -1;
-            last_exception_vector_ = e.vector;
-            last_exception_error_ = e.error;
-            if (exception_hook_)
-                exception_hook_(e.vector, e.error, state_.seg[unsigned(SegReg::cs)].selector,
-                                opcode_ip_, last_opcode_);
-
-
-            logf(LogLevel::debug, "cpu", "exception {} err={} at {:04x}:{:08x} op={:04x}", e.vector, e.error,
-                 state_.seg[unsigned(SegReg::cs)].selector, opcode_ip_, last_opcode_);
-            state_.eip = opcode_ip_;
-            clear_prefixes();
-            try {
-                deliver_interrupt(e.vector);
-                if (e.has_error) {
-                    const int sz = last_delivery_size_;
-                    const u32 sp = stack_pointer();
-                    const u32 nsp = (sp - u32(sz)) & offset_mask(stack32() ? 4 : 2);
-                    write_mem(nsp, e.error, sz, SegReg::ss);
-                    set_stack_pointer(nsp);
-                }
-            } catch (const CpuException& nested) {
-                logf(LogLevel::warn, "cpu", "fault {} err={} while delivering exception {}", nested.vector, nested.error, e.vector);
-                state_.shutdown = true;
-            } catch (...) {
-                state_.shutdown = true;
-            }
+            handle_exception(e.vector, e.error, e.has_error);
         } catch (const std::exception& ex) {
             debug_pending_ = 0;
             logf(LogLevel::error, "cpu", "fatal at {:04x}:{:08x}: {}", state_.seg[unsigned(SegReg::cs)].selector, state_.eip, ex.what());
@@ -1939,55 +1941,8 @@ void Cpu::execute_one() {
     case 0xf6: case 0xf7: execute_grp3(op); break;
     case 0xf8: set_flag(CF, false); break;
     case 0xf9: set_flag(CF, true); break;
-    case 0xfa: { // CLI
-        if (state_.mode == CpuMode::real) { set_flag(IF, false); break; }
-        const u32 iopl = (state_.eflags >> 12) & 3u;
-        if (state_.mode == CpuMode::virtual86) {
-            if (state_.cr4 & 1u) {
-                if (iopl == 3u) set_flag(IF, false);
-                else state_.eflags &= ~VIF;
-            } else if (iopl == 3u) {
-                set_flag(IF, false);
-            } else {
-                raise_exception(13, 0, true);
-            }
-            break;
-        }
-        if ((state_.cr4 & 2u) && cpl() == 3 && iopl < 3u) { state_.eflags &= ~VIF; break; }
-        if (cpl() > int(iopl)) raise_exception(13, 0, true);
-        set_flag(IF, false);
-        break;
-    }
-    case 0xfb: { // STI
-        if (state_.mode == CpuMode::real) { set_flag(IF, true); sti_inhibit_ = true; break; }
-        const u32 iopl = (state_.eflags >> 12) & 3u;
-        if (state_.mode == CpuMode::virtual86) {
-            if (state_.cr4 & 1u) {
-                if (iopl == 3u) {
-                    set_flag(IF, true);
-                } else {
-                    if (state_.eflags & VIP) raise_exception(13, 0, true);
-                    state_.eflags |= VIF;
-                }
-            } else if (iopl == 3u) {
-                set_flag(IF, true);
-            } else {
-                raise_exception(13, 0, true);
-            }
-            sti_inhibit_ = true;
-            break;
-        }
-        if ((state_.cr4 & 2u) && cpl() == 3 && iopl < 3u) {
-            if (state_.eflags & VIP) raise_exception(13, 0, true);
-            state_.eflags |= VIF;
-            sti_inhibit_ = true;
-            break;
-        }
-        if (cpl() > int(iopl)) raise_exception(13, 0, true);
-        set_flag(IF, true);
-        sti_inhibit_ = true;
-        break;
-    }
+    case 0xfa: do_cli(); break;
+    case 0xfb: do_sti(); break;
     case 0xfc: set_flag(DF, false); break;
     case 0xfd: set_flag(DF, true); break;
     case 0xfe: execute_grp4(op); break;
@@ -1998,6 +1953,55 @@ void Cpu::execute_one() {
         cycles_ += 20;
         break;
     }
+}
+
+void Cpu::do_cli() {
+    if (state_.mode == CpuMode::real) { set_flag(IF, false); return; }
+    const u32 iopl = (state_.eflags >> 12) & 3u;
+    if (state_.mode == CpuMode::virtual86) {
+        if (state_.cr4 & 1u) {
+            if (iopl == 3u) set_flag(IF, false);
+            else state_.eflags &= ~VIF;
+        } else if (iopl == 3u) {
+            set_flag(IF, false);
+        } else {
+            raise_exception(13, 0, true);
+        }
+        return;
+    }
+    if ((state_.cr4 & 2u) && cpl() == 3 && iopl < 3u) { state_.eflags &= ~VIF; return; }
+    if (cpl() > int(iopl)) raise_exception(13, 0, true);
+    set_flag(IF, false);
+}
+
+void Cpu::do_sti() {
+    if (state_.mode == CpuMode::real) { set_flag(IF, true); sti_inhibit_ = true; return; }
+    const u32 iopl = (state_.eflags >> 12) & 3u;
+    if (state_.mode == CpuMode::virtual86) {
+        if (state_.cr4 & 1u) {
+            if (iopl == 3u) {
+                set_flag(IF, true);
+            } else {
+                if (state_.eflags & VIP) raise_exception(13, 0, true);
+                state_.eflags |= VIF;
+            }
+        } else if (iopl == 3u) {
+            set_flag(IF, true);
+        } else {
+            raise_exception(13, 0, true);
+        }
+        sti_inhibit_ = true;
+        return;
+    }
+    if ((state_.cr4 & 2u) && cpl() == 3 && iopl < 3u) {
+        if (state_.eflags & VIP) raise_exception(13, 0, true);
+        state_.eflags |= VIF;
+        sti_inhibit_ = true;
+        return;
+    }
+    if (cpl() > int(iopl)) raise_exception(13, 0, true);
+    set_flag(IF, true);
+    sti_inhibit_ = true;
 }
 
 void Cpu::execute_grp1(u8 opcode) {

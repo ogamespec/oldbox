@@ -8,6 +8,7 @@
 namespace oldbox {
 
 class Cpu;
+class Jit;
 
 enum : u32 {
     CF = 1u << 0,  PF = 1u << 2,  AF = 1u << 4,  ZF = 1u << 6,
@@ -115,6 +116,20 @@ public:
     void reset();
     void step();
     void run_cycles(u64 cycles);
+
+    // Baseline JIT compiler (src/cpu/jit.cpp).  Enabling it replaces the
+    // interpreter's per-instruction dispatch with cached native x86-64 basic
+    // blocks.  It is an optional front end: unsupported instructions fall back
+    // to the interpreter and the interpreted path remains the reference.
+    bool set_jit_enabled(bool enabled);
+    [[nodiscard]] bool jit_enabled() const;
+    void flush_jit();
+    [[nodiscard]] std::string jit_statistics() const;
+    // Machine sets this to the cycle of the next scheduled device tick (0 =
+    // no limit).  The JIT refuses to run a block that would cross it so that
+    // timer/RTC state changes at the same instruction boundaries as the
+    // interpreter.
+    void set_jit_cycle_limit(u64 limit) { jit_cycle_limit_ = limit; }
     void request_nmi() { state_.nmi_pending = true; }
     void request_smi() { state_.smi_pending = true; }
     void request_apic(int vector) { apic_vectors_.push_back(vector); }
@@ -219,6 +234,7 @@ public:
 
 private:
     friend class X87;
+    friend class Jit;
     Bus& bus_;
     u32 mhz_;
     bool deschutes_ = false;
@@ -340,18 +356,21 @@ private:
     void do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bool call, int size);
     void do_task_switch(u16 tss_selector, bool call, bool interrupt, bool iret);
     void note_data_access(u32 linear, int size, bool write);
-    void update_performance_counters(bool instruction, bool interrupt);
+    void update_performance_counters(bool instruction, bool interrupt, u64 count = 1);
     [[nodiscard]] u32 debug_instruction_breakpoint() const;
     [[nodiscard]] u32 gdt_base() const { return state_.gdtr_base; }
     [[nodiscard]] u32 idt_base() const { return state_.idtr_base; }
     void check_segment(SegReg s, u32 offset, u32 size, bool write);
     void exception_gp(u32 error = 0);
     void exception_ss(u32 error = 0);
+    void handle_exception(int vector, u32 error, bool has_error);
     void do_iret(int size);
     void do_far_return(int size, u16 extra = 0);
     void do_far_call(u16 sel, u32 off, int size);
     void do_far_jump(u16 sel, u32 off);
     void software_interrupt(int vector);
+    void do_cli();
+    void do_sti();
     void v86_redirect_interrupt(u8 vector);
     [[nodiscard]] bool v86_redirect_bit(u8 vector);
     bool vme_policy_fault_ = false;
@@ -396,6 +415,10 @@ private:
     std::array<u32, 1024> tlb_tag_{};
     std::array<u32, 1024> tlb_phys_{};
     std::array<u8, 1024> tlb_flags_{};
+
+    std::unique_ptr<Jit> jit_;
+    u64 jit_cycle_limit_ = 0;
+    bool jit_attempt();
 };
 
 } // namespace oldbox

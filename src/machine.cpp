@@ -46,6 +46,11 @@ Machine::Machine(SystemConfig cfg)
       usb_(bus_) {
     piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
+    if (cfg_.jit) {
+        if (!cpu_.set_jit_enabled(true))
+            throw Error("JIT is not available on this host (requires an x86-64 build)");
+        log(LogLevel::info, "jit", "baseline x86-64 JIT compiler enabled");
+    }
     // Firmware service shim: early Award POST calls INT 13h AH=00h before it
     // =====================================================================
     //  NO BIOS-SERVICE HOOKS.  OldBox is a low-level emulator: the guest
@@ -385,6 +390,7 @@ void Machine::run_slice(double seconds) {
     const u64 target = cpu_.state().cycles + u64(seconds * double(cycles_per_second()));
     u64 last_tick = cpu_.state().cycles;
     while (running_ && cpu_.state().cycles < target) {
+        cpu_.set_jit_cycle_limit(last_tick + 512);
         cpu_.step();
         if (pending_reset_) { pending_reset_ = false; reset(); continue; }
         const u64 now = cpu_.state().cycles;
@@ -425,6 +431,7 @@ void Machine::run_slice(double seconds) {
 }
 
 void Machine::run_instructions(u64 count) {
+    cpu_.set_jit_cycle_limit(0);
     const u64 end = cpu_.instruction_count() + count;
     while (running_ && cpu_.instruction_count() < end) {
         cpu_.step();
@@ -438,6 +445,7 @@ void Machine::run_frame() {
     const u64 end = cpu_.state().cycles + cycles_per_frame();
     u64 last_tick = cpu_.state().cycles;
     while (running_ && cpu_.state().cycles < end) {
+        cpu_.set_jit_cycle_limit(last_tick + 512);
         cpu_.step();
         if (pending_reset_) { pending_reset_ = false; reset(); continue; }
         const u64 now = cpu_.state().cycles;
@@ -560,6 +568,7 @@ std::string Machine::status_text() const {
     std::ostringstream o;
     o << std::format("OldBox  {}\n", cfg_.machine_name);
     o << std::format("CPU     {} ({} MHz nominal, {} MHz scheduling)\n", oldbox::cpu_name(cfg_.cpu), cpu_mhz_, sched_mhz_);
+    o << std::format("JIT     {}\n", cfg_.jit ? "enabled (x86-64 basic blocks)" : "disabled (interpreter)");
     o << std::format("RAM     {} MiB\n", ram_mb_);
     o << std::format("BIOS    {} bytes {}\n", bios_.size(), vga_bios_.empty() ? "(no VGA ROM)" : "(S3 Trio64 ROM loaded)");
     o << std::format("Video   S3 Trio64 {} MiB, {}\n", cfg_.video.s3_memory_mb,
@@ -594,6 +603,7 @@ std::string Machine::device_list() const {
     std::ostringstream o;
     o << "Machine: " << cfg_.machine_name << "\n";
     o << "CPU: " << oldbox::cpu_name(cfg_.cpu) << " (scheduler " << sched_mhz_ << " MHz)\n";
+    o << "JIT: " << (cfg_.jit ? "enabled (x86-64)" : "disabled") << "\n";
     o << "RAM: " << ram_mb_ << " MiB\n";
     o << "Firmware: " << (bios_.empty() ? "none" : std::to_string(bios_.size()) + " bytes") << "\n";
     o << "Video: S3 Trio64 " << cfg_.video.s3_memory_mb << " MiB\n";

@@ -616,10 +616,11 @@ void Cpu::execute_0f() {
         const int out_unit = unit / 2;
         u64 r = 0;
         for (int i = 0; i < 64 / (unit * 8); ++i) {
-            const i32 av = int((a >> (i * unit * 8)) & ((1ull << (unit * 8)) - 1));
-            const i32 bv = int((b >> (i * unit * 8)) & ((1ull << (unit * 8)) - 1));
-            const i32 as = (av & (1 << (unit * 8 - 1))) ? av - (1 << (unit * 8)) : av;
-            const i32 bs = (bv & (1 << (unit * 8 - 1))) ? bv - (1 << (unit * 8)) : bv;
+            const i64 lane_mask = (i64(1) << (unit * 8)) - 1;
+            const i64 av = (i64(a) >> (i * unit * 8)) & lane_mask;
+            const i64 bv = (i64(b) >> (i * unit * 8)) & lane_mask;
+            const i64 as = (av & (i64(1) << (unit * 8 - 1))) ? av - (i64(1) << (unit * 8)) : av;
+            const i64 bs = (bv & (i64(1) << (unit * 8 - 1))) ? bv - (i64(1) << (unit * 8)) : bv;
             const u64 packed_a = out_unit == 1 ? u64(sat_s8(i16(as))) : u64(sat_s16(as));
             const u64 packed_b = out_unit == 1 ? u64(sat_s8(i16(bs))) : u64(sat_s16(bs));
             r |= packed_a << (i * out_unit * 8);
@@ -704,8 +705,10 @@ void Cpu::execute_0f() {
             break;
         case 4: // PSRA: shifts in the sign bit
             for (int i = 0; i < 64 / bits; ++i) {
-                i64 lane = i64((v >> (i * bits)) & mask);
-                if (lane & (1ll << (bits - 1))) lane -= i64(1ull << bits);
+                i64 lane = bits == 64 ? i64(v >> (i * bits))
+                                      : i64((v >> (i * bits)) & mask);
+                if (bits < 64 && (lane & (i64(1) << (bits - 1))))
+                    lane -= i64(1) << bits;
                 if (count >= u32(bits)) lane = lane < 0 ? -1 : 0;
                 else lane >>= count;
                 v = (v & ~(mask << (i * bits))) | ((u64(lane) & mask) << (i * bits));
@@ -756,7 +759,8 @@ void Cpu::execute_0f() {
             if (left) lane = count >= u64(bits) ? 0 : ((lane << count) & mask);
             else if (arithmetic) {
                 i64 sl = i64(lane);
-                if (sl & (1ll << (bits - 1))) sl -= i64(1ull << bits);
+                if (bits < 64 && (sl & (i64(1) << (bits - 1))))
+                    sl -= i64(1) << bits;
                 if (count >= u64(bits)) sl = sl < 0 ? -1 : 0;
                 else sl >>= count;
                 lane = u64(sl) & mask;
