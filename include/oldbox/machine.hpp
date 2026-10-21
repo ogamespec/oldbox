@@ -58,6 +58,7 @@ public:
     void key_event(int sdl_scancode, bool down);
     void type_text(const std::string& text);
     [[nodiscard]] u8 cmos(u8 index);
+    void set_cmos(u8 index, u8 value);
     void type_next_char();
     void mouse_motion(int dx, int dy);
     void mouse_button(int button, bool down);
@@ -118,6 +119,10 @@ private:
     std::string post_text_;
     std::deque<std::string> trace_history_;
     std::deque<std::string> control_history_;
+    std::deque<std::string> int_history_;
+public:
+    [[nodiscard]] const std::deque<std::string>& int_history() const { return int_history_; }
+private:
     std::vector<std::string> instr_history_;
 
     void load_firmware();
@@ -127,6 +132,8 @@ private:
     void setup_pci();
     void run_bios_post();
     void update_irqs();
+    void debug_report(const char* reason, const CpuState& s);
+    void debug_dump_phys();
     [[nodiscard]] u64 cycles_per_frame() const;
     [[nodiscard]] u64 cycles_per_second() const;
 };

@@ -997,23 +997,28 @@ void Cpu::do_iret(int size) {
     if (outer) clear_inaccessible_data_segments(new_cpl);
     // EFLAGS update follows the IRET rules: arithmetic flags and NT always,
     // RF/AC/ID only for a 32-bit IRET, IOPL only at CPL 0, VM/VIF/VIP only at
-    // CPL 0 with a 32-bit IRET, and IF only when CPL <= IOPL.  A protected-mode
-    // return cannot enter V86 (that case was handled above).
+    // CPL 0 with a 32-bit IRET, and IF only when CPL <= IOPL.  The CPL used by
+    // these checks is the CPL at the time IRET executes, before the outer-ring
+    // return changes it (Intel PRM Vol. 2, RETURN-TO-OUTER-PRIVILEGE-LEVEL);
+    // DOS extenders rely on a ring-0 handler returning to ring 3 with IOPL=3.
+    // A protected-mode return cannot enter V86 (that case was handled above).
     u32 nf = state_.eflags;
     const u32 arithmetic = CF | PF | AF | ZF | SF | TF | DF | OF | NT;
     nf = (nf & ~arithmetic) | (flags & arithmetic);
     if (size == 4) nf = (nf & ~(RF | AC | ID)) | (flags & (RF | AC | ID));
-    if (new_cpl == 0) {
+    if (old_cpl == 0) {
         nf = (nf & ~IOPL) | (flags & IOPL);
         if (size == 4) nf = (nf & ~(VIF | VIP)) | (flags & (VIF | VIP));
         nf &= ~VM;
     }
-    if (new_cpl <= int((nf >> 12) & 3u)) nf = (nf & ~IF) | (flags & IF);
+    if (old_cpl <= int((nf >> 12) & 3u)) nf = (nf & ~IF) | (flags & IF);
     state_.eflags = nf | 2u;
     update_mode_from_cr0();
 }
 
 void Cpu::software_interrupt(int vector) {
+    if (int_hook_)
+        int_hook_(vector, u16(state_.gpr[0]), state_.seg[unsigned(SegReg::cs)].selector, state_.eip);
     if (vector == 3 || vector == 4) { /* debug/trap */ }
     // The interrupt always goes through the IDT/IVT to the firmware's own
     // handler; there is no interception mechanism by design.
@@ -1443,6 +1448,9 @@ void Cpu::step() {
             cpl_override_ = -1;
             last_exception_vector_ = e.vector;
             last_exception_error_ = e.error;
+            if (exception_hook_)
+                exception_hook_(e.vector, e.error, state_.seg[unsigned(SegReg::cs)].selector,
+                                opcode_ip_, last_opcode_);
 
 
             logf(LogLevel::debug, "cpu", "exception {} err={} at {:04x}:{:08x} op={:04x}", e.vector, e.error,
@@ -2065,7 +2073,7 @@ void Cpu::execute_grp4(u8 opcode) {
     const u32 a = read_rm(m, 1);
     if (m.reg_field == 0) { const u32 r = a + 1; set_incdec(a, r, 1, true); write_rm(m, r, 1); }
     else if (m.reg_field == 1) { const u32 r = a - 1; set_incdec(a, r, 1, false); write_rm(m, r, 1); }
-    else { log(LogLevel::warn, "cpu", "invalid FE group"); }
+    else raise_exception(6); // FE /2../7 is an invalid opcode
 }
 
 void Cpu::execute_grp5(u8 opcode) {

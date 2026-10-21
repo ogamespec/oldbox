@@ -92,6 +92,34 @@ TEST(cpu_string_rep) {
     CHECK_EQ(t.cpu.state().gpr[1], 0u);
 }
 
+TEST(cpu_string_rep_cmpsb) {
+    TestCpu t;
+    t.bus.write32(0x3000, 0x04030201);
+    t.bus.write32(0x4000, 0x04030201);
+    t.cpu.state().gpr[6] = 0x3000;
+    t.cpu.state().gpr[7] = 0x4000;
+    t.cpu.state().gpr[1] = 4;
+    t.code({0xf3, 0xa6, 0xf4}); // repe cmpsb; hlt
+    t.run(10);
+    CHECK_EQ(t.cpu.state().gpr[1], 0u);
+    CHECK((t.cpu.state().eflags & 0x40u) != 0); // ZF
+    CHECK_EQ(t.cpu.state().gpr[6], 0x3004u);
+    CHECK_EQ(t.cpu.state().gpr[7], 0x4004u);
+}
+
+TEST(cpu_string_rep_cmpsb_mismatch) {
+    TestCpu t;
+    t.bus.write32(0x3000, 0x04030201);
+    t.bus.write32(0x4000, 0x04030202);
+    t.cpu.state().gpr[6] = 0x3000;
+    t.cpu.state().gpr[7] = 0x4000;
+    t.cpu.state().gpr[1] = 4;
+    t.code({0xf3, 0xa6, 0xf4});
+    t.run(10);
+    CHECK((t.cpu.state().eflags & 0x40u) == 0); // ZF clear
+    CHECK(t.cpu.state().gpr[1] < 4u);
+}
+
 TEST(cpu_fpu_basic) {
     TestCpu t;
     // fld1; fld1; faddp st1, st0; fstp qword [0x3000]; hlt

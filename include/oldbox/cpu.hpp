@@ -127,6 +127,13 @@ public:
     void set_interrupt_ack(InterruptAck ack) { irq_ack_ = std::move(ack); }
     void set_trace(std::function<void(const CpuState&, u16)> cb) { trace_ = std::move(cb); }
     void set_control_trace(std::function<void(std::string)> cb) { control_trace_ = std::move(cb); }
+    // Called from the exception path before the CPU state is modified, so the
+    // callback sees the faulting CS:IP, opcode and error code.
+    using ExceptionHook = std::function<void(int vector, u32 error, u32 cs, u32 ip, u16 op)>;
+    void set_exception_hook(ExceptionHook cb) { exception_hook_ = std::move(cb); }
+    // Called for every software INT before it is delivered.
+    using IntHook = std::function<void(int vector, u16 ax, u32 cs, u32 ip)>;
+    void set_int_hook(IntHook cb) { int_hook_ = std::move(cb); }
     void set_memory_logging(bool v) { memory_logging_ = v; }
 
     [[nodiscard]] CpuState& state() { return state_; }
@@ -202,6 +209,11 @@ public:
     [[nodiscard]] u32 last_exception_error() const { return last_exception_error_; }
     [[nodiscard]] int last_exception_vector() const { return last_exception_vector_; }
     [[nodiscard]] int last_delivery_size() const { return last_delivery_size_; }
+    [[nodiscard]] u32 ldt_base() const { return ldt_base_; }
+    [[nodiscard]] u32 ldt_limit() const { return ldt_limit_; }
+    [[nodiscard]] u32 tr_base() const { return tr_base_; }
+    [[nodiscard]] u32 tr_limit() const { return tr_limit_; }
+    [[nodiscard]] bool tr_32bit() const { return tr_32bit_; }
     void clear_last_exception() { last_exception_vector_ = -1; last_exception_error_ = 0; }
 
 private:
@@ -232,6 +244,8 @@ private:
     std::array<u64, 5> mc_misc_{};
     InterruptAck irq_ack_;
     std::function<void(std::string)> control_trace_;
+    ExceptionHook exception_hook_;
+    IntHook int_hook_;
     std::function<void(const CpuState&, u16)> trace_;
     bool memory_logging_ = false;
     bool ss_inhibit_ = false;

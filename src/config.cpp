@@ -13,6 +13,13 @@ u32 parse_u32(std::string_view s, std::string_view what) {
     if (ec != std::errc{} || p != s.data() + s.size()) throw Error("invalid " + std::string(what) + ": " + std::string(s));
     return v;
 }
+u32 parse_hex(std::string_view s, std::string_view what) {
+    u32 v = 0;
+    auto [p, ec] = std::from_chars(s.data(), s.data() + s.size(), v, 16);
+    if (s.empty() || ec != std::errc{} || p != s.data() + s.size())
+        throw Error("invalid hex " + std::string(what) + ": " + std::string(s));
+    return v;
+}
 std::string next_arg(int& i, int argc, char** argv, std::string_view opt) {
     if (++i >= argc) throw Error("missing value for " + std::string(opt));
     return argv[i];
@@ -78,15 +85,53 @@ CommandLine parse_command_line(int argc, char** argv) {
             c.type_text += need(a);
         }
         else if (a == "--type-delay") c.type_delay = std::stod(need(a));
+        else if (a == "--enter-every") c.enter_every = std::stod(need(a));
+        else if (a == "--enter-start") c.enter_start = std::stod(need(a));
         else if (a == "--dump-pcs") c.dump_pcs = true;
         else if (a == "--dump-control") c.dump_control = true;
+        else if (a == "--stop-mkdir") { c.stop_mkdir = true; c.dump_control = true; }
         else if (a == "--dump-cmos") c.dump_cmos = true;
+        else if (a == "--cmos") c.cmos_path = need(a);
         else if (a == "--instr-log") c.instr_log_path = need(a);
         else if (a == "--boot-menu") c.boot_menu = true;
         else if (a == "--screenshot") c.screenshot_path = need(a);
         else if (a == "--dump-text") c.dump_text = true;
         else if (a == "--dump-ram") c.dump_ram_path = need(a);
         else if (a == "--demo") c.demo = need(a);
+        else if (a == "--trace-cs") c.trace_cs = parse_hex(need(a), "CS selector");
+        else if (a == "--trace-file") c.trace_file = need(a);
+        else if (a == "--exc-trace") c.exc_trace = true;
+        else if (a == "--break") {
+            const std::string spec = need(a);
+            const std::size_t colon = spec.find(':');
+            DebugBreakpoint bp;
+            bp.cs = parse_hex(spec.substr(0, colon), "breakpoint CS");
+            if (colon != std::string::npos) {
+                bp.ip = parse_hex(spec.substr(colon + 1), "breakpoint IP");
+                bp.has_ip = true;
+            }
+            c.breakpoints.push_back(bp);
+        }
+        else if (a == "--dump-phys") {
+            const std::string spec = need(a);
+            const std::size_t c1 = spec.find(':');
+            const std::size_t c2 = c1 == std::string::npos ? std::string::npos : spec.find(':', c1 + 1);
+            if (c1 == std::string::npos || c2 == std::string::npos)
+                throw Error("--dump-phys expects LO:HI:FILE (hex addresses)");
+            c.dump_phys = std::pair<u32, u32>{parse_hex(spec.substr(0, c1), "dump start"),
+                                             parse_hex(spec.substr(c1 + 1, c2 - c1 - 1), "dump end")};
+            c.dump_phys_path = spec.substr(c2 + 1);
+        }
+        else if (a == "--watch-phys") {
+            const std::string spec = need(a);
+            const std::size_t colon = spec.find(':');
+            if (colon == std::string::npos)
+                throw Error("--watch-phys expects LO:HI (hex addresses)");
+            c.watch_phys = std::pair<u32, u32>{parse_hex(spec.substr(0, colon), "watch start"),
+                                              parse_hex(spec.substr(colon + 1), "watch end")};
+        }
+        else if (a == "--watch-start") c.watch_start = std::stod(need(a));
+        else if (a == "--watch-cs") c.watch_cs = parse_hex(need(a), "watch CS selector");
         else if (a == "--list-devices") out.list_devices = true;
         else if (a == "--selftest") out.selftest = true;
         else throw Error("unknown option: " + a);
@@ -121,10 +166,25 @@ void print_usage(const char* argv0) {
         "  --press-del            inject Del (Award Setup hotkey) during POST\n"
         "  --press-f1             inject F1 after POST (continue past CMOS errors)\n"
         "  --enter-count N        inject Enter N times (default 1)\n"
+        "  --enter-every N        press Enter every N emulated seconds (scripted setup)\n"
+        "  --enter-start N        first --enter-every press (default type-delay + 8)\n"
         "  --dump-text            print the VGA text buffer on exit\n"
         "  --dump-ram FILE        save the first 1 MiB of guest RAM\n"
         "  --max-instructions N   stop after N CPU instructions\n"
         "  --instr-log FILE       log every executed instruction to FILE\n"
+        "  --trace-cs HEX         keep an instruction trace of one CS selector\n"
+        "  --trace-file FILE      write the --trace-cs trace to FILE on exit\n"
+        "  --exc-trace            log exceptions with CS:IP, opcode and segments\n"
+        "  --break CS[:IP]        stop and dump state at CS:IP (or first entry into CS)\n"
+        "  --watch-phys LO:HI      log writes to a physical range with CS:IP\n"
+        "  --watch-start N         start --watch-phys logging after N emulated seconds\n"
+        "  --watch-cs SEL          only log writes made by this CS selector\n"
+        "  --dump-pcs              keep a ring of recent PC values\n"
+        "  --dump-control          keep INT/call/jmp history and INT 21 paths\n"
+        "  --stop-mkdir            stop at the first INT 21 AH=39 and print the path\n"
+        "  --dump-cmos             print the 128-byte CMOS on exit\n"
+        "  --cmos FILE             load 128 CMOS bytes before the BIOS POST\n"
+        "  --dump-phys LO:HI:FILE dump physical memory when a breakpoint fires\n"
         "  --trace                log CPU execution (very verbose)\n"
         "  --log level            trace|debug|info|warn|error\n"
         "  --list-devices         print machine configuration and exit\n"

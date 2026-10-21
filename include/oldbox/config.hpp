@@ -39,6 +39,12 @@ struct FirmwareConfig {
     std::string flash_path;
 };
 
+struct DebugBreakpoint {
+    u32 cs = 0;
+    u32 ip = 0;
+    bool has_ip = false;
+};
+
 struct SystemConfig {
     std::string machine_name = "Reference Board";
     CpuModel cpu = CpuModel::pentium2_233;
@@ -64,14 +70,29 @@ struct SystemConfig {
     bool press_f1 = false;
     std::string type_text;
     double type_delay = 3.0;
+    double enter_every = 0.0; // scripted Enter cadence after enter_start
+    double enter_start = 0.0; // first Enter time (default: type_delay + 8)
     bool dump_pcs = false;
     bool dump_control = false;
+    bool stop_mkdir = false;
     bool dump_cmos = false;
+    std::string cmos_path; // load 128 CMOS bytes before POST
     std::string instr_log_path;
     std::string screenshot_path;
     bool dump_text = false;
     std::string dump_ram_path;
     std::string demo;
+
+    // Diagnostics (see docs/debugging.md).  All addresses/selectors are hex.
+    bool exc_trace = false;                        // log exceptions with full state
+    std::optional<u32> trace_cs;                   // keep a trace of one code selector
+    std::vector<DebugBreakpoint> breakpoints;      // stop/dump on CS:IP or first CS entry
+    std::optional<std::pair<u32, u32>> dump_phys;  // physical range to dump on a break
+    std::optional<std::pair<u32, u32>> watch_phys; // log writes to a physical range
+    double watch_start = 0.0;                     // ignore watch hits before this time
+    std::optional<u32> watch_cs;                  // only log writes made by this CS selector
+    std::string dump_phys_path;
+    std::string trace_file;                        // write filtered trace here at exit
 };
 
 struct CommandLine {

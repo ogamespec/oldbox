@@ -151,6 +151,7 @@ void Bus::write16(u32 addr, u16 value) { write16_raw(a20_gate(addr, a20_), value
 void Bus::write32(u32 addr, u32 value) { write32_raw(a20_gate(addr, a20_), value); }
 
 void Bus::write8_raw(u32 addr, u8 value) {
+    if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 8);
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write8 %05x = %02x\n", watch_cs_, watch_ip_, addr, value);
     }
@@ -161,6 +162,7 @@ void Bus::write8_raw(u32 addr, u8 value) {
     }
 }
 void Bus::write16_raw(u32 addr, u16 value) {
+    if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 16);
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write16 %05x = %04x\n", watch_cs_, watch_ip_, addr, value);
     }
@@ -172,6 +174,7 @@ void Bus::write16_raw(u32 addr, u16 value) {
     write8_raw(addr, u8(value)); write8_raw(addr + 1, u8(value >> 8));
 }
 void Bus::write32_raw(u32 addr, u32 value) {
+    if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 32);
     if (watch_on() && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write32 %05x = %08x\n", watch_cs_, watch_ip_, addr, value);
     }

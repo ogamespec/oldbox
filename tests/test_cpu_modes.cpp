@@ -208,8 +208,10 @@ TEST(mode_tss_stack_switch_and_iret) {
     CHECK_EQ(h.cpu.state().seg[2].base, 0u);
     CHECK_EQ(h.bus.read32(h.r(4) + 4), 0x1bu); // saved CS
     CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x23u); // saved SS (with ring3 stack)
-    // An outer-ring IRET must not let the ring-3 frame raise IOPL or enable
-    // IF above the old IOPL (Intel SDM Vol. 2, IRET, RETURN-OUTER-PRIVILEGE).
+    // The IRET executes at CPL 0, so it may set IOPL from the ring-0 frame
+    // even when returning to ring 3, and IF is updated because CPL (0) <= IOPL
+    // (Intel SDM Vol. 2, IRET, RETURN-TO-OUTER-PRIVILEGE-LEVEL).  DOS
+    // extenders depend on this to run their ring-3 stubs with IOPL=3.
     h.bus.write32(h.r(4) + 8, 0x00003202u); // IOPL=3, IF=1 in the saved image
     // A conforming code segment in ES is always usable from an outer ring and
     // must survive the return (Intel SDM Vol. 3, 4.8.6 step 5).
@@ -225,8 +227,8 @@ TEST(mode_tss_stack_switch_and_iret) {
     CHECK_EQ(h.cpu.state().seg[0].selector, 0x0033u);
     CHECK(h.cpu.state().seg[0].valid);
     CHECK_EQ(h.r(4), 0x7000u);
-    CHECK_EQ(h.cpu.state().eflags & IOPL, 0u);
-    CHECK(!(h.cpu.state().eflags & IF));
+    CHECK_EQ(h.cpu.state().eflags & IOPL, u32(IOPL));
+    CHECK(h.cpu.state().eflags & IF);
 }
 
 TEST(mode_16bit_tss_stack_switch) {
@@ -1168,6 +1170,23 @@ TEST(mode_16bit_tss_task_switch) {
     CHECK_EQ(s.seg[5].selector, 0x0000u);
     CHECK_EQ(s.cr3 & 0xfffff000u, 0x12345000u); // no PDBR field: unchanged
     CHECK_EQ(s.eflags & 0xffff0000u, 0u);       // upper EFLAGS not loaded
+}
+
+TEST(mode_protected_rep_movsd_above_1mb) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.bus.write32(0x3000, 0x11223344);
+    h.bus.write32(0x3004, 0x55667788);
+    h.set_r(6, 0x3000);
+    h.set_r(7, 0x200000);
+    h.set_r(1, 2);
+    h.emit(0xf3); h.emit(0xa5); h.emit(0xf4); // rep movsd; hlt
+    h.run(4);
+    CHECK_EQ(h.bus.read32(0x200000), 0x11223344u);
+    CHECK_EQ(h.bus.read32(0x200004), 0x55667788u);
+    CHECK_EQ(h.cpu.state().gpr[6], 0x3008u);
+    CHECK_EQ(h.cpu.state().gpr[7], 0x200008u);
+    CHECK_EQ(h.cpu.state().gpr[1], 0u);
 }
 
 // Unreal mode: a segment loaded in real mode keeps its hidden cache

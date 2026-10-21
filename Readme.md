@@ -34,6 +34,12 @@ Setup по Del, FreeDOS-дискета, headless-проверка). В эмул�
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
+Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
+дискета `assets\floppy\msdos7-win95.img` собирается
+`python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
+boot sector MSWIN4.1 из FORMAT.COM, HIMEM.SYS, QCDROM, MSCDEX). MS-DOS 7
+загружается до `A:\>`, CD виден как D:, и GUI-фаза установки стартует;
+текущий блокер — real-mode виртуализация DOSX (см. `docs/debugging.md`).
 Пункт 10 в `run.bat` запускает установку Windows 95 OSR2: A: — FreeDOS с
 `HIMEM.SYS` (из установочного ISO), `QCDROM.SYS` и `MSCDEX.EXE`, C: — чистый
 500-МБ диск `assets\hdd\win95-hdd.img`, D: — `C:\Isos\Windows95OSR2.iso`.
@@ -212,6 +218,8 @@ SB16/EMU8000/OPL3 и сквозная загрузка FreeDOS до `A:\>`
 - [docs/testing.md](docs/testing.md) — как устроены тесты и что они проверяют.
 - [docs/windows.md](docs/windows.md) — сборка под Windows (Visual Studio 2026,
   CMake presets, статический SDL3, prebuilt fallback ROM).
+- [docs/debugging.md](docs/debugging.md) — отладочные опции: `--exc-trace`,
+  `--break CS[:IP]`, `--trace-cs`, `--watch-phys`, `--dump-phys`.
 
 ## Ограничения
 

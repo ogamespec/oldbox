@@ -247,6 +247,15 @@ TEST(system_invalid_ff_group_raises_ud) {
     CHECK_EQ(h.cpu.last_exception_vector(), 6);
 }
 
+TEST(system_invalid_fe_group_raises_ud) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    idt_gate(h, 6, 0x08, 0x3000);
+    h.emit(0xfe); h.emit(0xf8); // FE /7
+    h.halt(); h.run(2);
+    CHECK_EQ(h.cpu.last_exception_vector(), 6);
+}
+
 TEST(system_smm_entry_and_rsm_restore) {
     CpuHarness h;
     h.enter_flat_protected();

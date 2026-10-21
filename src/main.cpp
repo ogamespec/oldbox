@@ -25,6 +25,16 @@ int main(int argc, char** argv) {
             return ok ? 0 : 1;
         }
         machine.reset();
+        if (!cli.config.cmos_path.empty()) {
+            std::ifstream in(cli.config.cmos_path, std::ios::binary);
+            if (!in) throw Error("cannot open CMOS file: " + cli.config.cmos_path);
+            for (int i = 0; i < 128; ++i) {
+                char b = 0;
+                in.read(&b, 1);
+                if (!in) break;
+                machine.set_cmos(u8(i), u8(b));
+            }
+        }
         if (cli.config.demo == "voodoo") {
             auto* v = machine.voodoo();
             if (!v) { std::fprintf(stderr, "oldbox: Voodoo is disabled\n"); return 1; }
@@ -82,12 +92,22 @@ int main(int argc, char** argv) {
             for (int i = 0; i < cli.config.enter_presses; ++i)
                 events.push_back({2.0 * double(i + 1), 2});
         }
+        if (cli.config.enter_every > 0.0) {
+            double at = cli.config.enter_start > 0.0 ? cli.config.enter_start
+                                                     : cli.config.type_delay + 8.0;
+            while (at < cli.config.run_seconds) {
+                events.push_back({at, 2});
+                at += cli.config.enter_every;
+            }
+        }
         std::sort(events.begin(), events.end(),
                   [](const InputEvent& a, const InputEvent& b) { return a.at < b.at; });
         double now = 0.0;
         for (const auto& ev : events) {
+            if (!machine.running()) break;
             if (ev.at >= cli.config.run_seconds) break;
             if (ev.at > now) { machine.run_slice(ev.at - now); now = ev.at; }
+            if (!machine.running()) break;
             switch (ev.kind) {
             case 0: // F1 (checksum / boot error prompt)
                 machine.key_event(58, true); machine.run_slice(0.1); machine.key_event(58, false);
@@ -107,7 +127,30 @@ int main(int argc, char** argv) {
             default: break;
             }
         }
-        if (cli.config.run_seconds > now) machine.run_slice(cli.config.run_seconds - now);
+        if (machine.running() && cli.config.run_seconds > now) machine.run_slice(cli.config.run_seconds - now);
+        if (!cli.config.trace_file.empty() && !machine.trace_history().empty()) {
+            std::ofstream out(cli.config.trace_file, std::ios::binary);
+            for (const auto& line : machine.trace_history()) out << line << "\n";
+            std::fprintf(stderr, "oldbox: wrote %s (%zu trace lines)\n",
+                         cli.config.trace_file.c_str(), machine.trace_history().size());
+        }
+        if (cli.config.dump_phys && !cli.config.dump_phys_path.empty()) {
+            const u32 lo = cli.config.dump_phys->first, hi = cli.config.dump_phys->second;
+            if (hi >= lo) {
+                std::vector<u8> buf(std::size_t(hi - lo) + 1);
+                for (u32 a = lo; a <= hi; ++a) buf[a - lo] = machine.bus().read8(a);
+                write_file(cli.config.dump_phys_path, buf);
+                std::fprintf(stderr, "oldbox: dumped physical %08x..%08x to %s\n", lo, hi,
+                             cli.config.dump_phys_path.c_str());
+            }
+        }
+        if (cli.config.dump_control) {
+            const auto& h = machine.int_history();
+            const std::size_t n = std::min<std::size_t>(h.size(), 120);
+            std::fprintf(stderr, "last %zu INTs:\n", n);
+            for (std::size_t i = h.size() - n; i < h.size(); ++i)
+                std::fprintf(stderr, "  %s\n", h[i].c_str());
+        }
         if (cli.config.dump_cmos) {
             std::printf("--- CMOS ---\n");
             for (int i = 0; i < 128; i += 16) {

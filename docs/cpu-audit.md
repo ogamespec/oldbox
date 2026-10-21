@@ -75,8 +75,9 @@
 | 38 | x87 | FCMOVcc использовал x87 C0/C2/C3 вместо EFLAGS; FPREM/FPREM1/FSINCOS/FPTAN/FXTRACT/FYL2XP1 были заглушками; FIST не проверял диапазон | неверные результаты и UB при переполнении | `fpu_fprem_*`, `fpu_fsincos_fptan_and_fxtract`, `fpu_fcmov*`, `fpu_fist_out_of_range_stores_indefinite` |
 | 39 | FWAIT | TS вызывал #NM даже при MP=0 | неверная семантика WAIT | `system_fwait_respects_ts_and_mp` |
 | 40 | CPUID leaf 2 | EDX не содержал cache/TLB дескрипторы | неверная информация о кэшах | `system_cpuid_identity_and_features` |
+| 41 | `IRET`, возврат на внешний уровень | `IOPL`/`IF`/`VIF`/`VIP` обновлялись по **новому** CPL, а не по CPL на момент выполнения `IRET` | ring-0 обработчик не мог вернуть ring-3 код с `IOPL=3`; DOSX получал #GP на `CLI` и уходил в «Bad Fault in MS-DOS Extender» | `mode_tss_stack_switch_and_iret` |
 
-Пункты 1–40 подтверждены тестами; пункт 1 — ещё и сквозной загрузкой
+Пункты 1–41 подтверждены тестами; пункт 1 — ещё и сквозной загрузкой
 FreeDOS, пункты 20–22 — тестами `mode_v86_*`, пункты 28–37 — тестами
 `mode_*`, `system_*`, `local_apic_*`.
 

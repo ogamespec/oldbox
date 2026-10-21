@@ -84,8 +84,13 @@ public:
     void io_write32(u16 port, u32 value);
 
     void set_a20(bool enabled) { a20_ = enabled; }
+
     [[nodiscard]] bool a20() const { return a20_; }
     void set_watch_pc(u16 cs, u16 ip) { watch_cs_ = cs; watch_ip_ = ip; }
+    // Optional write watch: the callback receives (physical address, value, size).
+    void set_write_watch(u32 lo, u32 hi, std::function<void(u32, u32, int)> cb) {
+        watch_lo_ = lo; watch_hi_ = hi; write_watch_ = std::move(cb);
+    }
     [[nodiscard]] u16 watch_pc() const { return watch_ip_; }
     [[nodiscard]] u16 watch_cs() const { return watch_cs_; }
     void set_port80_logging(bool v) { port80_logging_ = v; }
@@ -110,11 +115,14 @@ private:
     std::vector<IoDevice*> io_;
     std::vector<const char*> io_names_;
     bool a20_ = true;
+
     bool port80_logging_ = false;
     bool rom_write_enabled_ = false;
     u32 last_port80_ = 0;
     u16 watch_cs_ = 0;
     u16 watch_ip_ = 0;
+    u32 watch_lo_ = 0, watch_hi_ = 0;
+    std::function<void(u32, u32, int)> write_watch_;
     std::vector<u8> port80_history_;
 };
 
