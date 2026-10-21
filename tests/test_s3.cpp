@@ -812,3 +812,30 @@ TEST(s3_reset_restores_power_on_mode_and_palette) {
     f.w(0x3C0, 0x05);
     CHECK_EQ(f.r(0x3C1), 0x05u); // power-on attribute palette is identity
 }
+
+// Dangerous Dave 2 keeps its two 320x200 pages in the same 64K VGA window and
+// vertical scrolling walks the display start past 0xFFFF.  The CRTC address
+// counter is only 16 bits wide (CR69 has no extension bits here), so the rows
+// after the boundary wrap to the start of the *same* plane.  The renderer used
+// to keep counting into the next plane, which mixed two different pages into
+// one frame and looked like a flickering palette during vertical scrolling.
+TEST(s3_planar_display_address_wraps_at_64k) {
+    Fix f;
+    f.mode12h();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x0C, 0xF0);                  // display start 0xF000
+    f.crtc(0x0D, 0x00);
+    f.crtc(0x17, 0xCC);                  // byte address mode
+    f.dac(1, 63, 0, 0);                  // index 1 = red
+    f.dac(2, 0, 63, 0);                  // index 2 = green
+    // Row 52 starts at 0xF000 + 52*80 = 0x10040, i.e. wrapped byte 0x0040.
+    // Plane 0 is clear there, plane 1 is set: the correct pixel is index 2.
+    f.seq(0x02, 0x01);
+    f.bus.write8(0xA0000 + 0x0040, 0x00);
+    f.seq(0x02, 0x02);
+    f.bus.write8(0xA0000 + 0x0040, 0xFF);
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(0, 52), 0x0000FF00u);
+    // Row 51 is still below the boundary and must stay empty.
+    CHECK_EQ(f.s3.pixel(0, 51), 0x00000000u);
+}

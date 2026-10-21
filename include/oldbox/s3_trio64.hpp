@@ -86,6 +86,7 @@ private:
         u32 pitch = 160;          // bytes between two scan lines
         u32 pitch_reg = 80;       // CR13 plus extension bits
         u32 start = 0;            // byte offset of the display start
+        u32 addr_limit = 0x10000; // display address counter wrap (64K/128K/...)
         int hde = 80;             // character clocks of active display
         int vde = 400;            // scan lines of active display
         int char_w = 9;

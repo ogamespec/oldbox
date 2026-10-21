@@ -891,10 +891,21 @@ void S3Trio64::update_timing() const {
     // for its 320x200 planar mode); in word mode the counter is in words and
     // the address is doubled.  Chain-4 additionally consumes A1-A0.
     const bool byte_mode = (crtc_[0x17] & 0x40) != 0;
-    m.start = (m.enhanced && !m.planar && !m.text) ? sw * 8u
-            : m.chain4 ? sw * 4u
-            : byte_mode ? sw
-            : sw * 2u;
+    const u32 start_scale = (m.enhanced && !m.planar && !m.text) ? 8u
+                           : m.chain4 ? 4u
+                           : byte_mode ? 1u
+                           : 2u;
+    m.start = sw * start_scale;
+    // VGA/S3 display address counter.  Planar and text modes live in four
+    // 64K planes, so their counter wraps inside a plane.  Dangerous Dave 2
+    // puts its second 320x200 page at start 0xE429: the last ~90 rows pass
+    // 0x10000 and wrap to the beginning of the same plane.  Masking here
+    // keeps those rows from reading the next plane (which looked like a
+    // flickering palette).  Non-planar modes use the S3 20-bit counter, or
+    // the 16-bit counter scaled by the address unit when CR69/CR31/CR51 do
+    // not select a higher base.
+    if (m.text || m.planar) m.addr_limit = 0x10000u;
+    else m.addr_limit = (sw >> 16) ? 0x100000u : start_scale * 0x10000u;
     if (m.text || m.planar) m.pitch = pitch_reg * 2u;
     else m.pitch = pitch_reg * 8u;
     if (m.pitch < 1) m.pitch = 1;
@@ -1139,8 +1150,8 @@ u32 S3Trio64::text_rgb(int x, int y) const {
     // same plane word, so a cell index is one byte in each plane.  Sequential
     // planar modes use two bytes per cell.
     const u32 cell = u32(row * m.cols + col);
-    const u32 text_off = m.odd_even ? (display_start_word() + cell)
-                                    : (m.start + cell * 2u);
+    const u32 text_off = (m.odd_even ? (display_start_word() + cell)
+                                     : (m.start + cell * 2u)) & (m.addr_limit - 1u);
     const u8 ch = vram_[plane_addr(0, text_off)];
     const u8 at = vram_[plane_addr(1, text_off)];
 
@@ -1185,7 +1196,7 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
     const u32 mask = pow2_mask(u32(vram_.size()));
     auto byte = [&](u32 addr) -> u8 { return vram_[mask ? (addr & mask) : (addr % u32(vram_.size()))]; };
     if (m.planar) {
-        const u32 off = m.start + u32(y) * m.pitch + u32(x / 8);
+        const u32 off = (m.start + u32(y) * m.pitch + u32(x / 8)) & (m.addr_limit - 1u);
         u32 idx = 0;
         for (int p = 0; p < 4; ++p) {
             const u8 v = byte(plane_addr(p, off));
@@ -1193,7 +1204,8 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
         }
         return palette_rgb(u8(attr_palette_index(u8(idx))));
     }
-    const u32 addr = m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8));
+    const u32 addr = (m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8))) &
+                     (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15: {
         const u32 v = u32(byte(addr)) | (u32(byte(addr + 1)) << 8);
@@ -1313,7 +1325,7 @@ u32 S3Trio64::native_pixel(int x, int y) const {
     auto byte = [&](u32 addr) -> u8 { return vram_[mask ? (addr & mask) : (addr % u32(vram_.size()))]; };
     if (m.text) return 0;
     if (m.planar) {
-        const u32 off = m.start + u32(y) * m.pitch + u32(x / 8);
+        const u32 off = (m.start + u32(y) * m.pitch + u32(x / 8)) & (m.addr_limit - 1u);
         u32 idx = 0;
         for (int p = 0; p < 4; ++p) {
             const u8 v = byte(plane_addr(p, off));
@@ -1321,7 +1333,8 @@ u32 S3Trio64::native_pixel(int x, int y) const {
         }
         return idx;
     }
-    const u32 addr = m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8));
+    const u32 addr = (m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8))) &
+                     (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15:
     case 16: return u32(byte(addr)) | (u32(byte(addr + 1)) << 8);
@@ -1339,7 +1352,7 @@ void S3Trio64::native_write(int x, int y, u32 value) {
     const u32 mask = pow2_mask(u32(vram_.size()));
     if (m.text) return;
     if (m.planar) {
-        const u32 off = m.start + u32(y) * m.pitch + u32(x / 8);
+        const u32 off = (m.start + u32(y) * m.pitch + u32(x / 8)) & (m.addr_limit - 1u);
         const u8 bit = u8(0x80u >> (x & 7));
         for (int p = 0; p < 4; ++p) {
             const u32 addr = plane_addr(p, off);
@@ -1350,7 +1363,8 @@ void S3Trio64::native_write(int x, int y, u32 value) {
         dirty();
         return;
     }
-    const u32 addr = m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8));
+    const u32 addr = (m.start + u32(y) * m.pitch + u32(x) * u32(std::max(1, (m.bpp + 7) / 8))) &
+                     (m.addr_limit - 1u);
     auto put = [&](u32 a, u8 v) {
         const u32 idx = mask ? (a & mask) : (a % u32(vram_.size()));
         vram_[idx] = v;
