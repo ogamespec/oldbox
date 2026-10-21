@@ -864,3 +864,23 @@ TEST(s3_attribute_pixel_pan_shifts_planar_output) {
     CHECK_EQ(f.s3.pixel(7, 0), 0x00000000u);   // and it really is the next byte
     f.attr(0x13, 0x00);
 }
+
+// In 9-dot text the H_PX_PAN encoding is rotated: AR13=0 shifts by one dot,
+// AR13=8 shifts by zero, AR13=7 by eight.  The VGA BIOS writes AR13=8 for
+// mode 3; treating it as an 8-pixel shift dropped the first character of
+// every line (the FreeDOS prompt showed "ARRANTY" / "reeCom").
+TEST(s3_nine_dot_text_pan_maps_eight_to_zero_shift) {
+    Fix f;
+    f.s3.set_text_mode();
+    f.crtc(0x0A, 0x20);                  // cursor off
+    // Cell 0 is blank, cell 1 is a solid block.  With zero pan the first
+    // visible dot of cell 1 is at x=9; with a one-dot pan it is at x=8.
+    f.bus.write8(0xB8000, 0x20); f.bus.write8(0xB8001, 0x0F);
+    f.bus.write8(0xB8002, 0xDB); f.bus.write8(0xB8003, 0x0F);
+    CHECK_EQ(f.s3.pixel(8, 0), 0x00000000u);
+    CHECK_EQ(f.s3.pixel(9, 0), 0x00FFFFFFu);
+    f.attr(0x13, 0x00);                  // 9-dot AR13=0 -> shift by one dot
+    CHECK_EQ(f.s3.pixel(8, 0), 0x00FFFFFFu);
+    f.attr(0x13, 0x08);                  // back to no shift
+    CHECK_EQ(f.s3.pixel(8, 0), 0x00000000u);
+}

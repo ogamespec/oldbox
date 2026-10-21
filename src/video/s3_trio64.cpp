@@ -860,7 +860,14 @@ void S3Trio64::update_timing() const {
     // 9-dot text).  Dangerous Dave 2 scrolls with CRTC start = scroll/8 and
     // AR13 = scroll%8, so ignoring this register makes the picture move in
     // 8-pixel jerks and pre-compensated HUD elements (AMMO) jitter by 1 px.
-    m.pan = int(attr_[0x13] & ((m.text && m.char_w == 9) ? 0x0F : 0x07));
+    // 9-dot text has its own encoding: AR13=0 shifts by one dot, AR13=8
+    // shifts by zero (see the H_PX_PAN table).  The VGA BIOS sets AR13=8 in
+    // mode 3 for exactly that reason.  In 8-dot text and graphics AR13
+    // directly selects 0..7.
+    if (m.text && m.char_w == 9)
+        m.pan = (int(attr_[0x13] & 0x0F) + 1) % 9;
+    else
+        m.pan = int(attr_[0x13] & 0x07);
     m.chain4 = (seq_[0x04] & 0x08) != 0;
     m.odd_even = !(seq_[0x04] & 0x0C);
     m.enhanced = (adv_func_ & 0x0001u) || (crtc_[0x31] & 0x08) || (crtc_[0x3A] & 0x10);
@@ -1474,7 +1481,7 @@ void S3Trio64::set_text_mode() {
     crtc_[0x40] = 0x30;
     for (int i = 0; i < 16; ++i) attr_[i] = u8(i);
     attr_[0x10] = 0x0C; attr_[0x11] = 0x00; attr_[0x12] = 0x0F;
-    attr_[0x13] = 0x00; attr_[0x14] = 0x00;
+    attr_[0x13] = 0x08; attr_[0x14] = 0x00;   // 9-dot text: 8 = no pan
     misc_output_ = 0x67;
     dac_mask_ = 0xFF;
     adv_func_ = 0;
