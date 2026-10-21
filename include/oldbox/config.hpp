@@ -68,6 +68,11 @@ struct SystemConfig {
     // disables it.  The in-window console (F2) is independent of these.
     bool console = false;
     bool no_console = false;
+    // Performance counters and the F3 overlay.  Collection is on by default
+    // (it costs well under 1% of the host frame); --no-perf removes even that,
+    // --perf opens the panel at startup / prints the report on exit.
+    bool perf = false;
+    bool no_perf = false;
     int width = 800;
     int height = 600;
     double scale = 2.0;

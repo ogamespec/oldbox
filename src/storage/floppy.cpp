@@ -1,5 +1,6 @@
 // Intel 82077AA / PC-AT floppy disk controller, primary interface.
 #include "oldbox/storage.hpp"
+#include "oldbox/perf.hpp"
 #include <cstdio>
 #include "oldbox/dma.hpp"
 #include <algorithm>
@@ -376,6 +377,7 @@ void FloppyController::clear_irq() {
 // ---------------------------------------------------------------------------
 
 u32 FloppyController::dma_read(u32 start_lba, u32 count, bool drive_b) {
+    PerfScope scope(PerfNode::Fdc);
     dma_ok_ = true;
     // The host programmes the DMA count register with (bytes - 1); the
     // transfer must stop there: the terminal count ends the FDC transfer
@@ -398,10 +400,12 @@ u32 FloppyController::dma_read(u32 start_lba, u32 count, bool drive_b) {
         }
     }
     dma_.set_dreq(kFdcDma, false);
+    perf().add_event(PerfNode::Fdc, bytes / 512);
     return bytes;
 }
 
 u32 FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
+    PerfScope scope(PerfNode::Fdc);
     dma_ok_ = true;
     if (drive_b ? write_protect_b_ : write_protect_) {
         dma_ok_ = false;
@@ -425,6 +429,7 @@ u32 FloppyController::dma_write(u32 start_lba, u32 count, bool drive_b) {
         if (drive_b) dirty_b_ = true;
         else dirty_ = true;
     }
+    perf().add_event(PerfNode::Fdc, bytes / 512);
     return bytes;
 }
 

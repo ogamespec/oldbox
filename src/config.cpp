@@ -63,6 +63,8 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--no-sdl-audio") c.no_sdl_audio = true;
         else if (a == "--console") c.console = true;
         else if (a == "--no-console") c.no_console = true;
+        else if (a == "--perf") c.perf = true;
+        else if (a == "--no-perf") c.no_perf = true;
         else if (a == "--headless") { c.headless = true; c.no_sdl_audio = true; }
         else if (a == "--jit" || a == "--jitc") c.jit = true;
         else if (a == "--jit-stats") { c.jit = true; c.jit_stats = true; }
@@ -169,6 +171,8 @@ void print_usage(const char* argv0) {
         "  --jit-stats            enable the JIT and print cache statistics on exit\n"
         "  --console              read CLI commands from stdin (window: F2)\n"
         "  --no-console           do not read CLI commands from stdin\n"
+        "  --perf                 start with the F3 panel open, print counters on exit\n"
+        "  --no-perf              disable the performance counters (lowest overhead)\n"
         "  --seconds N            exit after N emulated seconds (fractional ok)\n"
         "  --press-enter          inject Enter after 2 emulated seconds\n"
         "  --press-del            inject Del (Award Setup hotkey) during POST\n"

@@ -1,5 +1,6 @@
 #include "oldbox/config.hpp"
 #include "oldbox/machine.hpp"
+#include "oldbox/perf.hpp"
 #ifdef OLDBOX_WITH_SDL
 #include "oldbox/sdl_frontend.hpp"
 #endif
@@ -13,6 +14,7 @@ int main(int argc, char** argv) {
     try {
         CommandLine cli = parse_command_line(argc, argv);
         log_set_level(cli.config.trace ? LogLevel::debug : LogLevel::info);
+        if (cli.config.no_perf) perf().set_enabled(false);
         Machine machine(cli.config);
         if (cli.list_devices) {
             std::printf("%s\n", machine.device_list().c_str());
@@ -79,6 +81,22 @@ int main(int argc, char** argv) {
         if (!cli.config.headless) return run_sdl_frontend(machine);
 #endif
         if (cli.config.run_seconds <= 0) cli.config.run_seconds = 5.0;
+        // One profiler frame per headless emulation slice: --perf then reports
+        // the guest/host ratio as well as the per-node times.
+        auto run_slice = [&](double seconds) {
+            if (!cli.config.perf) {
+                machine.run_slice(seconds);
+                return;
+            }
+            const u64 cycles = machine.cpu().state().cycles;
+            const u64 instr = machine.cpu().instruction_count();
+            perf().begin_frame();
+            machine.run_slice(seconds);
+            const u64 cycles_after = machine.cpu().state().cycles;
+            const u64 instr_after = machine.cpu().instruction_count();
+            perf().end_frame(cycles_after >= cycles ? cycles_after - cycles : 0,
+                             instr_after >= instr ? instr_after - instr : 0);
+        };
         // Timeline-driven input injection so the options compose: the Award
         // checksum prompt needs F1 at ~23 s, a DOS prompt needs typing later.
         struct InputEvent { double at; int kind; };
@@ -106,19 +124,19 @@ int main(int argc, char** argv) {
         for (const auto& ev : events) {
             if (!machine.running()) break;
             if (ev.at >= cli.config.run_seconds) break;
-            if (ev.at > now) { machine.run_slice(ev.at - now); now = ev.at; }
+            if (ev.at > now) { run_slice(ev.at - now); now = ev.at; }
             if (!machine.running()) break;
             switch (ev.kind) {
             case 0: // F1 (checksum / boot error prompt)
-                machine.key_event(58, true); machine.run_slice(0.1); machine.key_event(58, false);
+                machine.key_event(58, true); run_slice(0.1); machine.key_event(58, false);
                 now += 0.1;
                 break;
             case 1: // Del (Award Setup hotkey)
-                machine.key_event(76, true); machine.run_slice(0.1); machine.key_event(76, false);
+                machine.key_event(76, true); run_slice(0.1); machine.key_event(76, false);
                 now += 0.1;
                 break;
             case 2: // Enter
-                machine.key_event(40, true); machine.run_slice(0.1); machine.key_event(40, false);
+                machine.key_event(40, true); run_slice(0.1); machine.key_event(40, false);
                 now += 0.1;
                 break;
             case 3: // type text at the DOS prompt
@@ -127,7 +145,7 @@ int main(int argc, char** argv) {
             default: break;
             }
         }
-        if (machine.running() && cli.config.run_seconds > now) machine.run_slice(cli.config.run_seconds - now);
+        if (machine.running() && cli.config.run_seconds > now) run_slice(cli.config.run_seconds - now);
         if (!cli.config.trace_file.empty() && !machine.trace_history().empty()) {
             std::ofstream out(cli.config.trace_file, std::ios::binary);
             for (const auto& line : machine.trace_history()) out << line << "\n";
@@ -224,6 +242,7 @@ int main(int argc, char** argv) {
         }
         std::printf("%s\n", machine.status_text().c_str());
         if (cli.config.jit_stats) std::printf("%s", machine.cpu().jit_statistics().c_str());
+        if (cli.config.perf) std::printf("\n%s", perf().report().c_str());
         return 0;
     } catch (const std::exception& e) {
         std::fprintf(stderr, "oldbox: %s\n", e.what());

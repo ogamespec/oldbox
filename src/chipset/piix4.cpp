@@ -1,4 +1,5 @@
 #include "oldbox/piix4.hpp"
+#include "oldbox/perf.hpp"
 #include <sstream>
 
 namespace oldbox {
@@ -85,10 +86,23 @@ void Piix4::reset() {
 }
 
 void Piix4::tick(u64 cpu_cycles) {
-    pit_.tick(cpu_cycles);
-    rtc_.tick(cpu_cycles);
-    dma_.tick(cpu_cycles);
-    keyboard_.tick(cpu_cycles);
+    {
+        PerfScope scope(PerfNode::Pit);
+        pit_.tick(cpu_cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Rtc);
+        rtc_.tick(cpu_cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Dma);
+        dma_.tick(cpu_cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Kbc);
+        keyboard_.tick(cpu_cycles);
+    }
+    PerfScope scope(PerfNode::Chipset);
     // PMTMR: 24-bit free-running counter at 3.579545 MHz; TMROF_STS is set
     // whenever bit 23 toggles (PIIX4 datasheet 7.2.4).
     const u64 total = cpu_cycles * 3579545ull + pm_tmr_rem_;

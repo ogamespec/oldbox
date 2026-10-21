@@ -19,6 +19,7 @@
 #endif
 
 #include "oldbox/console.hpp"
+#include "oldbox/perf.hpp"
 #include "icon_rgba.inc"
 
 namespace oldbox {
@@ -57,6 +58,8 @@ struct SdlState {
     std::vector<i16> audio_buffer;
     CommandConsole* console = nullptr;
     ConsoleUi ui;
+    // F3 performance overlay (semi-transparent, top of the screen).
+    bool perf_open = false;
 };
 
 bool stdin_is_terminal() {
@@ -247,6 +250,14 @@ void handle_event(SdlState& st, Machine& machine, const SDL_Event& e) {
             if (down) set_console_open(st, !st.ui.open);
             break;
         }
+        // F3 toggles the performance overlay.  Like F2 it is emulator-side:
+        // both the make and the break code are consumed, even while the
+        // command console owns the keyboard.  Auto-repeat is ignored so a
+        // held key does not flicker the panel.
+        if (e.key.scancode == SDL_SCANCODE_F3) {
+            if (down && !e.key.repeat) st.perf_open = !st.perf_open;
+            break;
+        }
         if (st.ui.open) {
             // Fullscreen/screenshot stay available while the console is open.
             if (down && e.key.scancode == SDL_SCANCODE_F11) {
@@ -359,7 +370,7 @@ void render_console(SdlState& st) {
     SDL_RenderLine(st.renderer, 0.0f, top, w, top);
 
     float y = top + margin;
-    std::string header = "OldBox console - F2 close - Tab complete - help";
+    std::string header = "OldBox console - F2 close - F3 perf - Tab complete - help";
     if (st.console->paused()) header += "   [PAUSED]";
     SDL_SetRenderDrawColor(st.renderer, 120, 190, 255, 255);
     SDL_RenderDebugText(st.renderer, margin, y, header.c_str());
@@ -388,31 +399,218 @@ void render_console(SdlState& st) {
     SDL_SetRenderDrawBlendMode(st.renderer, SDL_BLENDMODE_NONE);
 }
 
+// ---------------------------------------------------------------------------
+// F3 performance overlay
+// ---------------------------------------------------------------------------
+//
+// A translucent panel above the guest image: one row per hardware node with
+// the current host time, share of the frame and work rate, plus a stacked
+// history graph on the right.  The graph is the important part when looking
+// for stutter: a spike in one colour points at the model that stalled.
+
+void set_rgba(SDL_Renderer* renderer, u32 rgb, u8 alpha) {
+    SDL_SetRenderDrawColor(renderer, u8(rgb >> 16), u8(rgb >> 8), u8(rgb), alpha);
+}
+
+std::string fit_cell(std::string text, std::size_t width) {
+    if (text.size() > width) text.resize(width);
+    else text.append(width - text.size(), ' ');
+    return text;
+}
+
+std::string fit_right(std::string text, std::size_t width) {
+    if (text.size() > width) text.resize(width);
+    else text.insert(0, width - text.size(), ' ');
+    return text;
+}
+
+void render_perf_panel(SdlState& st) {
+    Perf& profiler = perf();
+    constexpr float cw = SDL_DEBUG_TEXT_FONT_CHARACTER_SIZE;
+    constexpr float line_h = cw + 2.0f;
+    constexpr float margin = 8.0f;
+    const float w = float(st.frame_w > 0 ? st.frame_w : (st.tex_w > 0 ? st.tex_w : 640));
+
+    const float name_x = margin;
+    const float ms_x = name_x + 10.0f * cw;
+    const float pct_x = ms_x + 7.0f * cw;
+    const float rate_x = pct_x + 6.0f * cw;
+    const float bar_x = rate_x + 11.0f * cw;
+    const float graph_w = std::clamp(w * 0.30f, 110.0f, 240.0f);
+    const float graph_x = w - margin - graph_w;
+    const float bar_w = std::max(16.0f, graph_x - margin - bar_x);
+    const float rows_y = margin + line_h * 2.0f + 2.0f;
+    const float rows_h = float(perf_node_count) * line_h;
+    const float panel_h = rows_y + rows_h + 4.0f;
+
+    // One window for the header and the rows, so the frame time in the header
+    // is exactly the denominator of the row percentages.  The graph still
+    // shows the instantaneous history.
+    const PerfStats window = profiler.stats(60); // about one second at 60 Hz
+    const PerfStats& rows = window;
+    const double row_frames = double(std::max<std::size_t>(1, rows.frames));
+
+    std::string header1 = std::format("OldBox performance - F3 close - {} - {:.2f} GHz",
+                                      profiler.enabled() ? "profiler on" : "profiler OFF ('perf on' in F2)",
+                                      profiler.ticks_per_second() / 1.0e9);
+    std::string header2;
+    if (window.frames == 0) {
+        header2 = profiler.enabled() ? "collecting performance counters..." : "performance collection is disabled";
+    } else {
+        const double host_fps = window.host_ms > 0.0 ? double(window.frames) * 1000.0 / window.host_ms : 0.0;
+        header2 = std::format("host {:.1f} fps   {:.1f}% real time   frame {:.1f} ms host / {:.1f} ms guest",
+                              host_fps, window.realtime * 100.0,
+                              window.host_ms / double(window.frames),
+                              window.guest_ms / double(window.frames));
+    }
+
+    SDL_SetRenderDrawBlendMode(st.renderer, SDL_BLENDMODE_BLEND);
+    set_rgba(st.renderer, 0x060a10, 228);
+    const SDL_FRect background{0.0f, 0.0f, w, panel_h};
+    SDL_RenderFillRect(st.renderer, &background);
+    set_rgba(st.renderer, 0x4696e6, 210);
+    SDL_RenderLine(st.renderer, 0.0f, panel_h, w, panel_h);
+
+    set_rgba(st.renderer, 0x9ccbff, 255);
+    SDL_RenderDebugText(st.renderer, margin, margin, header1.c_str());
+    set_rgba(st.renderer, 0xd0d6df, 255);
+    SDL_RenderDebugText(st.renderer, margin, margin + line_h, header2.c_str());
+
+    // ---- per-node rows ---------------------------------------------------
+    for (std::size_t i = 0; i < perf_node_count; ++i) {
+        const PerfNode node = PerfNode(i);
+        const PerfNodeDesc& desc = perf_node_desc(node);
+        const float y = rows_y + float(i) * line_h;
+        const double ms = rows.node_ms[i] / row_frames;
+        const double pct = rows.node_percent(node);
+        const double rate = rows.event_rate(node);
+        const bool active = ms >= 0.005;
+
+        set_rgba(st.renderer, active ? desc.color : 0x5a6472u, 255);
+        SDL_RenderDebugText(st.renderer, name_x, y, fit_cell(desc.label, 10).c_str());
+        set_rgba(st.renderer, 0xe6e9ee, 255);
+        SDL_RenderDebugText(st.renderer, ms_x, y, fit_right(std::format("{:.2f}", ms), 7).c_str());
+        set_rgba(st.renderer, 0xb9c2cf, 255);
+        SDL_RenderDebugText(st.renderer, pct_x, y, fit_right(std::format("{:.1f}%", pct), 6).c_str());
+        set_rgba(st.renderer, 0x8f9aa9, 255);
+        const std::string rate_text =
+            desc.unit ? std::format("{} {}", perf_compact_number(rate), desc.unit) : std::string();
+        SDL_RenderDebugText(st.renderer, rate_x, y, fit_cell(rate_text, 11).c_str());
+
+        const SDL_FRect track{bar_x, y + 2.0f, bar_w, line_h - 4.0f};
+        set_rgba(st.renderer, 0x1a2230, 220);
+        SDL_RenderFillRect(st.renderer, &track);
+        if (pct > 0.01) {
+            const float filled = std::max(1.0f, float(std::min(1.0, pct / 100.0)) * bar_w);
+            const SDL_FRect bar{bar_x, y + 2.0f, filled, line_h - 4.0f};
+            set_rgba(st.renderer, desc.color, 235);
+            SDL_RenderFillRect(st.renderer, &bar);
+        }
+    }
+
+    // ---- stacked frame-time history -------------------------------------
+    const SDL_FRect graph{graph_x, rows_y, graph_w, rows_h};
+    set_rgba(st.renderer, 0x05070b, 180);
+    SDL_RenderFillRect(st.renderer, &graph);
+    set_rgba(st.renderer, 0x46536a, 190);
+    SDL_RenderRect(st.renderer, &graph);
+
+    const int columns = std::min<int>(int(profiler.history_count()), int((graph_w - 2.0f) / 2.0f));
+    float scale = 20.0f;
+    for (int i = 0; i < columns; ++i) {
+        const int index = int(profiler.history_count()) - columns + i;
+        scale = std::max(scale, float(profiler.history(std::size_t(index)).host_ms) * 1.05f);
+    }
+    const float bottom = rows_y + rows_h - 2.0f;
+    const float graph_h = rows_h - 4.0f;
+    for (int i = 0; i < columns; ++i) {
+        const PerfFrame& frame = profiler.history(std::size_t(int(profiler.history_count()) - columns + i));
+        const float x = graph_x + 1.0f + float(i) * 2.0f;
+        float y = bottom;
+        double measured = 0.0;
+        for (std::size_t n = 0; n < perf_node_count; ++n) {
+            const double ms = frame.node_ms[n];
+            if (ms < 0.02) continue;
+            measured += ms;
+            const float segment = std::clamp(float(ms / double(scale)) * graph_h, 0.4f, graph_h);
+            y -= segment;
+            const SDL_FRect slice{x, y, 2.0f, segment};
+            set_rgba(st.renderer, perf_node_desc(PerfNode(n)).color, 235);
+            SDL_RenderFillRect(st.renderer, &slice);
+        }
+        const double other = std::max(0.0, frame.host_ms - measured);
+        if (other >= 0.02) {
+            const float segment = std::clamp(float(other / double(scale)) * graph_h, 0.4f, graph_h);
+            y -= segment;
+            const SDL_FRect slice{x, y, 2.0f, segment};
+            set_rgba(st.renderer, 0x6b7280, 220);
+            SDL_RenderFillRect(st.renderer, &slice);
+        }
+    }
+    // 60 Hz budget: everything above the line does not fit into a frame.
+    if (16.6667f < scale) {
+        const float budget_y = bottom - (16.6667f / scale) * graph_h;
+        set_rgba(st.renderer, 0xcdd6e6, 150);
+        SDL_RenderLine(st.renderer, graph_x + 1.0f, budget_y, graph_x + graph_w - 1.0f, budget_y);
+    }
+    if (columns > 0) {
+        const SDL_FRect scale_tag{graph_x + graph_w - 50.0f, rows_y + 2.0f, 48.0f, 9.0f};
+        set_rgba(st.renderer, 0x000000, 160);
+        SDL_RenderFillRect(st.renderer, &scale_tag);
+        set_rgba(st.renderer, 0xb9c2cf, 230);
+        SDL_RenderDebugText(st.renderer, graph_x + graph_w - 48.0f, rows_y + 2.0f,
+                            std::format("{} ms", int(scale + 0.5f)).c_str());
+    }
+    set_rgba(st.renderer, 0x2a3444, 200);
+    SDL_RenderLine(st.renderer, graph_x - 6.0f, rows_y, graph_x - 6.0f, rows_y + rows_h);
+    SDL_SetRenderDrawBlendMode(st.renderer, SDL_BLENDMODE_NONE);
+}
+
 void render_frame(SdlState& st, Machine& machine) {
+    // display_frame() may compose an S3 frame on demand; that work carries its
+    // own S3 scope, so it stays outside the video-out scope below.
     const VideoFrame f = machine.display_frame();
     if (!f.valid()) {
-        SDL_RenderClear(st.renderer);
-        SDL_RenderPresent(st.renderer);
+        {
+            PerfScope scope(PerfNode::VideoOut);
+            SDL_RenderClear(st.renderer);
+            if (st.perf_open) render_perf_panel(st);
+            if (st.ui.open) render_console(st);
+        }
+        {
+            PerfScope scope(PerfNode::Present);
+            SDL_RenderPresent(st.renderer);
+        }
         return;
     }
     st.frame_w = f.width;
     st.frame_h = f.height;
     if (!st.texture || f.width != st.tex_w || f.height != st.tex_h) rebuild_texture(st, f.width, f.height);
     if (!st.texture) return;
-    SDL_UpdateTexture(st.texture, nullptr, f.pixels, f.stride * 4);
-    SDL_SetRenderLogicalPresentation(st.renderer, f.width, f.height, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
-    SDL_SetRenderDrawColor(st.renderer, 0, 0, 0, 255);
-    SDL_RenderClear(st.renderer);
-    SDL_RenderTexture(st.renderer, st.texture, nullptr, nullptr);
-    if (st.ui.open) render_console(st);
-    SDL_RenderPresent(st.renderer);
+    {
+        PerfScope scope(PerfNode::VideoOut);
+        SDL_UpdateTexture(st.texture, nullptr, f.pixels, f.stride * 4);
+        SDL_SetRenderLogicalPresentation(st.renderer, f.width, f.height, SDL_LOGICAL_PRESENTATION_INTEGER_SCALE);
+        SDL_SetRenderDrawColor(st.renderer, 0, 0, 0, 255);
+        SDL_RenderClear(st.renderer);
+        SDL_RenderTexture(st.renderer, st.texture, nullptr, nullptr);
+        if (st.perf_open) render_perf_panel(st);
+        if (st.ui.open) render_console(st);
+        perf().add_event(PerfNode::VideoOut, u64(u32(f.width)) * u64(u32(f.height)));
+    }
+    {
+        PerfScope scope(PerfNode::Present);
+        SDL_RenderPresent(st.renderer);
+    }
 }
 
 void push_audio(SdlState& st, Machine& machine) {
     if (!st.audio || !machine.audio()) return;
     constexpr int frames_per_tick = 735; // 44100 / 60
     st.audio_buffer.resize(frames_per_tick * 2);
+    // render_audio() carries the AudioMix scope (card resampling + speaker).
     machine.render_audio(std::span<i16>(st.audio_buffer), 44100);
+    PerfScope scope(PerfNode::AudioOut);
     SDL_PutAudioStreamData(st.audio, st.audio_buffer.data(), int(st.audio_buffer.size() * sizeof(i16)));
 }
 
@@ -447,9 +645,10 @@ int run_sdl_frontend(Machine& machine) {
     std::fflush(stderr);
     SDL_SetAppMetadata("OldBox", OLDBOX_VERSION, "https://example.invalid/oldbox");
     CommandConsole console(machine);
-    console.note("OldBox command console ready.  'help' lists commands; F2 toggles this panel.");
+    console.note("OldBox command console ready.  'help' lists commands; F2 toggles this panel, F3 the performance overlay.");
     SdlState st;
     st.console = &console;
+    st.perf_open = machine.config().perf;
     const auto f = machine.display_frame();
     const int w = f.valid() ? f.width * 2 : 800;
     const int h = f.valid() ? f.height * 2 : 600;
@@ -530,10 +729,17 @@ int run_sdl_frontend(Machine& machine) {
     const u64 frame_ns = 1'000'000'000ull / 60ull;
     u64 title_timer = 0;
     while (st.running && machine.running()) {
+        // One profiler frame = one iteration of the frontend loop, so the
+        // panel sees emulation, audio, texture upload, present and sleep
+        // exactly as they are interleaved in the host.
+        const u64 cycles_before = machine.cpu().state().cycles;
+        const u64 instr_before = machine.cpu().instruction_count();
+        perf().begin_frame();
         SDL_Event e;
         while (SDL_PollEvent(&e)) handle_event(st, machine, e);
         drain_stdin(st, *feed);
-        if (!console.paused()) {
+        const bool emulated = !console.paused();
+        if (emulated) {
             machine.run_frame();
             push_audio(st, machine);
         }
@@ -562,9 +768,23 @@ int run_sdl_frontend(Machine& machine) {
         }
         next += frame_ns;
         const u64 now = SDL_GetTicksNS();
-        if (next > now) SDL_DelayNS(next - now);
-        else if (now - next > 100'000'000ull) next = now;
+        {
+            PerfScope scope(PerfNode::Idle);
+            if (next > now) SDL_DelayNS(next - now);
+            else if (now - next > 100'000'000ull) next = now;
+        }
+        if (emulated) {
+            const u64 cycles_after = machine.cpu().state().cycles;
+            const u64 instr_after = machine.cpu().instruction_count();
+            // A guest-requested reset restarts the cycle/instruction counters;
+            // do not let the subtraction wrap around.
+            perf().end_frame(cycles_after >= cycles_before ? cycles_after - cycles_before : 0,
+                             instr_after >= instr_before ? instr_after - instr_before : 0);
+        } else {
+            perf().cancel_frame();
+        }
     }
+    if (machine.config().perf) std::printf("%s", perf().report().c_str());
     if (st.audio) SDL_DestroyAudioStream(st.audio);
     if (st.texture) SDL_DestroyTexture(st.texture);
     if (st.renderer) SDL_DestroyRenderer(st.renderer);

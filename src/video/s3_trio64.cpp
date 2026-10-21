@@ -4,6 +4,7 @@
 // (March 1995) and standard VGA register documentation.  No code from other
 // emulators was used.
 #include "oldbox/s3_trio64.hpp"
+#include "oldbox/perf.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -1308,6 +1309,10 @@ void S3Trio64::render_hw_cursor() {
 }
 
 void S3Trio64::render_frame() {
+    // Whole-frame composition: the dominant S3 cost in VGA text/graphics
+    // modes.  It is also reached from frame() when the frontend asks for a
+    // dirty frame, so the scope covers both paths.
+    PerfScope scope(PerfNode::S3);
     if (std::getenv("OLDBOX_S3_TRACE")) {
         static u64 n = 0;
         if ((++n % 60) == 1)
@@ -1317,6 +1322,7 @@ void S3Trio64::render_frame() {
     }
     update_timing();
     const int w = width_, h = height_;
+    perf().add_event(PerfNode::S3, u64(u32(w)) * u64(u32(h)));
     frame_.resize(std::size_t(w) * std::size_t(h));
     // A lone palette write (not a full 0..15 BIOS table) must not stay
     // invisible forever: on the next render after the burst is idle, apply
@@ -1979,6 +1985,9 @@ void S3Trio64::engine_continue(u16 cmd) {
 }
 
 void S3Trio64::engine_feed_pixels(std::span<const u8> data) {
+    // Engine image transfers are driven by CPU pixel writes; the transfer
+    // itself is S3 work, not CPU work.
+    PerfScope scope(PerfNode::S3);
     eng_.stream.insert(eng_.stream.end(), data.begin(), data.end());
     if (eng_.stream_pos > 8192 && eng_.stream_pos > eng_.stream.size() / 2) {
         eng_.stream.erase(eng_.stream.begin(), eng_.stream.begin() + std::ptrdiff_t(eng_.stream_pos));
@@ -1988,6 +1997,7 @@ void S3Trio64::engine_feed_pixels(std::span<const u8> data) {
 }
 
 void S3Trio64::engine_execute(u16 cmd) {
+    PerfScope scope(PerfNode::S3);
     update_timing();
     if (eng_.pending) {
         // A new command aborts an unfinished CPU-data transfer.

@@ -1,6 +1,7 @@
 // Intel 82371AB (PIIX4) IDE controller and generic ATA/ATAPI-4 devices.
 // Written from the PIIX4 datasheet and the ATA/ATAPI register model.
 #include "oldbox/storage.hpp"
+#include "oldbox/perf.hpp"
 #include <algorithm>
 #include <cstring>
 #include <format>
@@ -637,6 +638,9 @@ void AtaController::flush_all() {
 // ---------------------------------------------------------------------------
 
 void AtaController::prepare_read_block(Channel& ch, int drv) {
+    // Copying a sector block out of the drive image happens in the guest's
+    // data-port read path; the ATA node owns that time, not the CPU.
+    PerfScope scope(PerfNode::Ata);
     IdeDrive& d = ch.drives[drv];
     const u32 n = std::min<u32>(d.block_sectors, d.transfer_remaining);
     d.current_block = n;
@@ -647,6 +651,7 @@ void AtaController::prepare_read_block(Channel& ch, int drv) {
             return;
         }
     }
+    perf().add_event(PerfNode::Ata, n);
     d.transfer_lba += n;
     d.buf_pos = 0;
     d.phase = Phase::ata_read;
@@ -682,10 +687,14 @@ void AtaController::finish_read_block(Channel& ch, int drv) {
 }
 
 void AtaController::finish_write_block(Channel& ch, int drv) {
+    // Writes also flush the dirty image to the host file (write_sector), the
+    // most expensive thing an IDE model can do.
+    PerfScope scope(PerfNode::Ata);
     IdeDrive& d = ch.drives[drv];
     for (u32 i = 0; i < d.current_block; ++i) {
         write_sector(d, d.transfer_lba + i, d.buffer.data() + size_t(i) * 512);
     }
+    perf().add_event(PerfNode::Ata, d.current_block);
     d.transfer_lba += d.current_block;
     if (d.current_block > d.transfer_remaining) d.transfer_remaining = 0;
     else d.transfer_remaining -= d.current_block;

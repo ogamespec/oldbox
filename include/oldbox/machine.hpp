@@ -134,6 +134,13 @@ private:
     void map_devices();
     void setup_pci();
     void run_bios_post();
+    // Runs the CPU until the scheduler cycle counter reaches `target`, ticking
+    // the devices every 512 cycles.  Shared by run_frame()/run_slice() so the
+    // performance counters see identical code on both paths.
+    void run_to(u64 target_cycles);
+    // One device tick batch: PIIX4 sub-blocks, video, storage, APIC and audio,
+    // each wrapped in its own profiler scope.
+    void tick_devices(u64 cycles);
     void update_irqs();
     void debug_report(const char* reason, const CpuState& s);
     void debug_dump_phys();

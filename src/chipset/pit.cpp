@@ -1,4 +1,5 @@
 #include "oldbox/pit.hpp"
+#include "oldbox/perf.hpp"
 
 namespace oldbox {
 namespace { constexpr u64 pit_hz = 1193182; }
@@ -102,6 +103,7 @@ u16 Pit::remaining(const Counter& c) const {
 void Pit::tick_counter(int index, u64 pit_ticks) {
     Counter& c = counters_[index];
     if (!c.running || pit_ticks == 0) return;
+    const u64 irq0_before = irq0_count_;
     const u64 p = period(c);
     c.ticks += pit_ticks;
     switch (c.mode) {
@@ -179,6 +181,8 @@ void Pit::tick_counter(int index, u64 pit_ticks) {
     default:
         break;
     }
+    if (index == 0 && irq0_count_ != irq0_before)
+        perf().add_event(PerfNode::Pit, irq0_count_ - irq0_before);
 }
 
 void Pit::tick(u64 cpu_cycles) {

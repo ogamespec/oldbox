@@ -57,6 +57,7 @@ private:
     void screenshot(const std::vector<std::string>& args);
     void text_dump(const std::vector<std::string>& args);
     void cmos_command(const std::vector<std::string>& args);
+    void perf_command(const std::vector<std::string>& args);
 
     void floppy_status(int drive);
     void insert_floppy(int drive, const std::string& path);

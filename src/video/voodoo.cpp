@@ -7,6 +7,7 @@
 // host 3D API.
 
 #include "oldbox/voodoo.hpp"
+#include "oldbox/perf.hpp"
 
 #include <algorithm>
 #include <bit>
@@ -1653,7 +1654,12 @@ void Voodoo::shade_pixel(int x, int y, const Params& p, bool subpixel) {
 }
 
 void Voodoo::execute_triangle() {
+    // Rasterization is triggered by the triangle-command register write, i.e.
+    // inside the guest's MMIO access; charging it to Voodoo (and not to the
+    // CPU phase) is what makes the 3D cost visible in the F3 panel.
+    PerfScope scope(PerfNode::Voodoo);
     ++triangles_;
+    perf().add_event(PerfNode::Voodoo);
     Params p = params_;
 
     // fbzMode bit 17 selects a bottom-of-screen Y origin.
@@ -1743,6 +1749,7 @@ void Voodoo::execute_triangle() {
 }
 
 void Voodoo::fast_fill() {
+    PerfScope scope(PerfNode::Voodoo);
     const u32 lr = reg(reg_clip_lr);
     const u32 ly = reg(reg_clip_y);
     const int left = int((lr >> 16) & 0x3ffu);
@@ -1788,6 +1795,9 @@ void Voodoo::swap_buffers() {
 }
 
 void Voodoo::update_output() {
+    // 565 framebuffer -> host XRGB surface.  It runs from tick() once per
+    // frame and from the guest's swapbuffer command; both are Voodoo work.
+    PerfScope scope(PerfNode::Voodoo);
     const std::size_t n = std::size_t(width_) * std::size_t(height_);
     if (output_.size() != n) output_.assign(n, 0xff000000u);
     for (int y = 0; y < height_; ++y) {

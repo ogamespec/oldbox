@@ -36,6 +36,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_system.cpp
     src/machine.cpp
     src/console.cpp
+    src/perf.cpp
     src/keymap.cpp
     src/chipset/i440bx.cpp
     src/chipset/piix4.cpp
@@ -113,7 +114,7 @@ if(OLDBOX_BUILD_TESTS)
         tests/test_s3.cpp tests/test_audio.cpp tests/test_storage.cpp tests/test_devices.cpp
         tests/test_chipset.cpp
         tests/test_jit.cpp
-        tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp)
+        tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp tests/test_perf.cpp)
     target_link_libraries(oldbox_tests PRIVATE oldbox_core)
     target_include_directories(oldbox_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     oldbox_warnings(oldbox_tests)

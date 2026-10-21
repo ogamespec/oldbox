@@ -1,5 +1,6 @@
 #include "oldbox/machine.hpp"
 #include "oldbox/keymap.hpp"
+#include "oldbox/perf.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -44,6 +45,8 @@ Machine::Machine(SystemConfig cfg)
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       floppy_(bus_, piix4_.dma(), [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       usb_(bus_) {
+    // Guest cycles -> emulated seconds for the performance counters.
+    perf().set_guest_hz(u64(sched_mhz_) * 1'000'000ull);
     piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
     if (cfg_.jit) {
@@ -388,22 +391,68 @@ void Machine::type_next_char() {
 void Machine::run_slice(double seconds) {
     if (seconds <= 0) return;
     const u64 target = cpu_.state().cycles + u64(seconds * double(cycles_per_second()));
-    u64 last_tick = cpu_.state().cycles;
-    while (running_ && cpu_.state().cycles < target) {
-        cpu_.set_jit_cycle_limit(last_tick + 512);
+    run_to(target);
+}
+
+void Machine::run_instructions(u64 count) {
+    cpu_.set_jit_cycle_limit(0);
+    const u64 end = cpu_.instruction_count() + count;
+    while (running_ && cpu_.instruction_count() < end) {
         cpu_.step();
         if (pending_reset_) { pending_reset_ = false; reset(); continue; }
+        if (cpu_.state().shutdown) break;
+    }
+}
+
+void Machine::tick_devices(u64 cycles) {
+    // PIIX4 splits itself into PIT/RTC/DMA/8042/PM scopes; the display and
+    // audio models open their scopes around the work they actually do
+    // (S3Trio64::render_frame, Voodoo::update_output, ...), so no node is
+    // counted twice.
+    piix4_.tick(cycles);
+    s3_.tick(cycles);
+    if (voodoo_) voodoo_->tick(cycles);
+    {
+        PerfScope scope(PerfNode::Ata);
+        ata_.tick(cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Fdc);
+        floppy_.tick(cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Apic);
+        if (apic_) apic_->tick(cycles);
+    }
+    {
+        PerfScope scope(PerfNode::Awe64);
+        if (audio_) audio_->tick(cycles);
+    }
+}
+
+void Machine::run_to(u64 target_cycles) {
+    u64 last_tick = cpu_.state().cycles;
+    // The CPU is timed as a phase rather than a scope: everything between two
+    // device tick batches is interpreter/JIT work, except the device work that
+    // scoped itself (a Voodoo triangle command or an ATA block read executed
+    // from an I/O port write); the profiler subtracts the latter.
+    perf().begin_cpu_phase();
+    while (running_ && cpu_.state().cycles < target_cycles) {
+        cpu_.set_jit_cycle_limit(last_tick + 512);
+        cpu_.step();
+        if (pending_reset_) {
+            pending_reset_ = false;
+            reset();
+            last_tick = cpu_.state().cycles;
+            continue;
+        }
         const u64 now = cpu_.state().cycles;
         if (now - last_tick >= 512) {
             const u64 d = now - last_tick;
             last_tick = now;
-            piix4_.tick(d);
-            s3_.tick(d);
-            if (voodoo_) voodoo_->tick(d);
-            ata_.tick(d);
-            floppy_.tick(d);
-            if (apic_) apic_->tick(d);
-            if (audio_) audio_->tick(d);
+            perf().end_cpu_phase();
+            tick_devices(d);
+            perf().begin_cpu_phase();
             if (!type_codes_.empty() && now >= next_type_cycle_) {
                 type_next_char();
                 next_type_cycle_ = now + cycles_per_second() / 50; // 20 ms per scancode
@@ -418,69 +467,22 @@ void Machine::run_slice(double seconds) {
             break;
         }
     }
+    perf().end_cpu_phase();
     const u64 d = cpu_.state().cycles - last_tick;
-    if (d) {
-        piix4_.tick(d);
-        s3_.tick(d);
-        if (voodoo_) voodoo_->tick(d);
-        ata_.tick(d);
-        floppy_.tick(d);
-        if (apic_) apic_->tick(d);
-        if (audio_) audio_->tick(d);
-    }
-}
-
-void Machine::run_instructions(u64 count) {
-    cpu_.set_jit_cycle_limit(0);
-    const u64 end = cpu_.instruction_count() + count;
-    while (running_ && cpu_.instruction_count() < end) {
-        cpu_.step();
-        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
-        if (cpu_.state().shutdown) break;
-    }
+    if (d) tick_devices(d);
 }
 
 void Machine::run_frame() {
     piix4_.pit().begin_speaker_frame();
-    const u64 end = cpu_.state().cycles + cycles_per_frame();
-    u64 last_tick = cpu_.state().cycles;
-    while (running_ && cpu_.state().cycles < end) {
-        cpu_.set_jit_cycle_limit(last_tick + 512);
-        cpu_.step();
-        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
-        const u64 now = cpu_.state().cycles;
-        if (now - last_tick >= 512) {
-            const u64 d = now - last_tick;
-            last_tick = now;
-            piix4_.tick(d);
-            s3_.tick(d);
-            if (voodoo_) voodoo_->tick(d);
-            ata_.tick(d);
-            floppy_.tick(d);
-            if (apic_) apic_->tick(d);
-            if (audio_) audio_->tick(d);
-            if (!type_codes_.empty() && now >= next_type_cycle_) {
-                type_next_char();
-                next_type_cycle_ = now + cycles_per_second() / 50; // 20 ms per scancode
-            }
-        }
-        if (cpu_.state().shutdown) break;
-    }
-    const u64 d = cpu_.state().cycles - last_tick;
-    if (d) {
-        piix4_.tick(d);
-        s3_.tick(d);
-        if (voodoo_) voodoo_->tick(d);
-        ata_.tick(d);
-        floppy_.tick(d);
-        if (apic_) apic_->tick(d);
-        if (audio_) audio_->tick(d);
-    }
+    run_to(cpu_.state().cycles + cycles_per_frame());
     ++frames_;
     last_frame_cycles_ = cpu_.state().cycles;
 }
 
 void Machine::render_audio(std::span<i16> out, u32 host_rate) {
+    // Host-side audio: resampling the AWE64 ring, then mixing the PC speaker
+    // timeline on top.  Synthesis itself runs in Awe64::tick (AWE64 node).
+    PerfScope scope(PerfNode::AudioMix);
     if (audio_) {
         audio_->render(out, host_rate);
     } else {
@@ -494,6 +496,7 @@ void Machine::render_audio(std::span<i16> out, u32 host_rate) {
         if (p.cycle >= timeline.start_cycle) points.push_back(p);
     }
     speaker_.mix_timeline(out, host_rate, timeline.start_cycle, timeline.end_cycle, points);
+    perf().add_event(PerfNode::AudioMix, u64(out.size() / 2));
 }
 
 VideoFrame Machine::display_frame() const {
@@ -577,6 +580,7 @@ std::string Machine::status_text() const {
     o << std::format("Storage {}\n", ata_.status());
     o << std::format("Floppy  {}\n", floppy_.status());
     o << std::format("Time    {:.3f} s, {} frames, {} instructions\n", emulated_seconds(), frames_, cpu_.instruction_count());
+    o << perf().summary_line() << "\n";
     o << std::format("CPU at  {:04x}:{:08x}  CSBASE={:08x} CR0={:08x} EFLAGS={:08x} ESP={:08x} SS={:04x} SSBASE={:08x}\n",
                      cpu_.state().seg[1].selector, cpu_.state().eip, cpu_.state().seg[1].base, cpu_.state().cr0, cpu_.state().eflags,
                      cpu_.state().gpr[4], cpu_.state().seg[2].selector, cpu_.state().seg[2].base);

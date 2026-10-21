@@ -1,5 +1,6 @@
 #include "oldbox/console.hpp"
 #include "oldbox/machine.hpp"
+#include "oldbox/perf.hpp"
 
 #include <algorithm>
 #include <charconv>
@@ -162,6 +163,7 @@ constexpr CommandDoc kDocs[] = {
     {"screenshot", "screenshot [FILE]", "save the current frame as PPM"},
     {"text", "text [FILE]", "dump the VGA text screen"},
     {"cmos", "cmos dump|get IDX|set IDX VAL", "read or patch CMOS bytes"},
+    {"perf", "perf [report|reset|on|off]", "performance counters (F3 opens the panel)"},
     {"pause", "pause", "stop advancing emulated time"},
     {"resume", "resume", "resume emulation"},
     {"step", "step [SECONDS]", "advance emulation while paused"},
@@ -337,6 +339,7 @@ bool CommandConsole::execute(const std::string& line) {
         else if (cmd == "screenshot") screenshot(args);
         else if (cmd == "text" || cmd == "screen") text_dump(args);
         else if (cmd == "cmos") cmos_command(args);
+        else if (cmd == "perf" || cmd == "profile") perf_command(args);
         else if (cmd == "pause") {
             paused_ = true;
             emit("emulation paused ('resume' continues, 'step' advances one slice)");
@@ -774,6 +777,26 @@ void CommandConsole::complete(std::string& line) {
         row += c;
     }
     if (!row.empty()) emit(row);
+}
+
+void CommandConsole::perf_command(const std::vector<std::string>& args) {
+    Perf& counters = perf();
+    const std::string op = args.size() > 1 ? lower_ascii(args[1]) : "report";
+    if (op == "report" || op == "show" || op == "status") {
+        emit(counters.report());
+        emit("F3 shows the live panel; 'perf reset' clears the counters, 'perf off' stops collecting.");
+    } else if (op == "reset" || op == "clear") {
+        counters.reset();
+        emit("performance counters reset");
+    } else if (op == "on" || op == "enable") {
+        counters.set_enabled(true);
+        emit("performance counters enabled");
+    } else if (op == "off" || op == "disable") {
+        counters.set_enabled(false);
+        emit("performance counters disabled");
+    } else {
+        throw Error(std::format("unknown perf action '{}' (report, reset, on, off)", args[1]));
+    }
 }
 
 } // namespace oldbox

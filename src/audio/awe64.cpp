@@ -8,6 +8,7 @@
 
 #include "oldbox/audio.hpp"
 #include "oldbox/dma.hpp"
+#include "oldbox/perf.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1254,7 +1255,10 @@ void Awe64::tick(u64 cpu_cycles) {
     const u64 ahead = mix_generated_ > consumed ? mix_generated_ - consumed : 0;
     const u64 room = (mix_ring_size / 2) > ahead ? (mix_ring_size / 2) - ahead : 0;
     samples = std::min(samples, room);
-    if (samples) mix_internal(u32(samples));
+    if (samples) {
+        mix_internal(u32(samples));
+        perf().add_event(PerfNode::Awe64, samples);
+    }
 }
 
 void Awe64::render(std::span<i16> out, u32 host_rate) {
