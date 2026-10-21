@@ -82,7 +82,7 @@ if (cfg_.watch_phys) {
             std::string extra;
             const u8 ah = u8(ax >> 8);
             if (vector == 0x21 && (ah == 0x39 || ah == 0x3b || ah == 0x3c || ah == 0x3d ||
-                                   ah == 0x41 || ah == 0x43 || ah == 0x4e || ah == 0x56)) {
+                                   ah == 0x41 || ah == 0x43 || ah == 0x4b || ah == 0x4e || ah == 0x56)) {
                 const u32 lin = st.seg[3].base + (st.gpr[2] & 0xffffu);
                 extra = " path=\"";
                 for (int i = 0; i < 100; ++i) {
@@ -125,6 +125,16 @@ if (cfg_.watch_phys) {
         cpu_.set_trace([this](const CpuState& s, u16 op) {
             if (std::getenv("OLDBOX_WATCH")) bus_.set_watch_pc(s.seg[1].selector, u16(s.eip));
             const u32 cs_sel = s.seg[1].selector;
+            if ((cfg_.trace || cfg_.trace_cs) && (!cfg_.trace_cs || cs_sel == *cfg_.trace_cs)) {
+                trace_history_.push_back(std::format(
+                    "{:04x}:{:08x} op={:04x} ax={:04x} bx={:04x} cx={:04x} dx={:04x} "
+                    "sp={:04x} bp={:04x} si={:04x} di={:04x} fl={:04x} ds={:04x} es={:04x}",
+                    cs_sel, s.eip, op,
+                    s.gpr[0] & 0xffff, s.gpr[3] & 0xffff, s.gpr[1] & 0xffff, s.gpr[2] & 0xffff,
+                    s.gpr[4] & 0xffff, s.gpr[5] & 0xffff, s.gpr[6] & 0xffff, s.gpr[7] & 0xffff,
+                    s.eflags & 0xffff, s.seg[3].selector, s.seg[0].selector));
+                while (trace_history_.size() > 8192) trace_history_.pop_front();
+            }
             for (const auto& bp : cfg_.breakpoints) {
                 if (bp.cs == cs_sel && (!bp.has_ip || bp.ip == (s.eip & 0xffffu))) {
                     debug_report(bp.has_ip ? "breakpoint CS:IP" : "first entry into CS", s);

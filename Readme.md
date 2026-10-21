@@ -34,6 +34,8 @@ Setup по Del, FreeDOS-дискета, headless-проверка). В эмул�
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
+Текущее состояние исследования установки Windows 95 (что проверено и где
+именно остаётся блокер) описано в [docs/win95-blocker.md](docs/win95-blocker.md).
 Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
 дискета `assets\floppy\msdos7-win95.img` собирается
 `python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
