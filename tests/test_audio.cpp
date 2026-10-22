@@ -114,12 +114,15 @@ TEST(audio_mixer_defaults) {
         rig.card.io_write8(u16(kSb + 5), value);
     };
 
-    CHECK_EQ(read_reg(0x30), 0x18); // master L, 24/31 (-14 dB)
-    CHECK_EQ(read_reg(0x31), 0x18);
-    CHECK_EQ(read_reg(0x32), 0x18); // voice L
-    CHECK_EQ(read_reg(0x33), 0x18);
-    CHECK_EQ(read_reg(0x34), 0x18); // MIDI/EMU
-    CHECK_EQ(read_reg(0x22), 0xcc); // CT1345-compatible master
+    // The emulator boots the main paths at 0 dB (31/31): DOS games such as
+    // Megafortress never program the CT1745, and real installations leave
+    // the mixer at full scale via the Creative utility.
+    CHECK_EQ(read_reg(0x30), 0x1f); // master L
+    CHECK_EQ(read_reg(0x31), 0x1f);
+    CHECK_EQ(read_reg(0x32), 0x1f); // voice L
+    CHECK_EQ(read_reg(0x33), 0x1f);
+    CHECK_EQ(read_reg(0x34), 0x1f); // MIDI/EMU
+    CHECK_EQ(read_reg(0x22), 0xff); // CT1345-compatible master
     CHECK_EQ(read_reg(0x3c), 0x1f); // Line.L/R, CD.L/R and Mic switches
     CHECK_EQ(read_reg(0x3d), 0x15); // input L: Line.L, CD.L, Mic
     CHECK_EQ(read_reg(0x3e), 0x0b); // input R: Line.R, CD.R, Mic
@@ -138,9 +141,9 @@ TEST(audio_mixer_defaults) {
 
     write_reg(0x30, 0x1f);
     CHECK_EQ(read_reg(0x30), 0x1f);
-    // Mixer reset restores the documented defaults.
+    // Mixer reset restores the emulator's full-scale defaults.
     write_reg(0x00, 0xaa);
-    CHECK_EQ(read_reg(0x30), 0x18);
+    CHECK_EQ(read_reg(0x30), 0x1f);
     CHECK_EQ(read_reg(0x3c), 0x1f);
 }
 
@@ -454,6 +457,44 @@ TEST(audio_opl3_four_operator_channel) {
     std::vector<i16> buffer(size_t(4096) * 2);
     rig.card.render(buffer, 44100);
     CHECK(peak(buffer) > 100);
+}
+
+TEST(audio_opl3_drum_has_decay_tail) {
+    Rig rig;
+    auto w = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    w(0x01, 0x20); // waveform select on
+    // The percussion voice Megafortress uses: half-sine modulator, two
+    // operator FM, fast attack, DR=15, EGT=0.  The envelope must produce a
+    // decaying tail, not a single-sample click.
+    w(0x20, 0x04);
+    w(0x23, 0x02);
+    w(0x40, 0x00);
+    w(0x43, 0x15);
+    w(0x60, 0xff);
+    w(0x63, 0xff);
+    w(0x80, 0x41);
+    w(0x83, 0x00);
+    w(0xe0, 0x01);
+    w(0xc0, 0x00);
+    w(0xa0, 0x41);
+    w(0xb0, 0x2a);
+
+    std::vector<i16> buffer(size_t(4410) * 2);
+    rig.card.render(buffer, 44100);
+    auto peak_range = [&](size_t first, size_t last) {
+        int p = 0;
+        for (size_t i = first; i < last && i < buffer.size(); i += 2)
+            p = std::max(p, std::abs(int(buffer[i])));
+        return p;
+    };
+    const int early = peak_range(0, size_t(441) * 2);          // 0..10 ms
+    const int tail = peak_range(size_t(1764) * 2, size_t(2646) * 2); // 40..60 ms
+    CHECK(early > 500);
+    CHECK(tail > 0);          // a real envelope tail
+    CHECK(tail < early);      // and it is decaying
 }
 
 TEST(audio_dsp_reset_exits_sb_midi_uart) {

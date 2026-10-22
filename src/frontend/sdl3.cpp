@@ -658,6 +658,23 @@ void push_audio(SdlState& st, Machine& machine) {
     st.audio_buffer.resize(frames_per_tick * 2);
     // render_audio() carries the AudioMix scope (card resampling + speaker).
     machine.render_audio(std::span<i16>(st.audio_buffer), 44100);
+    {
+        // Optional raw stereo PCM capture for audio debugging/regression
+        // comparisons: OLDBOX_WAV=/path/to/capture.pcm (44100 Hz, S16_LE).
+        static FILE* capture = nullptr;
+        static bool capture_checked = false;
+        if (!capture_checked) {
+            capture_checked = true;
+            if (const char* path = std::getenv("OLDBOX_WAV")) {
+                capture = std::fopen(path, "wb");
+            }
+        }
+        if (capture) {
+            std::fwrite(st.audio_buffer.data(), sizeof(i16),
+                        st.audio_buffer.size(), capture);
+            std::fflush(capture);
+        }
+    }
     PerfScope scope(PerfNode::AudioOut);
     SDL_PutAudioStreamData(st.audio, st.audio_buffer.data(), int(st.audio_buffer.size() * sizeof(i16)));
 }

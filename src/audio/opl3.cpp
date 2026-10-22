@@ -122,7 +122,6 @@ void Opl3::write_data(bool secondary, u8 value) {
     const u16 reg = u16((secondary ? 0x100 : 0) | index_);
     regs_[reg] = value;
     const u8 base = u8(reg & 0xff);
-
     if (reg == 0x104) { // four-operator enable
         four_op_ = value;
         return;
@@ -264,10 +263,12 @@ void Opl3::refresh_operator(u32 index) {
     const float sr = float(sample_rate_);
 
     // Approximate audible ranges: AR=15 ~0.2 ms, AR=0 ~6.5 s; DR=15
-    // ~2 ms, DR=0 ~65 s; RR=15 ~5 ms, RR=0 ~160 s.
+    // ~50 ms, DR=0 ~27 min; RR=15 ~50 ms, RR=0 ~27 min.  The exact EG
+    // rate table is not in the YMF262 datasheet; these values keep drum
+    // hits and release tails audible instead of degenerating into clicks.
     const float at = 0.0002f * std::exp2(15.0f - float(ar));
-    const float dt = 0.002f * std::exp2(15.0f - float(dr));
-    const float rt = 0.005f * std::exp2(15.0f - float(rr));
+    const float dt = 0.05f * std::exp2(15.0f - float(dr));
+    const float rt = 0.05f * std::exp2(15.0f - float(rr));
     op.attack_step = 1.0f / std::max(1.0f, at * sr);
     op.decay_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, dt * sr));
     op.release_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, rt * sr));
@@ -625,9 +626,10 @@ void Opl3::render(i16* out, u32 frames) {
             render_channel_2op(ch, l, r);
         }
 
-        // The old two-operator model used 0.11; keep the same nominal
-        // line level so OPL music is not quieter than the rest of the card.
-        constexpr float kScale = 0.11f;
+        // With the CT1745 paths at 0 dB (see Awe64::reset_mixer) this puts
+        // the summed OPL music at roughly the level of the reference
+        // Megafortress recording instead of burying it under the mixer.
+        constexpr float kScale = 0.08f;
         l = std::clamp(l * kScale, -1.0f, 1.0f);
         r = std::clamp(r * kScale, -1.0f, 1.0f);
         out[size_t(f) * 2] = i16(std::lround(l * 32767.0f));

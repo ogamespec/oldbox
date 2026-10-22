@@ -88,14 +88,17 @@ void Awe64::reset_mixer() {
     mixer_[0x26] = 0xcc;
     mixer_[0x28] = 0x00;
     mixer_[0x2e] = 0x00;
-    // Fine-grained 5-bit controls.  Defaults follow the guide: 24 of 31 for
-    // master/voice/MIDI (-14 dB), 0 for CD/line/mic.
-    mixer_[0x30] = 0x18;
-    mixer_[0x31] = 0x18;
-    mixer_[0x32] = 0x18;
-    mixer_[0x33] = 0x18;
-    mixer_[0x34] = 0x18;
-    mixer_[0x35] = 0x18;
+    // Fine-grained 5-bit controls.  The CT1745 reset value is 24/31
+    // (-14 dB) for the main paths, but DOS software (Megafortress predates
+    // the SB16) never programs the mixer and real installations normally
+    // leave it at 0 dB via the Creative mixer utility.  Boot at full scale
+    // so OPL3 music is audible without a separate mixer setup.
+    mixer_[0x30] = 0x1f;
+    mixer_[0x31] = 0x1f;
+    mixer_[0x32] = 0x1f;
+    mixer_[0x33] = 0x1f;
+    mixer_[0x34] = 0x1f;
+    mixer_[0x35] = 0x1f;
     mixer_[0x36] = 0x00;
     mixer_[0x37] = 0x00;
     mixer_[0x38] = 0x00;
@@ -940,8 +943,8 @@ void Awe64::render_internal_frame(i16& out_l, i16& out_r) {
     const float out_gain_l = std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
     const float out_gain_r = std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
 
-    // The card's analog output stage restores the level lost by the mixer's
-    // conservative (-14 dB) defaults.
+    // The card's analog output stage.  The OPL3/EMU8000 levels are
+    // calibrated around this gain and the full-scale mixer defaults.
     constexpr float output_gain = 3.0f;
     float l = float(emu_frame[0]) * music_l + float(fm_frame[0]) * music_l +
               float(dac_l) * voice_l;
