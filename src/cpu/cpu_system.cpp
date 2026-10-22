@@ -14,9 +14,15 @@ u64 Cpu::read_msr(u32 index) {
     case 0x10: return state_.tsc;
     case 0x17: return 0x0000000000000000ull; // IA32_PLATFORM_ID
     case 0x1b: return apic_base_;
-    case 0x2a: { // EBL_CR_POWERON: bits [22:18] = max bus ratio (x0.5)
+    case 0x2a: { // EBL_CR_POWERON
+        // The Award 4.51PG POST reads the clock ratio as bits [25:22]
+        // (shr eax,22 / and 0xf) and maps the code through its x0.5 table:
+        // 0 -> 5.0x, 5 -> 3.5x.  Keep the existing max-bus-ratio field in
+        // bits [22:18] and fill in the ratio code the firmware actually uses.
         // Klamath 233: 66.6 MHz x 3.5; Deschutes 333: 66.6 MHz x 5.0.
-        const u64 v = deschutes_ ? 0x0000000000280000ull : 0x00000000001c0000ull;
+        const u64 ratio_code = deschutes_ ? 0ull : 5ull; // in x0.5 units
+        const u64 v = (deschutes_ ? 0x0000000000280000ull : 0x00000000001c0000ull) |
+                      (ratio_code << 22);
         if (std::getenv("OLDBOX_MSR_TRACE")) std::fprintf(stderr, "MSR rd 0x2a = %016llx\n", (unsigned long long)v);
         return v; }
     case 0x79: return 0; // IA32_BIOS_UPDT_TRIG (write-only trigger; reads as zero)

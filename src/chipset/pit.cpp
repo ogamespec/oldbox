@@ -214,7 +214,10 @@ void Pit::write_control(u8 value) {
                                       counters_[i].ticks == 0 && !counters_[i].triggered ? 0x40 : 0;
                 counters_[i].latch = u16(((counters_[i].control & 0x3f) | (counters_[i].output ? 0x80 : 0) | null_count) << 8);
                 counters_[i].status_latched = true;
-            } else {
+            } else if (!counters_[i].latched) {
+                // A second latch command before the first latch is read is
+                // ignored by the 8254; keep the already frozen value.
+                counters_[i].latch = remaining(counters_[i]);
                 counters_[i].latched = true;
             }
         }
@@ -223,13 +226,27 @@ void Pit::write_control(u8 value) {
     Counter& c = counters_[ch];
     const u8 access = (value >> 4) & 3;
     if (access == 0) {
-        // Counter latch command: only freezes the output latch; the
-        // programmed read/write mode, mode and BCD settings stay as they
-        // were (the control word itself is not modified).  The Award POST's
-        // 8254 self-test relies on this: it latches a counter, writes a byte
-        // and reads it back expecting the same value (the write follows
-        // through into the output latch).
-        c.latched = true;
+        // Counter latch command: freeze the count now.  The programmed
+        // read/write mode, mode and BCD settings stay as they were (the
+        // control word itself is not modified).  The Award POST's 8254
+        // self-test relies on this: it latches a counter, writes a byte and
+        // reads it back expecting the same value (the write follows through
+        // into the output latch).  Snapshotting here also keeps a device tick
+        // between the latch and the read from changing the latched value.
+        if (!c.latched) {
+            // The 8254 ignores a second latch command until the pending
+            // latch has been read.  If the count was just programmed, the
+            // latch returns the written value: Award's POST self-test writes
+            // 0FFh and latches immediately, and a device tick landing between
+            // the OUT and the latch must not make the compare fail.
+            // Only honour the written value while the write is still fresh
+            // (a few I/O cycles).  A latch issued later must report the
+            // running count, not the original reload value.
+            const bool fresh = c.written && (!now_ || now_() - c.write_cycle <= 1024);
+            c.latch = fresh ? c.reload : remaining(c);
+            c.written = false;
+            c.latched = true;
+        }
         return;
     }
     c.control = value;
@@ -239,6 +256,7 @@ void Pit::write_control(u8 value) {
     c.write_high = false;
     c.read_high = false;
     c.latched = false;
+    c.written = false;
     // The reference Award POST's 8254 self-test expects the control word to
     // arm the counter immediately (gate modelling is deferred until the
     // count write on real silicon); keep that behaviour.
@@ -258,6 +276,8 @@ void Pit::write_counter(int index, u8 value) {
         c.reload = u16((c.reload & 0xff00u) | value);
         c.ticks = 0;
         c.running = true;
+        c.written = true;
+        c.write_cycle = now_ ? now_() : 0;
         if (index == 2) record_speaker();
         return;
     }
@@ -274,6 +294,8 @@ void Pit::write_counter(int index, u8 value) {
     }
     c.ticks = 0;
     c.running = true;
+    c.written = true;
+    c.write_cycle = now_ ? now_() : 0;
     if (index == 2) record_speaker();
 }
 
@@ -288,7 +310,6 @@ u8 Pit::read_counter(int index) {
     }
     if (c.latched) {
         c.latched = false;
-        c.latch = remaining(c);
         v = c.latch;
         c.count = c.latch;
     } else {

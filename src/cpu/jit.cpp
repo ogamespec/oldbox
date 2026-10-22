@@ -487,7 +487,7 @@ void free_exec(u8* p, size_t size) {
 // ---------------------------------------------------------------------------
 class Jit {};
 
-Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), deschutes_(deschutes) {
+Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes) {
     tlb_tag_.fill(0xffffffffu);
     tlb_phys_.fill(0);
     tlb_flags_.fill(0);
@@ -2852,7 +2852,7 @@ bool Jit::execute() {
     cpu_.update_performance_counters(true, false, executed);
     s.instructions += executed;
     s.cycles += cycles;
-    s.tsc += cycles;
+    cpu_.advance_tsc(cycles);
     stats_.instructions += executed;
     if (executed) {
         cpu_.last_opcode_ = block->opcodes[executed - 1];
@@ -2890,7 +2890,7 @@ std::string Jit::statistics() const {
 // ---------------------------------------------------------------------------
 // Cpu glue (the Jit class is private to this translation unit)
 // ---------------------------------------------------------------------------
-Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), deschutes_(deschutes) {
+Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes) {
     tlb_tag_.fill(0xffffffffu);
     tlb_phys_.fill(0);
     tlb_flags_.fill(0);

@@ -17,6 +17,7 @@ namespace {
 void Cpu::reset() {
     vme_policy_fault_ = false;
     state_ = CpuState{};
+    tsc_acc_ = 0;
     state_.eflags = 0x00000002;
     state_.cr0 = 0x60000010;
     state_.mtrrcap = 0x0000000000000508ull;
@@ -1534,8 +1535,23 @@ void Cpu::step() {
     update_performance_counters(true, false);
     state_.instructions++;
     state_.cycles += u64(std::max(cycles_, 1));
-    state_.tsc += u64(std::max(cycles_, 1));
+    advance_tsc(u64(std::max(cycles_, 1)));
     if (trace_) trace_current();
+}
+
+// The TSC is an architectural clock: it must count at the CPU's nominal
+// frequency even though instructions are scheduled at a lower rate.  Convert
+// the per-instruction cost (measured in mhz_ ticks) with a remainder so the
+// long-term rate is exact.
+void Cpu::advance_tsc(u64 cycles) {
+    const u64 tsc_mhz = tsc_mhz_ ? tsc_mhz_ : mhz_;
+    if (!mhz_ || tsc_mhz == mhz_) {
+        state_.tsc += cycles;
+        return;
+    }
+    tsc_acc_ += cycles * tsc_mhz;
+    state_.tsc += tsc_acc_ / mhz_;
+    tsc_acc_ %= mhz_;
 }
 
 void Cpu::run_cycles(u64 cycles) {

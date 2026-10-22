@@ -45,6 +45,7 @@ Machine::Machine(SystemConfig cfg)
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       floppy_(bus_, piix4_.dma(), [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       usb_(bus_) {
+    cpu_.set_tsc_mhz(cpu_mhz_);
     // Guest cycles -> emulated seconds for the performance counters.
     perf().set_guest_hz(u64(sched_mhz_) * 1'000'000ull);
     piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });

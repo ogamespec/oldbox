@@ -55,6 +55,8 @@ private:
         bool bcd = false;
         bool running = false;
         bool latched = false;
+        bool written = false; // count was programmed since the last latch/read
+        u64 write_cycle = 0;  // guest cycle of that write (for the fresh-latch window)
         bool status_latched = false;
         bool output = false;
         bool triggered = false;

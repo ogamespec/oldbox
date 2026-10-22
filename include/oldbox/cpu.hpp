@@ -160,6 +160,11 @@ public:
     [[nodiscard]] std::array<u32, 64> recent_pcs() const { return pc_ring_; }
     [[nodiscard]] u32 recent_pc_pos() const { return pc_ring_pos_; }
     [[nodiscard]] u32 mhz() const { return mhz_; }
+    // TSC ticks at the CPU's nominal clock even when the interpreter/JIT
+    // schedules guest instructions at a lower rate for host performance.
+    void set_tsc_mhz(u32 mhz) { tsc_mhz_ = mhz ? mhz : mhz_; }
+    [[nodiscard]] u32 tsc_mhz() const { return tsc_mhz_; }
+    void advance_tsc(u64 cycles);
     void set_deschutes(bool v) { deschutes_ = v; }
     [[nodiscard]] bool deschutes() const { return deschutes_; }
 
@@ -237,6 +242,8 @@ private:
     friend class Jit;
     Bus& bus_;
     u32 mhz_;
+    u32 tsc_mhz_ = 0;
+    u64 tsc_acc_ = 0;
     bool deschutes_ = false;
     CpuState state_{};
     CpuState smm_saved_{};
