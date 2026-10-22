@@ -196,3 +196,17 @@ TEST(dd2_arrow_and_alt_scancodes_reach_game) {
     m.run_slice(0.10);
     CHECK_EQ(int(m.bus().read8(keys + 0x38)), 0);
 }
+
+TEST(machine_scheduler_clock_option_parses) {
+    char a0[] = "oldbox";
+    char a1[] = "--sched";
+    char a2[] = "64";
+    char* argv[] = {a0, a1, a2};
+    const CommandLine cli = parse_command_line(3, argv);
+    CHECK_EQ(cli.config.sched_mhz, 64u);
+
+    char b1[] = "--sched";
+    char b2[] = "32";
+    char* slow[] = {a0, b1, b2};
+    CHECK_EQ(parse_command_line(3, slow).config.sched_mhz, 32u);
+}

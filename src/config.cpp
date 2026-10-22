@@ -45,6 +45,11 @@ CommandLine parse_command_line(int argc, char** argv) {
             else throw Error("unknown CPU: " + v);
         }
         else if (a == "--memory" || a == "--ram") c.memory.size_mb = parse_u32(need(a), "memory size");
+        else if (a == "--sched") {
+            const u32 mhz = parse_u32(need(a), "scheduler clock (MHz)");
+            if (mhz < 4 || mhz > 1024) throw Error("--sched expects 4..1024 MHz");
+            c.sched_mhz = mhz;
+        }
         else if (a == "--bios") {
             // The path must point at a real Award BIOS dump (no built-in
             // or fallback firmware exists).
@@ -157,6 +162,9 @@ void print_usage(const char* argv0) {
         "usage: %s [options]\n\n"
         "  --cpu 233|333          Pentium II model (default 233)\n"
         "  --memory MiB           SDRAM size, power of two (default 64)\n"
+        "  --sched MHz            CPU scheduler clock (default 48 for 233, 64 for 333;\n"
+        "                         the nominal 233/333 MHz is CPUID-only; 32/48 are\n"
+        "                         the conservative values for slower hosts)\n"
         "  --bios FILE            load a 256 KiB system BIOS image (or 'builtin')\n"
         "  --firmware builtin     force the built-in POST ROM\n"
         "  --vga-bios FILE        load an S3 Trio64 option ROM\n"

@@ -7,6 +7,13 @@ class Pic : public IoDevice {
 public:
     explicit Pic(Bus& bus);
     void reset();
+    // Notifies the CPU whenever the INT output can change (a line, the IMR,
+    // an EOI or an acknowledge).  The CPU keeps the line cached so the
+    // interpreter does not have to call acknowledge() on every instruction.
+    void set_pending_callback(std::function<void(bool)> cb) {
+        pending_cb_ = std::move(cb);
+        notify_pending();
+    }
     void set_line(int irq, bool level);
     void raise(int irq) { set_line(irq, true); }
     void lower(int irq) { set_line(irq, false); }
@@ -40,6 +47,7 @@ private:
         u8 last_isr = 0;
     };
     void update_irq();
+    void notify_pending() { if (pending_cb_) pending_cb_(pending()); }
     void write_command(Controller& c, u8 value);
     void write_data(Controller& c, u8 value);
     [[nodiscard]] u8 read_data(Controller& c);
@@ -48,6 +56,7 @@ private:
     Bus& bus_;
     Controller master_, slave_;
     std::array<bool, 16> line_{};
+    std::function<void(bool)> pending_cb_;
     u8 spurious_vector_ = 0x07;
     bool cascade_ = false;
 };

@@ -46,12 +46,21 @@ struct PerfNodeDesc {
 [[nodiscard]] const PerfNodeDesc& perf_node_desc(PerfNode node);
 [[nodiscard]] const char* perf_node_name(PerfNode node);
 
+// Frontend stages that are not guest hardware: texture upload/draw, SDL
+// present (including a vsync wait), host audio queueing and the frame-budget
+// sleep.  They belong to the host frame, not to the emulated machine.
+[[nodiscard]] constexpr bool perf_node_is_host(PerfNode node) {
+    return node == PerfNode::VideoOut || node == PerfNode::Present ||
+           node == PerfNode::AudioOut || node == PerfNode::Idle;
+}
+
 // One host frame of the emulator loop.  All times are host milliseconds.
 struct PerfFrame {
     double host_ms = 0.0;    // wall-clock length of the whole frontend iteration
     double guest_ms = 0.0;   // emulated time advanced during it
     u64 guest_cycles = 0;
     u64 instructions = 0;
+    u64 guest_frames = 0;    // visually new guest frames presented in this host frame
     std::array<double, perf_node_count> node_ms{};
     std::array<u64, perf_node_count> node_events{};
 };
@@ -64,12 +73,16 @@ struct PerfStats {
     double guest_ms = 0.0;
     double realtime = 0.0;       // guest_ms / host_ms (1.0 = emulating at speed)
     u64 instructions = 0;
+    u64 guest_frames = 0;        // detected guest screen updates in the window
     std::array<double, perf_node_count> node_ms{};
     std::array<u64, perf_node_count> node_events{};
     double other_ms = 0.0;       // host time not attributed to any node
 
     [[nodiscard]] double node_percent(PerfNode node) const;
     [[nodiscard]] double event_rate(PerfNode node) const; // events per host second
+    [[nodiscard]] double guest_fps() const {
+        return host_ms > 0.0 ? double(guest_frames) * 1000.0 / host_ms : 0.0;
+    }
 };
 
 // Host timestamp helpers shared with the report formatters.
@@ -100,6 +113,10 @@ public:
     // the measurements go straight to the totals, so headless runs still report.
     void add_time(PerfNode node, u64 ticks);
     void add_event(PerfNode node, u64 count = 1);
+    // A visually new guest frame (the frontend compares a sample grid of the
+    // guest image).  Unlike the host frame counter this tracks the game's own
+    // presentation rate, which can be far below 60 Hz.
+    void add_guest_frame();
 
     void begin_frame();
     void cancel_frame(); // drops the current frame (paused emulation)
@@ -152,7 +169,9 @@ private:
     TickArray total_events_{};
     double total_host_ms_ = 0.0;
     double total_guest_ms_ = 0.0;
+    u64 cur_guest_frames_ = 0;
     u64 total_instructions_ = 0;
+    u64 total_guest_frames_ = 0;
     u64 total_frames_ = 0;
     i64 reset_steady_ns_ = 0;
 

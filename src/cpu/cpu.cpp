@@ -17,7 +17,7 @@ namespace {
 void Cpu::reset() {
     vme_policy_fault_ = false;
     state_ = CpuState{};
-    tsc_acc_ = 0;
+    tsc_frac_ = 0;
     state_.eflags = 0x00000002;
     state_.cr0 = 0x60000010;
     state_.mtrrcap = 0x0000000000000508ull;
@@ -99,23 +99,11 @@ void Cpu::update_mode_from_cr0() {
     }
 }
 
-u32 Cpu::translate(u32 linear, bool write, bool supervisor) {
-    if (!(state_.cr0 & 0x80000000u)) return linear;
+// Called only after the inline TLB probe in cpu.hpp missed.
+u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
     const u32 page = (linear >> 12) & 0x3ff;
     const u32 tag = (state_.cr3 & ~0xfffu) | (linear >> 12);
-    const u32 flags = tlb_flags_[page];
     const bool user = !supervisor && cpl() == 3;
-    if (flags && tlb_tag_[page] == tag) {
-        if (write && !(flags & 2) && (user || (state_.cr0 & 0x10000u))) {
-            state_.cr2 = linear;
-            throw CpuException{14, u32(2 | (user ? 4 : 0)), true};
-        }
-        if (user && !(flags & 4)) {
-            state_.cr2 = linear;
-            throw CpuException{14, u32(4 | (write ? 2 : 0)), true};
-        }
-        return tlb_phys_[page] | (linear & 0xfffu);
-    }
     u32 pd = state_.cr3 & ~0xfffu;
     if (state_.cr4 & 0x20u) {
         // PAE: 3-level page table with 64-bit entries, 36-bit physical addresses.
@@ -1453,16 +1441,20 @@ void Cpu::step() {
     const bool irq_shadow = ss_inhibit_ || sti_inhibit_;
     ss_inhibit_ = false;
     sti_inhibit_ = false;
+    const bool ints_on = interrupts_enabled();
+    // A wired PIC keeps irq_line_ current; a standalone CPU (unit tests) has
+    // no line source and must poll the acknowledge callback as before.
+    const bool irq_candidate = !irq_line_known_ || irq_line_;
     if (state_.halted) {
         state_.cycles += 1;
         if (state_.smi_pending && !state_.smm) { enter_smm(); return; }
         if (state_.nmi_pending && !state_.smm) { state_.halted = false; state_.nmi_pending = false; deliver_interrupt(2); }
-        else if (interrupts_enabled()) {
+        else if (ints_on && irq_candidate) {
             if (irq_ack_) { int v = irq_ack_(); if (v >= 0) { state_.halted = false; deliver_interrupt(v); } }
         }
         return;
     }
-    if (!state_.smm && interrupts_enabled() && !apic_vectors_.empty()) {
+    if (!state_.smm && ints_on && !apic_vectors_.empty()) {
         const int v = apic_vectors_.front();
         apic_vectors_.pop_front();
         deliver_interrupt(v);
@@ -1476,8 +1468,8 @@ void Cpu::step() {
         state_.nmi_pending = false;
         deliver_interrupt(2);
         state_.halted = false;
-    } else if (!state_.smm && !irq_shadow && interrupts_enabled() && irq_ack_) {
-        const int v = irq_ack_();
+    } else if (!state_.smm && !irq_shadow && ints_on && irq_candidate) {
+        const int v = irq_ack_ ? irq_ack_() : -1;
         if (v >= 0) {
             deliver_interrupt(v);
         }
@@ -1544,14 +1536,14 @@ void Cpu::step() {
 // the per-instruction cost (measured in mhz_ ticks) with a remainder so the
 // long-term rate is exact.
 void Cpu::advance_tsc(u64 cycles) {
-    const u64 tsc_mhz = tsc_mhz_ ? tsc_mhz_ : mhz_;
-    if (!mhz_ || tsc_mhz == mhz_) {
+    if (!mhz_ || tsc_mhz_ == mhz_ || !tsc_scale_) {
         state_.tsc += cycles;
         return;
     }
-    tsc_acc_ += cycles * tsc_mhz;
-    state_.tsc += tsc_acc_ / mhz_;
-    tsc_acc_ %= mhz_;
+    // 32.32 fixed point instead of a 64-bit divide on every instruction.
+    tsc_frac_ += cycles * tsc_scale_;
+    state_.tsc += tsc_frac_ >> 32;
+    tsc_frac_ &= 0xffffffffull;
 }
 
 void Cpu::run_cycles(u64 cycles) {

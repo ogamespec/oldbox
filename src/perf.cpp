@@ -143,7 +143,9 @@ void Perf::reset() {
     total_events_.fill(0);
     total_host_ms_ = 0.0;
     total_guest_ms_ = 0.0;
+    cur_guest_frames_ = 0;
     total_instructions_ = 0;
+    total_guest_frames_ = 0;
     total_frames_ = 0;
     history_head_ = 0;
     history_count_ = 0;
@@ -166,6 +168,12 @@ void Perf::add_event(PerfNode node, u64 count) {
     const std::size_t index = node_index(node);
     if (frame_open_) cur_events_[index] += count;
     else total_events_[index] += count;
+}
+
+void Perf::add_guest_frame() {
+    if (!enabled_) return;
+    if (frame_open_) ++cur_guest_frames_;
+    else ++total_guest_frames_;
 }
 
 void Perf::begin_cpu_phase() {
@@ -195,6 +203,7 @@ void Perf::begin_frame() {
     frame_start_steady_ns_ = steady_nanoseconds();
     cur_node_ticks_.fill(0);
     cur_events_.fill(0);
+    cur_guest_frames_ = 0;
 }
 
 void Perf::cancel_frame() {
@@ -203,6 +212,7 @@ void Perf::cancel_frame() {
     cpu_phase_nested_ = 0;
     cur_node_ticks_.fill(0);
     cur_events_.fill(0);
+    cur_guest_frames_ = 0;
 }
 
 void Perf::end_frame(u64 guest_cycles, u64 instructions) {
@@ -212,6 +222,7 @@ void Perf::end_frame(u64 guest_cycles, u64 instructions) {
     if (!enabled_) {
         cur_node_ticks_.fill(0);
         cur_events_.fill(0);
+        cur_guest_frames_ = 0;
         return;
     }
 
@@ -220,6 +231,7 @@ void Perf::end_frame(u64 guest_cycles, u64 instructions) {
     if (frame.host_ms < 0.0) frame.host_ms = 0.0;
     frame.guest_cycles = guest_cycles;
     frame.instructions = instructions;
+    frame.guest_frames = cur_guest_frames_;
     frame.guest_ms = guest_hz_ ? double(guest_cycles) * 1000.0 / double(guest_hz_) : 0.0;
 
     // The CPU event counter is simply the retired instruction count of the
@@ -236,6 +248,7 @@ void Perf::end_frame(u64 guest_cycles, u64 instructions) {
     total_host_ms_ += frame.host_ms;
     total_guest_ms_ += frame.guest_ms;
     total_instructions_ += instructions;
+    total_guest_frames_ += cur_guest_frames_;
     ++total_frames_;
 
     history_[history_head_] = frame;
@@ -244,6 +257,7 @@ void Perf::end_frame(u64 guest_cycles, u64 instructions) {
 
     cur_node_ticks_.fill(0);
     cur_events_.fill(0);
+    cur_guest_frames_ = 0;
 }
 
 const PerfFrame& Perf::last_frame() const {
@@ -274,6 +288,7 @@ PerfStats Perf::stats(std::size_t frames) const {
         out.host_ms += frame.host_ms;
         out.guest_ms += frame.guest_ms;
         out.instructions += frame.instructions;
+        out.guest_frames += frame.guest_frames;
         for (std::size_t n = 0; n < perf_node_count; ++n) {
             out.node_ms[n] += frame.node_ms[n];
             out.node_events[n] += frame.node_events[n];
@@ -305,16 +320,21 @@ std::string Perf::report() const {
     std::string out = std::format("OldBox performance counters ({} profiler, host clock {:.2f} GHz)\n",
                                   enabled_ ? "on" : "OFF", ticks_per_second_ / 1.0e9);
     if (total_frames_ > 0) {
-        out += std::format("  {} frame{}, {:.2f} s host, {:.2f} s guest ({:.1f}% real time), {} instructions\n",
+        const std::string guest = (total_guest_frames_ > 0 && host_ms > 0.0)
+            ? std::format(", {:.1f} guest fps", double(total_guest_frames_) * 1000.0 / host_ms)
+            : std::string();
+        out += std::format("  {} frame{}, {:.2f} s host, {:.2f} s guest ({:.1f}% real time), {} instructions{}\n",
                            total_frames_, total_frames_ == 1 ? "" : "s",
                            host_ms / 1000.0, total_guest_ms_ / 1000.0,
                            host_ms > 0.0 ? total_guest_ms_ / host_ms * 100.0 : 0.0,
-                           perf_compact_number(double(total_instructions_)));
+                           perf_compact_number(double(total_instructions_)), guest);
     } else {
         out += std::format("  no host frames committed; {:.2f} s elapsed since reset\n", host_s);
     }
     out += "  node            time     share  activity\n";
     for (std::size_t i = 0; i < perf_node_count; ++i) {
+        if (i == std::size_t(PerfNode::VideoOut))
+            out += "  -- host-side (not guest work) --\n";
         const PerfNodeDesc& desc = kNodeDesc[i];
         const double node_ms = ms_from_ticks(total_node_ticks_[i]);
         const double share = host_ms > 0.0 ? node_ms / host_ms * 100.0 : 0.0;
@@ -325,6 +345,11 @@ std::string Perf::report() const {
         out += std::format("  {:<11} {:>10} {:>6.1f}%  {}\n", desc.label, perf_format_time(node_ms),
                            share, activity);
     }
+    double host_ms_sum = 0.0;
+    for (std::size_t i = 0; i < perf_node_count; ++i)
+        if (perf_node_is_host(PerfNode(i))) host_ms_sum += ms_from_ticks(total_node_ticks_[i]);
+    out += std::format("  {:<11} {:>10} {:>6.1f}%\n", "host", perf_format_time(host_ms_sum),
+                       host_ms > 0.0 ? host_ms_sum / host_ms * 100.0 : 0.0);
     const double unmeasured_ms = std::max(0.0, host_ms - measured_ms);
     out += std::format("  {:<11} {:>10} {:>6.1f}%\n", "measured", perf_format_time(measured_ms),
                        host_ms > 0.0 ? std::min(100.0, measured_ms / host_ms * 100.0) : 0.0);
@@ -347,7 +372,7 @@ std::string Perf::summary_line() const {
     for (; shown < 4; ++shown) {
         int best = -1;
         for (std::size_t i = 0; i < perf_node_count; ++i) {
-            if (used[i] || PerfNode(i) == PerfNode::Idle) continue;
+            if (used[i] || perf_node_is_host(PerfNode(i))) continue;
             if (best < 0 || s.node_ms[i] > s.node_ms[std::size_t(best)]) best = int(i);
         }
         if (best < 0 || s.node_ms[std::size_t(best)] <= 0.0) break;
@@ -355,10 +380,12 @@ std::string Perf::summary_line() const {
         top += std::format("{}{} {:.1f}%", top.empty() ? "" : ", ", kNodeDesc[std::size_t(best)].label,
                            s.node_percent(PerfNode(best)));
     }
-    std::string idle;
-    const double idle_pct = s.node_percent(PerfNode::Idle);
-    if (idle_pct >= 5.0) idle = std::format(", idle {:.0f}%", idle_pct);
-    return std::format("Perf    {:.1f}% real time{}  {}", s.realtime * 100.0, idle, top);
+    double host_pct = 0.0;
+    for (std::size_t i = 0; i < perf_node_count; ++i)
+        if (perf_node_is_host(PerfNode(i))) host_pct += s.node_percent(PerfNode(i));
+    const std::string host = host_pct >= 1.0 ? std::format(", host {:.0f}%", host_pct) : "";
+    const std::string guest = s.guest_frames > 0 ? std::format(", guest {:.1f} fps", s.guest_fps()) : "";
+    return std::format("Perf    {:.1f}% real time{}{}  {}", s.realtime * 100.0, guest, host, top);
 }
 
 Perf& perf() {

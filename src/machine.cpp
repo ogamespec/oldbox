@@ -33,7 +33,8 @@ std::vector<u8> read_first(const std::vector<std::string>& paths) {
 Machine::Machine(SystemConfig cfg)
     : cfg_(std::move(cfg)),
       cpu_mhz_(oldbox::cpu_mhz(cfg_.cpu)),
-      sched_mhz_(cfg_.cpu == CpuModel::pentium2_333 ? 48u : 32u),
+      sched_mhz_(cfg_.sched_mhz ? cfg_.sched_mhz
+                                : (cfg_.cpu == CpuModel::pentium2_333 ? 64u : 48u)),
       ram_mb_(cfg_.memory.size_mb),
       bus_(cfg_.memory.size_mb * megabyte),
       pci_(),
@@ -50,6 +51,7 @@ Machine::Machine(SystemConfig cfg)
     perf().set_guest_hz(u64(sched_mhz_) * 1'000'000ull);
     piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
+    piix4_.pic().set_pending_callback([this](bool line) { cpu_.set_irq_line(line); });
     if (cfg_.jit) {
         if (!cpu_.set_jit_enabled(true))
             throw Error("JIT is not available on this host (requires an x86-64 build)");

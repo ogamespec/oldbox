@@ -80,6 +80,7 @@ void Pic::update_irq() {
     const bool slave_int = highest_priority(slave_) >= 0;
     if (slave_int) master_.irr |= 0x04;
     else master_.irr &= u8(~0x04);
+    notify_pending();
 }
 
 int Pic::acknowledge() {
@@ -93,6 +94,7 @@ int Pic::acknowledge() {
             // acknowledge; the slave responds with its own spurious vector.
             master_.isr |= 0x04;
             master_.irr &= u8(~0x04);
+            notify_pending();
             return slave_.vector_base + 7;
         }
         master_.irr &= u8(~0x04);
@@ -103,6 +105,7 @@ int Pic::acknowledge() {
             master_.isr |= 0x04;
             slave_.isr |= u8(1u << s);
         }
+        notify_pending();
         return slave_.vector_base + s;
     }
     master_.irr &= u8(~(1u << m));
@@ -111,6 +114,7 @@ int Pic::acknowledge() {
     } else {
         master_.isr |= u8(1u << m);
     }
+    notify_pending();
     return master_.vector_base + m;
 }
 

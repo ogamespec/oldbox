@@ -51,6 +51,12 @@ struct DebugBreakpoint {
 struct SystemConfig {
     std::string machine_name = "Reference Board";
     CpuModel cpu = CpuModel::pentium2_233;
+    // Clock at which the CPU is scheduled (MHz).  The nominal 233/333 MHz is
+    // what CPUID reports; the scheduler clock is what the interpreter can
+    // actually sustain while keeping the 60 Hz frame budget.  0 selects the
+    // default (48 MHz for the 233, 64 MHz for the 333).  Slower hosts can use
+    // --sched 32/48 to restore the old conservative clocks.
+    u32 sched_mhz = 0;
     MemoryConfig memory;
     VideoConfig video;
     AudioConfig audio;

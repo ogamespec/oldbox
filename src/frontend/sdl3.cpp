@@ -60,6 +60,11 @@ struct SdlState {
     ConsoleUi ui;
     // F3 performance overlay (semi-transparent, top of the screen).
     bool perf_open = false;
+    // Downsampled copy of the previous guest image, used to detect a visually
+    // new game frame independently of the 60 Hz host loop.
+    std::vector<u32> guest_samples;
+    int guest_sample_w = 0;
+    int guest_sample_h = 0;
 };
 
 bool stdin_is_terminal() {
@@ -453,6 +458,8 @@ void render_perf_panel(SdlState& st) {
     std::string header1 = std::format("OldBox performance - F3 close - {} - {:.2f} GHz",
                                       profiler.enabled() ? "profiler on" : "profiler OFF ('perf on' in F2)",
                                       profiler.ticks_per_second() / 1.0e9);
+    if (window.frames > 0 && window.guest_frames > 0)
+        header1 += std::format(" - guest {:.1f} fps", window.guest_fps());
     std::string header2;
     if (window.frames == 0) {
         header2 = profiler.enabled() ? "collecting performance counters..." : "performance collection is disabled";
@@ -481,6 +488,12 @@ void render_perf_panel(SdlState& st) {
         const PerfNode node = PerfNode(i);
         const PerfNodeDesc& desc = perf_node_desc(node);
         const float y = rows_y + float(i) * line_h;
+        if (node == PerfNode::VideoOut) {
+            // Everything below this line is the host frontend (texture upload,
+            // present/vsync, audio queueing, sleep), not emulated hardware.
+            set_rgba(st.renderer, 0x9ccbff, 90);
+            SDL_RenderLine(st.renderer, name_x, y - 1.5f, graph_x - 6.0f, y - 1.5f);
+        }
         const double ms = rows.node_ms[i] / row_frames;
         const double pct = rows.node_percent(node);
         const double rate = rows.event_rate(node);
@@ -566,6 +579,40 @@ void render_perf_panel(SdlState& st) {
     SDL_SetRenderDrawBlendMode(st.renderer, SDL_BLENDMODE_NONE);
 }
 
+// A game can present 10 frames/s while the host loop runs at 60: comparing a
+// coarse grid of the guest image separates the two.  The threshold ignores a
+// blinking text cursor or a tiny HUD animation.
+bool guest_frame_changed(SdlState& st, const VideoFrame& f) {
+    constexpr int kX = 32;
+    constexpr int kY = 24;
+    if (!f.valid() || !f.pixels || f.width < kX || f.height < kY) return false;
+    constexpr std::size_t n = std::size_t(kX) * std::size_t(kY);
+    if (st.guest_samples.size() != n || st.guest_sample_w != f.width || st.guest_sample_h != f.height) {
+        st.guest_samples.resize(n);
+        st.guest_sample_w = f.width;
+        st.guest_sample_h = f.height;
+        for (int y = 0; y < kY; ++y) {
+            const u32* row = f.pixels + std::size_t(y * f.height / kY) * f.stride;
+            for (int x = 0; x < kX; ++x)
+                st.guest_samples[std::size_t(y) * kX + x] = row[std::size_t(x) * f.width / kX];
+        }
+        return true;
+    }
+    int changed = 0;
+    for (int y = 0; y < kY; ++y) {
+        const u32* row = f.pixels + std::size_t(y * f.height / kY) * f.stride;
+        for (int x = 0; x < kX; ++x) {
+            u32& slot = st.guest_samples[std::size_t(y) * kX + x];
+            const u32 pixel = row[std::size_t(x) * f.width / kX];
+            if (pixel != slot) {
+                slot = pixel;
+                ++changed;
+            }
+        }
+    }
+    return changed >= 8;
+}
+
 void render_frame(SdlState& st, Machine& machine) {
     // display_frame() may compose an S3 frame on demand; that work carries its
     // own S3 scope, so it stays outside the video-out scope below.
@@ -583,6 +630,7 @@ void render_frame(SdlState& st, Machine& machine) {
         }
         return;
     }
+    if (guest_frame_changed(st, f)) perf().add_guest_frame();
     st.frame_w = f.width;
     st.frame_h = f.height;
     if (!st.texture || f.width != st.tex_w || f.height != st.tex_h) rebuild_texture(st, f.width, f.height);

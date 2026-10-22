@@ -1,6 +1,7 @@
 #pragma once
 #include "oldbox/common.hpp"
 #include "oldbox/bus.hpp"
+#include "oldbox/cpu_exception.hpp"
 #include <array>
 #include <functional>
 #include <deque>
@@ -141,6 +142,13 @@ public:
     void resume_smm();
     [[nodiscard]] bool in_smm() const { return state_.smm; }
     void set_interrupt_ack(InterruptAck ack) { irq_ack_ = std::move(ack); }
+    // Cached PIC INT output.  The PIC calls this when a line, the IMR or an
+    // EOI changes the request state; the interpreter then avoids the
+    // acknowledge() call on every instruction.
+    void set_irq_line(bool level) {
+        irq_line_ = level;
+        irq_line_known_ = true;
+    }
     void set_trace(std::function<void(const CpuState&, u16)> cb) { trace_ = std::move(cb); }
     void set_control_trace(std::function<void(std::string)> cb) { control_trace_ = std::move(cb); }
     // Called from the exception path before the CPU state is modified, so the
@@ -162,7 +170,10 @@ public:
     [[nodiscard]] u32 mhz() const { return mhz_; }
     // TSC ticks at the CPU's nominal clock even when the interpreter/JIT
     // schedules guest instructions at a lower rate for host performance.
-    void set_tsc_mhz(u32 mhz) { tsc_mhz_ = mhz ? mhz : mhz_; }
+    void set_tsc_mhz(u32 mhz) {
+        tsc_mhz_ = mhz ? mhz : mhz_;
+        tsc_scale_ = mhz_ ? ((u64(tsc_mhz_) << 32) / mhz_) : 0;
+    }
     [[nodiscard]] u32 tsc_mhz() const { return tsc_mhz_; }
     void advance_tsc(u64 cycles);
     void set_deschutes(bool v) { deschutes_ = v; }
@@ -188,9 +199,31 @@ public:
     void write_linear16(u32 addr, u16 v);
     void write_linear32(u32 addr, u32 v);
     [[nodiscard]] u8 read_physical8(u32 addr) { return bus_.read8(addr); }
-    [[nodiscard]] u32 translate(u32 linear, bool write, bool supervisor = false);
+    // Paging fast path: the TLB hit is by far the most common case and is
+    // small enough to inline into every guest load/store.  A miss falls back
+    // to the page-table walk in translate_slow().
+    [[nodiscard]] u32 translate(u32 linear, bool write, bool supervisor = false) {
+        if (!(state_.cr0 & 0x80000000u)) return linear;
+        const u32 page = (linear >> 12) & 0x3ff;
+        const u32 tag = (state_.cr3 & ~0xfffu) | (linear >> 12);
+        const u32 flags = tlb_flags_[page];
+        const bool user = !supervisor && cpl() == 3;
+        if (flags && tlb_tag_[page] == tag) [[likely]] {
+            if (write && !(flags & 2) && (user || (state_.cr0 & 0x10000u))) {
+                state_.cr2 = linear;
+                throw CpuException{14, u32(2 | (user ? 4 : 0)), true};
+            }
+            if (user && !(flags & 4)) {
+                state_.cr2 = linear;
+                throw CpuException{14, u32(4 | (write ? 2 : 0)), true};
+            }
+            return tlb_phys_[page] | (linear & 0xfffu);
+        }
+        return translate_slow(linear, write, supervisor);
+    }
     void flush_tlb(bool preserve_global = false);
     void invalidate_tlb_page(u32 linear);
+    [[nodiscard]] u32 translate_slow(u32 linear, bool write, bool supervisor);
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
     void deliver_interrupt(int vector, bool software = false);
@@ -243,7 +276,8 @@ private:
     Bus& bus_;
     u32 mhz_;
     u32 tsc_mhz_ = 0;
-    u64 tsc_acc_ = 0;
+    u64 tsc_scale_ = 0; // 32.32 fixed-point TSC ticks per scheduler tick
+    u64 tsc_frac_ = 0;
     bool deschutes_ = false;
     CpuState state_{};
     CpuState smm_saved_{};
@@ -267,6 +301,8 @@ private:
     std::array<u64, 5> mc_addr_{};
     std::array<u64, 5> mc_misc_{};
     InterruptAck irq_ack_;
+    bool irq_line_ = false;
+    bool irq_line_known_ = false; // false: standalone CPU tests poll irq_ack_ every instruction
     std::function<void(std::string)> control_trace_;
     ExceptionHook exception_hook_;
     IntHook int_hook_;

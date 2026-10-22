@@ -121,8 +121,14 @@ TEST(perf_report_lists_every_hardware_node) {
         p.add_time(PerfNode(i), u64(p.ticks_per_second() / 1.0e5));
     p.end_frame(1024, 64);
 
+    CHECK(perf_node_is_host(PerfNode::Present));
+    CHECK(perf_node_is_host(PerfNode::Idle));
+    CHECK(!perf_node_is_host(PerfNode::Cpu));
+    CHECK(!perf_node_is_host(PerfNode::S3));
+
     const std::string report = p.report();
     CHECK(report.find("OldBox performance counters") != std::string::npos);
+    CHECK(report.find("host-side") != std::string::npos);
     CHECK(report.find("measured") != std::string::npos);
     CHECK(report.find("unmeasured") != std::string::npos);
     CHECK(report.find("nan") == std::string::npos);
@@ -133,6 +139,30 @@ TEST(perf_report_lists_every_hardware_node) {
     const std::string summary = p.summary_line();
     CHECK(summary.find("real time") != std::string::npos);
     CHECK(summary.find("CPU") != std::string::npos);
+}
+
+TEST(perf_guest_frames_are_counted_per_window) {
+    Perf& p = perf();
+    p.set_enabled(true);
+    p.reset();
+
+    p.begin_frame();
+    p.add_guest_frame();
+    p.add_guest_frame();
+    p.add_guest_frame();
+    p.end_frame(512, 17);
+    CHECK_EQ(p.last_frame().guest_frames, u64(3));
+    CHECK_EQ(p.stats().guest_frames, u64(3));
+    CHECK_EQ(p.stats().frames, std::size_t(1));
+
+    p.begin_frame();
+    p.add_guest_frame();
+    p.end_frame(512, 17);
+    CHECK_EQ(p.last_frame().guest_frames, u64(1));
+    CHECK_EQ(p.stats(2).guest_frames, u64(4));
+    CHECK(p.stats(2).guest_fps() >= 0.0);
+    p.reset();
+    CHECK_EQ(p.stats().guest_frames, u64(0));
 }
 
 TEST(perf_disabled_collects_nothing) {

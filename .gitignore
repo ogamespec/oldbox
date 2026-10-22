@@ -1,6 +1,7 @@
 /build/
 /build-prebuilt/
 /build-asan/
+/build-prof/
 /assets/bios/
 /assets/vga/
 /assets/hdd/
