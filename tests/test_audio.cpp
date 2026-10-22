@@ -355,11 +355,105 @@ TEST(audio_opl3_note_is_audible) {
 
     std::vector<i16> buffer(size_t(8192) * 2);
     rig.card.render(buffer, 44100);
-    CHECK(peak(buffer) > 100);
+    CHECK(peak(buffer) > 500); // full-scale OPL3 note, not a barely audible one
 
     // The SB FM alias at base+0/base+1 addresses the same OPL3 file.
     rig.card.io_write8(u16(kSb + 0), 0x20);
     rig.card.io_write8(u16(kSb + 1), 0x01);
+}
+
+TEST(audio_opl3_stereo_left_only) {
+    Rig rig;
+    auto w = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    auto ws = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x38a, reg);
+        rig.card.io_write8(0x38b, value);
+    };
+    ws(0x05, 0x01); // OPL3 mode: C0h bits 4/5 select the output channels
+
+    // Channel 0, additive, left speaker only.
+    w(0x20, 0x01);
+    w(0x40, 0x00);
+    w(0x60, 0xf0);
+    w(0x80, 0x00);
+    w(0x23, 0x01);
+    w(0x43, 0x00);
+    w(0x63, 0xf0);
+    w(0x83, 0x00);
+    w(0xc0, 0x11); // connection 1 (additive), left only
+    w(0xa0, 0x80);
+    w(0xb0, 0x30); // key on, block 4
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    rig.card.render(buffer, 44100);
+    int left = 0, right = 0;
+    for (size_t i = 0; i + 1 < buffer.size(); i += 2) {
+        left = std::max(left, std::abs(int(buffer[i])));
+        right = std::max(right, std::abs(int(buffer[i + 1])));
+    }
+    CHECK(left > 100);
+    CHECK_EQ(right, 0);
+}
+
+TEST(audio_opl3_secondary_bank_channel) {
+    Rig rig;
+    auto ws = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x38a, reg);
+        rig.card.io_write8(0x38b, value);
+    };
+    ws(0x05, 0x01); // OPL3 mode
+    // Channel 9 lives entirely in the secondary register bank
+    // (operators 18/21, registers 120h/123h ... 1C0h).
+    ws(0x20, 0x01);
+    ws(0x40, 0x00);
+    ws(0x60, 0xf0);
+    ws(0x80, 0x00);
+    ws(0x23, 0x01);
+    ws(0x43, 0x00);
+    ws(0x63, 0xf0);
+    ws(0x83, 0x00);
+    ws(0xc0, 0x31); // additive, both speakers
+    ws(0xa0, 0x80);
+    ws(0xb0, 0x30);
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    rig.card.render(buffer, 44100);
+    CHECK(peak(buffer) > 100);
+}
+
+TEST(audio_opl3_four_operator_channel) {
+    Rig rig;
+    auto w = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    auto ws = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x38a, reg);
+        rig.card.io_write8(0x38b, value);
+    };
+    ws(0x05, 0x01); // OPL3 mode
+    ws(0x04, 0x01); // four-operator pair 0: channels 0 and 3
+
+    // Operators 0, 3, 6 and 9 form four-operator channel 0.  All four get
+    // an instant attack and full output; the connection is FM-FM.
+    const u8 op_regs[4] = {0x00, 0x03, 0x08, 0x0b};
+    for (u8 off : op_regs) {
+        w(u8(0x20 + off), 0x01);
+        w(u8(0x40 + off), 0x00);
+        w(u8(0x60 + off), 0xf0);
+        w(u8(0x80 + off), 0x00);
+    }
+    w(0xc0, 0x30); // channel 0: both speakers, FM
+    w(0xc3, 0x30); // channel 3: both speakers, FM -> FM-FM
+    w(0xa0, 0x80);
+    w(0xb0, 0x30); // key on, block 4
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    rig.card.render(buffer, 44100);
+    CHECK(peak(buffer) > 100);
 }
 
 TEST(audio_dsp_reset_exits_sb_midi_uart) {

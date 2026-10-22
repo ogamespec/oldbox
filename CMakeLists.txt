@@ -52,6 +52,7 @@ add_library(oldbox_core STATIC
     src/video/s3_trio64.cpp
     src/video/voodoo.cpp
     src/audio/awe64.cpp
+    src/audio/opl3.cpp
     src/audio/emu8000.cpp
     src/storage/ata.cpp
     src/storage/floppy.cpp

@@ -1,10 +1,12 @@
-// Sound Blaster 16 / AWE64 card front end: DSP, mixer, MPU-401 and OPL3.
+// Sound Blaster 16 / AWE64 card front end: DSP, mixer, MPU-401 and FM.
 //
 // References: Creative "Sound Blaster Series Hardware Programming Guide"
 // (reset sequence, DSP command set, CT1745 mixer, MPU-401 UART mode) and the
-// "AWE32/EMU8000 Programmer's Guide" for the wavetable block.  The OPL3
-// implementation is a small original 2-operator FM model, not a cycle-exact
-// YMF262; it is intentionally limited to what DOS AdLib games need.
+// "AWE32/EMU8000 Programmer's Guide" for the wavetable block.  The AWE64
+// Gold has no Yamaha YM3812/YMF262: its FM block is Creative CQM, a digital
+// OPL3-compatible emulator.  The model below is a small original 2-operator
+// FM approximation of that register interface, not a CQM or YMF262 clone; it
+// is intentionally limited to what DOS AdLib games need.
 
 #include "oldbox/audio.hpp"
 #include "oldbox/dma.hpp"
@@ -53,6 +55,7 @@ Awe64::Awe64(Bus& bus, Dma& dma, const AudioConfig& cfg, u32 cpu_mhz, IrqFn irq)
     bus_.map_io(u16(cfg_.sb_base + 0xc00), 4, this, "EMU8000 Data3/Pointer");
     bus_.map_io(cfg_.mpu_base, 2, this, "MPU-401");
     bus_.map_io(0x388, 4, this, "OPL3");
+    opl3_.set_cpu_mhz(cpu_mhz_);
     reset_mixer();
     reset();
     // The AWE64 Gold ROM dump is not available; use the 1 MiB E-mu GM
@@ -192,20 +195,7 @@ void Awe64::reset() {
     midi_running_ = 0;
     midi_count_ = 0;
     midi_sysex_ = false;
-    fm_regs_.fill(0);
-    fm_ops_.fill(FmOperator{});
-    fm_ch_.fill(FmChannel{});
-    fm_addr_ = 0;
-    fm_secondary_ = false;
-    fm_noise_ = 0x1f123bb5u;
-    fm_t1_count_ = fm_t2_count_ = 0;
-    fm_t1_running_ = fm_t2_running_ = false;
-    fm_t1_start_ = fm_t2_start_ = false;
-    fm_status_ = 0;
-    fm_t1_acc_ = fm_t2_acc_ = 0;
-    // YM3812/YMF262 timer tick rates: 80.8 us and 323.1 us.
-    fm_t1_period_ = u64(cpu_mhz_) * 808u / 10u;
-    fm_t2_period_ = u64(cpu_mhz_) * 3231u / 10u;
+    opl3_.reset();
     tick_acc_ = 0;
     mix_ring_.fill(0);
     mix_generated_ = 0;
@@ -933,272 +923,11 @@ void Awe64::midi_message(u8 status, u8 d1, u8 d2) {
     }
 }
 
-void Awe64::fm_write_addr(bool secondary, u8 value) {
-    fm_addr_ = value;
-    fm_secondary_ = secondary;
-}
-
-void Awe64::fm_tick_timers(u64 cpu_cycles) {
-    // Timer 1: 80.8 us per tick, timer 2: 323.1 us per tick.  The counters
-    // run UP from the preset loaded at start; when a counter wraps past 255
-    // the flag is set and the preset is reloaded, so the flag period is
-    // (256 - preset) ticks.  See the YM3812 datasheet timer section.
-    if (fm_t1_period_) {
-        fm_t1_acc_ += cpu_cycles;
-        while (fm_t1_acc_ >= fm_t1_period_) {
-            fm_t1_acc_ -= fm_t1_period_;
-            if (fm_t1_running_) {
-                ++fm_t1_count_;
-                if (fm_t1_count_ == 0) {
-                    fm_t1_count_ = fm_regs_[0x02];
-                    fm_status_ |= 0x40;
-                }
-            }
-        }
-    }
-    if (fm_t2_period_) {
-        fm_t2_acc_ += cpu_cycles;
-        while (fm_t2_acc_ >= fm_t2_period_) {
-            fm_t2_acc_ -= fm_t2_period_;
-            if (fm_t2_running_) {
-                ++fm_t2_count_;
-                if (fm_t2_count_ == 0) {
-                    fm_t2_count_ = fm_regs_[0x03];
-                    fm_status_ |= 0x20;
-                }
-            }
-        }
-    }
-}
-
-void Awe64::fm_write_timer_control(u8 value) {
-    // D7 RST: clear the timer and IRQ flags; per the datasheet the other
-    // bits are ignored when RST is set.
-    if (value & 0x80) {
-        fm_status_ &= ~0xE0;
-        return;
-    }
-    // ST1/ST2 start on the 0 -> 1 edge and load the preset; a cleared bit
-    // stops the counter where it is.  The mask bits gate only the interrupt
-    // output line, never the flags.
-    if ((value & 0x01) && !fm_t1_start_) {
-        fm_t1_count_ = fm_regs_[0x02];
-        fm_t1_running_ = true;
-    }
-    fm_t1_start_ = (value & 0x01) != 0;
-    if (!fm_t1_start_) fm_t1_running_ = false;
-    if ((value & 0x02) && !fm_t2_start_) {
-        fm_t2_count_ = fm_regs_[0x03];
-        fm_t2_running_ = true;
-    }
-    fm_t2_start_ = (value & 0x02) != 0;
-    if (!fm_t2_start_) fm_t2_running_ = false;
-}
-
-u8 Awe64::fm_status_read() const {
-    // D6/D5 are the FT1/FT2 flags; D7 is the IRQ line and is gated by the
-    // corresponding mask bits in register 04h.
-    const bool masked1 = (fm_regs_[0x04] & 0x40) != 0;
-    const bool masked2 = (fm_regs_[0x04] & 0x20) != 0;
-    const bool irq = ((fm_status_ & 0x40) && !masked1) ||
-                     ((fm_status_ & 0x20) && !masked2);
-    return u8((fm_status_ & 0x60) | (irq ? 0x80 : 0x00));
-}
-
-void Awe64::fm_refresh_operator(unsigned index) {
-    FmOperator& op = fm_ops_[index % 36];
-    const float at = 0.002f * std::exp2(15.0f - float(op.ar));
-    op.attack_step = 1.0f / (at * kInternalRate);
-    const float dt = 0.05f * std::exp2(15.0f - float(op.dr));
-    op.decay_coeff = 1.0f - std::exp(-4.6f / (dt * kInternalRate));
-    const float rt = 0.05f * std::exp2(15.0f - float(op.rr));
-    op.release_coeff = 1.0f - std::exp(-4.6f / (rt * kInternalRate));
-    op.sustain = op.sl >= 15 ? 0.0f : std::pow(10.0f, -3.0f * float(op.sl) / 20.0f);
-    op.gain = std::pow(10.0f, -0.75f * float(op.tl) / 20.0f);
-}
-
-void Awe64::fm_write_data(bool secondary, u8 value) {
-    const u16 index = u16((secondary ? 0x100 : 0) | fm_addr_);
-    fm_regs_[index] = value;
-    const u8 reg = fm_addr_;
-
-    if (!secondary && (reg == 0x02 || reg == 0x03)) {
-        // Timer presets: stored above; they are loaded when the timer is
-        // (re)started, not immediately.
-        return;
-    }
-    if (!secondary && reg == 0x04) {
-        fm_write_timer_control(value);
-        return;
-    }
-    if (reg >= 0x20 && reg <= 0x35) {
-        const unsigned local = reg - 0x20;
-        if (local < 18) {
-            FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
-            op.mult = value & 0x0f;
-            fm_refresh_operator((secondary ? 18u : 0u) + local);
-        }
-    } else if (reg >= 0x40 && reg <= 0x55) {
-        const unsigned local = reg - 0x40;
-        if (local < 18) {
-            FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
-            op.tl = value & 0x3f;
-            op.ksl = value >> 6;
-            fm_refresh_operator((secondary ? 18u : 0u) + local);
-        }
-    } else if (reg >= 0x60 && reg <= 0x75) {
-        const unsigned local = reg - 0x60;
-        if (local < 18) {
-            FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
-            op.ar = value >> 4;
-            op.dr = value & 0x0f;
-            fm_refresh_operator((secondary ? 18u : 0u) + local);
-        }
-    } else if (reg >= 0x80 && reg <= 0x95) {
-        const unsigned local = reg - 0x80;
-        if (local < 18) {
-            FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
-            op.sl = value >> 4;
-            op.rr = value & 0x0f;
-            fm_refresh_operator((secondary ? 18u : 0u) + local);
-        }
-    } else if (reg >= 0xa0 && reg <= 0xa8) {
-        const unsigned ch = (secondary ? 9u : 0u) + (reg - 0xa0);
-        fm_ch_[ch].fnum = u16((fm_ch_[ch].fnum & 0x300u) | value);
-    } else if (reg >= 0xb0 && reg <= 0xb8) {
-        const unsigned ch = (secondary ? 9u : 0u) + (reg - 0xb0);
-        fm_ch_[ch].block = (value >> 2) & 0x07;
-        fm_ch_[ch].fnum = u16((fm_ch_[ch].fnum & 0xffu) | (u16(value & 0x03) << 8));
-        const bool key = (value & 0x20) != 0;
-        if (key != fm_ch_[ch].key) fm_key_on(ch, key);
-        fm_ch_[ch].key = key;
-    } else if (reg >= 0xc0 && reg <= 0xc8) {
-        const unsigned ch = (secondary ? 9u : 0u) + (reg - 0xc0);
-        fm_ch_[ch].fb = (value >> 1) & 0x07;
-        fm_ch_[ch].con = value & 0x01;
-    } else if (reg >= 0xe0 && reg <= 0xf5) {
-        const unsigned local = reg - 0xe0;
-        if (local < 18) {
-            FmOperator& op = fm_ops_[(secondary ? 18u : 0u) + local];
-            op.wave = value & 0x03;
-        }
-    } else if (reg == 0xbd) {
-        // Rhythm mode: trigger the five percussion voices on rising edges.
-        // The channels involved (6, 7, 8) are handled by normal operators;
-        // this gives DOS games a usable rhythm section without claiming
-        // cycle accuracy.
-        if (value & 0x20) {
-            const bool bass = (value & 0x10) != 0;
-            const bool snare = (value & 0x08) != 0;
-            const bool tom = (value & 0x04) != 0;
-            const bool cym = (value & 0x02) != 0;
-            const bool hat = (value & 0x01) != 0;
-            fm_key_on(6, bass);
-            fm_key_on(7, snare || tom || cym || hat);
-        }
-    }
-}
-
-void Awe64::fm_key_on(unsigned channel, bool on) {
-    if (channel >= 18) return;
-    const unsigned bank = channel / 9;
-    const unsigned c = channel % 9;
-    const unsigned mod = bank * 18 + c + (c / 3) * 3;
-    const unsigned car = mod + 3;
-    fm_ops_[mod].key = on;
-    fm_ops_[car].key = on;
-    if (on) {
-        fm_ops_[mod].env = 0.0f;
-        fm_ops_[car].env = 0.0f;
-        fm_ops_[mod].prev_out = 0.0f;
-        fm_ops_[car].prev_out = 0.0f;
-    }
-}
-
-float Awe64::fm_operator(unsigned index, float modulation) {
-    if (index >= 36) return 0.0f;
-    FmOperator& op = fm_ops_[index];
-    if (!op.key && op.env <= 0.0001f) return 0.0f;
-
-    const unsigned bank = (index / 18) % 2;
-    const unsigned local = index % 18;
-    const unsigned group = local / 3;
-    const unsigned ch_local = (group / 2) * 3 + (local % 3);
-    const unsigned channel = bank * 9 + ch_local;
-    const FmChannel& c = fm_ch_[channel];
-
-    const float mult = op.mult == 0 ? 0.5f : float(op.mult);
-    const float freq = float(c.fnum) * 49716.0f * std::exp2(float(c.block) - 1.0f) /
-                       1048576.0f;
-    const float inc = freq * mult / kInternalRate;
-    op.phase += inc;
-    if (op.phase >= 1.0f) op.phase -= std::floor(op.phase);
-
-    const float s = std::sin(kTwoPi * op.phase + modulation);
-    float w = s;
-    switch (op.wave & 0x03) {
-    case 1: w = std::max(0.0f, s); break;
-    case 2: w = std::fabs(s) * 2.0f - 1.0f; break;
-    case 3: w = s >= 0.0f ? 1.0f : -1.0f; break;
-    default: break;
-    }
-
-    if (op.key) {
-        if (op.env < 1.0f) {
-            op.env = std::min(1.0f, op.env + op.attack_step);
-        } else if (op.env > op.sustain) {
-            op.env += (op.sustain - op.env) * op.decay_coeff;
-            if (op.env < op.sustain + 1e-4f) op.env = op.sustain;
-        }
-    } else {
-        op.env -= op.env * op.release_coeff;
-        if (op.env < 1e-5f) op.env = 0.0f;
-    }
-
-    const float out = w * op.env * op.gain;
-    op.prev_out = out;
-    return out;
-}
-
-void Awe64::fm_render(i16* out, u32 frames) {
-    if (out == nullptr) return;
-    for (u32 f = 0; f < frames; ++f) {
-        float l = 0.0f, r = 0.0f;
-        for (unsigned ch = 0; ch < 18; ++ch) {
-            const bool bank = ch >= 9;
-            const unsigned c = ch % 9;
-            const unsigned base = (bank ? 18u : 0u) + c + (c / 3) * 3;
-            const FmChannel& fc = fm_ch_[ch];
-            const FmOperator& mod = fm_ops_[base];
-            const FmOperator& car = fm_ops_[base + 3];
-            if (!fc.key && mod.env <= 1e-5f && car.env <= 1e-5f) continue;
-
-            float mod_out = 0.0f;
-            if (fc.fb != 0) mod_out = mod.prev_out * float(fc.fb) * 0.35f;
-            const float m = fm_operator(base, mod_out);
-            const float c_out = fm_operator(base + 3, m * 2.5f);
-
-            float sample = c_out;
-            if (fc.con & 0x01) sample = m + c_out;
-
-            const u8 c0 = fm_regs_[(bank ? 0x100 : 0) + 0xc0 + c];
-            const bool out_left = (c0 & 0x10) != 0 || (c0 & 0x30) == 0;
-            const bool out_right = (c0 & 0x20) != 0 || (c0 & 0x30) == 0;
-            if (out_left) l += sample;
-            if (out_right) r += sample;
-        }
-        l *= 0.11f;
-        r *= 0.11f;
-        out[size_t(f) * 2] = clamp_i16(l * 32767.0f);
-        out[size_t(f) * 2 + 1] = clamp_i16(r * 32767.0f);
-    }
-}
-
 void Awe64::render_internal_frame(i16& out_l, i16& out_r) {
     i16 emu_frame[2]{};
     emu_.render(emu_frame, 1, 44100);
     i16 fm_frame[2]{};
-    fm_render(fm_frame, 1);
+    opl3_.render(fm_frame, 1);
     i16 dac_l = 0, dac_r = 0;
     read_dma_frame(dac_l, dac_r);
 
@@ -1241,7 +970,7 @@ void Awe64::mix_internal(u32 frames) {
 void Awe64::tick(u64 cpu_cycles) {
     const u64 cycles_per_second = u64(cpu_mhz_) * 1000000ull;
     if (cycles_per_second == 0) return;
-    fm_tick_timers(cpu_cycles);
+    opl3_.tick(cpu_cycles);
     tick_acc_ += cpu_cycles;
     const u64 per_sample = std::max<u64>(1, cycles_per_second / 44100ull);
     u64 samples = tick_acc_ / per_sample;
@@ -1330,7 +1059,7 @@ u8 Awe64::io_read8(u16 port) {
         return mpu_rx_pos_ < mpu_rx_.size() ? 0x00 : 0x80;
     }
     if (port_in_range(port, 0x388, 4)) {
-        return (port == 0x388 || port == 0x38a) ? fm_status_read() : 0xff;
+        return (port == 0x388 || port == 0x38a) ? opl3_.read_status() : 0xff;
     }
     return 0xff;
 }
@@ -1343,10 +1072,10 @@ void Awe64::io_write8(u16 port, u8 value) {
     }
     if (port_in_range(port, sb, 0x10)) {
         switch (port - sb) {
-        case 0x0: fm_write_addr(false, value); break;
-        case 0x1: fm_write_data(false, value); break;
-        case 0x2: fm_write_addr(true, value); break;
-        case 0x3: fm_write_data(true, value); break;
+        case 0x0: opl3_.write_index(false, value); break;
+        case 0x1: opl3_.write_data(false, value); break;
+        case 0x2: opl3_.write_index(true, value); break;
+        case 0x3: opl3_.write_data(true, value); break;
         case 0x4: mixer_index_ = value; break;
         case 0x5: mixer_write(mixer_index_, value); break;
         case 0x6:
@@ -1357,8 +1086,8 @@ void Awe64::io_write8(u16 port, u8 value) {
                 dsp_reset();
             }
             break;
-        case 0x8: fm_write_addr(false, value); break;
-        case 0x9: fm_write_data(false, value); break;
+        case 0x8: opl3_.write_index(false, value); break;
+        case 0x9: opl3_.write_data(false, value); break;
         case 0xa: break;
         case 0xc: dsp_write(value); break;
         case 0xe: break;
@@ -1393,10 +1122,10 @@ void Awe64::io_write8(u16 port, u8 value) {
         return;
     }
     if (port_in_range(port, 0x388, 4)) {
-        if (port == 0x388) fm_write_addr(false, value);
-        else if (port == 0x389) fm_write_data(false, value);
-        else if (port == 0x38a) fm_write_addr(true, value);
-        else fm_write_data(true, value);
+        if (port == 0x388) opl3_.write_index(false, value);
+        else if (port == 0x389) opl3_.write_data(false, value);
+        else if (port == 0x38a) opl3_.write_index(true, value);
+        else opl3_.write_data(true, value);
     }
 }
 

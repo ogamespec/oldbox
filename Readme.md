@@ -15,7 +15,7 @@ SDL3-фронтендом. Проект написан с нуля по перв
 | Flash | W29C020-12 (2MBit) |
 | 2D video | S3 Trio64 (86C764), 4 MiB VRAM, VGA + S3 2D engine |
 | 3D video | 3dfx Voodoo Graphics (SST-1, Diamond Monster 3D), 4 MiB, софтверный растеризатор |
-| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, MPU-401, EMU8000, OPL3-совместимый fallback |
+| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, MPU-401, EMU8000, OPL3 (YMF262) FM в отдельном модуле (AWE64 CQM не моделируется) |
 | Storage | PIIX4 IDE (PIO), ATA/ATAPI CD-ROM, 82077AA FDC 1.44 MiB |
 | Input | PS/2 keyboard + PS/2 mouse через 8042 |
 | Firmware | Award BIOS из `specs/`, встроенный диагностический POST ROM, S3 Trio64 option ROM |
@@ -194,7 +194,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   mip/bilinear, LFB и swapbuffer. Это именно растровый софтверный конвейер,
   без Glide/OpenGL и без перехвата вызовов.
 - AWE64: reset/version DSP, mixer, single/auto-init DMA, MPU-401 UART,
-  EMU8000 (32 голоса), OPL3 fallback с таймерами/статус-регистром OPL2
+  EMU8000 (32 голоса), OPL3 (YMF262) FM в `src/audio/opl3.cpp`: 18 каналов/36 операторов, 4-оп режим, 8 волн, стерео, таймеры/статус OPL2/OPL3
   (YM3812: период (256−N)×80.8 мкс, RST/ST, флаги FT1/FT2/IRQ), SDL audio.
 - PC Speaker: канал 2 PIT (1193182/reload Гц) через порт 61h (gate/data),
   квадратная волна микшируется в тот же поток, что и звуковая карта, —

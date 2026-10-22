@@ -45,7 +45,7 @@
   `tests/test_jit.cpp` сравнивают состояние после одних и тех же программ,
   исполненных интерпретатором и JIT.
 - `src/video/` — S3 Trio64 (VGA + 2D engine) и Voodoo SST-1 (FBI/TMU).
-- `src/audio/` — SB16 DSP, CT1745 mixer, MPU-401, EMU8000, OPL3.
+- `src/audio/` — SB16 DSP, CT1745 mixer, MPU-401, EMU8000, YMF262/OPL3 FM (`opl3.cpp`).
 - `src/storage/` — PIIX4 IDE/ATA/ATAPI и 82077AA FDC.
 - `src/machine.cpp` — сборка машины, карта памяти, запуск, reset, POST-коды.
 - `src/perf.cpp` — счётчики производительности: хостовое время по узлам,

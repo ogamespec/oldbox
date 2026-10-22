@@ -1,6 +1,7 @@
 #pragma once
 #include "oldbox/bus.hpp"
 #include "oldbox/config.hpp"
+#include "oldbox/opl3.hpp"
 #include <functional>
 #include <span>
 #include <string>
@@ -224,28 +225,6 @@ public:
     void io_write32(u16 port, u32 value) override;
 
 private:
-    // OPL3 operator/channel state.  Registers are stored as a 512-byte file:
-    // 0x000-0x0FF primary bank, 0x100-0x1FF secondary bank.
-    struct FmOperator {
-        float phase = 0.0f;
-        float env = 0.0f;
-        float prev_out = 0.0f;
-        float attack_step = 0.01f;
-        float decay_coeff = 0.001f;
-        float release_coeff = 0.001f;
-        float sustain = 1.0f;
-        float gain = 1.0f;
-        bool key = false;
-        u8 ar = 0, dr = 0, sl = 0, rr = 0, tl = 0, mult = 1, ksl = 0, wave = 0;
-    };
-    struct FmChannel {
-        u16 fnum = 0;
-        u8 block = 0;
-        u8 fb = 0;
-        u8 con = 0;
-        bool key = false;
-    };
-
     static constexpr u32 mix_ring_size = 16384;
 
     Bus& bus_;
@@ -328,33 +307,8 @@ private:
     u8 midi_count_ = 0;
     bool midi_sysex_ = false;
 
-    // OPL3 fallback.
-    bool fm_enabled_ = true;
-    std::array<u8, 512> fm_regs_{};
-    u8 fm_addr_ = 0;
-    bool fm_secondary_ = false;
-    std::array<FmOperator, 36> fm_ops_{};
-    std::array<FmChannel, 18> fm_ch_{};
-    u32 fm_noise_ = 0x1f123bb5u;
-
-    // OPL2/OPL3 timers (YM3812/YMF262 register 02h/03h/04h).  The counter
-    // counts UP from the preset with an 80.8 us (timer 1) / 323.1 us
-    // (timer 2) tick; on wrap the corresponding flag in the status register
-    // is set and the preset is reloaded, so the period between wraps is
-    // (256 - preset) ticks.  RST (bit 7 of register 04h) clears the flags;
-    // ST1/ST2 start the timer and load the preset, and when clear the
-    // counter simply stops.  The mask bits gate only the interrupt line,
-    // never the flags.
-    u8 fm_t1_count_ = 0, fm_t2_count_ = 0;
-    bool fm_t1_running_ = false, fm_t2_running_ = false;
-    bool fm_t1_start_ = false, fm_t2_start_ = false;
-    u8 fm_status_ = 0; // D7 IRQ (T1|T2), D6 FT1, D5 FT2
-    u64 fm_t1_acc_ = 0, fm_t2_acc_ = 0;
-    u64 fm_t1_period_ = 0, fm_t2_period_ = 0; // host cycles per timer tick
-
-    void fm_tick_timers(u64 cpu_cycles);
-    void fm_write_timer_control(u8 value);
-    [[nodiscard]] u8 fm_status_read() const;
+    // OPL3-compatible FM synthesizer (separate module).
+    Opl3 opl3_;
 
     // Internal 44100 Hz mix ring and resampler.
     std::array<i16, mix_ring_size * 2> mix_ring_{};
@@ -381,12 +335,6 @@ private:
     void clear_irq(u8 source);
     void midi_feed(u8 byte);
     void midi_message(u8 status, u8 d1, u8 d2);
-    void fm_write_addr(bool secondary, u8 value);
-    void fm_write_data(bool secondary, u8 value);
-    void fm_key_on(unsigned channel, bool on);
-    void fm_refresh_operator(unsigned index);
-    void fm_render(i16* out, u32 frames);
-    [[nodiscard]] float fm_operator(unsigned index, float modulation);
     void mix_internal(u32 frames);
     void render_internal_frame(i16& l, i16& r);
     [[nodiscard]] float mixer_gain(u8 value, u8 maximum) const;
