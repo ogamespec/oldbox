@@ -63,6 +63,9 @@ public:
     [[nodiscard]] u8 cmos(u8 index);
     void set_cmos(u8 index, u8 value);
     void type_next_char();
+    // Mouse deltas in the frontend convention (X right, Y down, as SDL
+    // reports them).  The PS/2 packet builder converts Y to its positive-up
+    // convention internally.
     void mouse_motion(int dx, int dy);
     void mouse_button(int button, bool down);
     [[nodiscard]] bool self_test(std::string& report);

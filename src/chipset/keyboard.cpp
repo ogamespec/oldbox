@@ -119,6 +119,8 @@ void Keyboard::key_event(u8 scancode, bool down, bool extended) {
     queue_keyboard_byte(down ? scancode : u8(scancode | 0x80));
 }
 
+// dx/dy are PS/2 device deltas: X positive right, Y positive up.  The
+// frontend-facing Machine::mouse_motion converts host (Y-down) coordinates.
 void Keyboard::mouse_event(int dx, int dy, u8 buttons) {
     mouse_buttons_ = buttons;
     if (!mouse_reporting_allowed()) return;

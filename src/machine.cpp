@@ -672,7 +672,10 @@ void Machine::set1_key_event(u8 code, bool down, bool extended) {
     if (code) piix4_.keyboard().key_event(code, down, extended);
 }
 void Machine::mouse_motion(int dx, int dy) {
-    piix4_.keyboard().mouse_event(dx, dy, 0);
+    // SDL/frontend coordinates are Y-down; the PS/2 auxiliary device reports
+    // Y positive up.  Without this flip the guest's mouse driver receives the
+    // opposite vertical direction (MDK's menu cursor moves the wrong way).
+    piix4_.keyboard().mouse_event(dx, -dy, 0);
 }
 void Machine::mouse_button(int button, bool down) {
     static u8 buttons = 0;

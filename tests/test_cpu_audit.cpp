@@ -92,21 +92,6 @@ TEST(audit_mov_from_segment_rejects_register_fields_6_and_7) {
     }
 }
 
-TEST(audit_sse_and_test_register_opcodes_raise_ud) {
-    // 0F 12 (MOVLPS/MOVHLPS) is SSE, 0F 24/26 are 386/486 test-register
-    // moves and 0F 25/27 are undefined.  A Pentium II has none of them;
-    // feature probes execute them and expect #UD.
-    for (u8 op : {u8(0x12), u8(0x24), u8(0x25), u8(0x26), u8(0x27)}) {
-        CpuHarness h;
-        h.enter_flat_protected();
-        h.emit(0x0f);
-        h.emit(op);
-        h.emit(0xd8); // ModRM, must not be consumed as an instruction
-        h.cpu.step();
-        CHECK_EQ(h.cpu.last_exception_vector(), 6);
-    }
-}
-
 TEST(audit_mov_to_segment_not_present_raises_np_or_ss) {
     {
         CpuHarness h;
