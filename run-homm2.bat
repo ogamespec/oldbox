@@ -6,11 +6,11 @@ rem ------------------------------------------------------------------
 rem  OldBox test launcher: Heroes of Might and Magic II (DOS).
 rem  A: = FreeDOS games floppy with HIMEMX, mouse and QCDROM/MSCDEX
 rem  C: = 500 MB hard disk
-rem  D: = Heroes II CD (data track extracted to a 2048-byte ISO)
+rem  D: = Heroes II CD (native BIN/CUE, data and CD-DA tracks)
 rem
 rem  Usage:
 rem      run-homm2.bat
-rem      run-homm2.bat "D:\path\to\heroes2.iso"
+rem      run-homm2.bat "D:\path\to\Heroes of Might and Magic 2.cue"
 rem ------------------------------------------------------------------
 
 set "EXE=build\vs2026\Release\oldbox.exe"
@@ -28,47 +28,20 @@ set "GAMEFDD=assets\floppy\freedos-games-cd.img"
 rem Clear HDD to boot with A: and D: only (no C:).
 set "HDD=assets\hdd\oldbox-hdd-500mb.img"
 
-rem The retail CD is a BIN/CUE with a 2352-byte MODE1 data track followed by
-rem CD audio tracks.  oldbox needs a 2048-byte ISO, so use the extracted data
-rem track and keep the original CUE as the source for a rebuild.
-set "CDISO=assets\cdrom\heroes2.iso"
-set "CDSRC=C:\Isos\Heroes of Might and Magic 2.cue"
-
-rem An .iso can be passed as the first argument; a .cue/.bin is converted.
-if not "%~1"=="" (
-    if /i "%~x1"==".iso" (
-        set "CDISO=%~1"
-    ) else (
-        set "CDSRC=%~1"
-    )
+rem Mount the retail BIN/CUE directly: oldbox reads the 2352-byte MODE1 data
+rem track as 2048-byte logical blocks and exposes the audio tracks as CD-DA.
+rem An extracted .iso still works as a fallback for older asset trees.
+set "CDIMAGE=C:\Isos\Heroes of Might and Magic 2.cue"
+if not "%~1"=="" set "CDIMAGE=%~1"
+if not exist "%CDIMAGE%" (
+    if exist "assets\cdrom\heroes2.iso" set "CDIMAGE=assets\cdrom\heroes2.iso"
 )
-
-if not exist "%CDISO%" (
-    if not exist "%CDSRC%" (
-        echo [ERROR] Heroes II CD image not found.
-        echo         Expected: "%CDISO%"
-        echo         Source:   "%CDSRC%"
-        echo         Put the original BIN/CUE into C:\Isos, or pass the image:
-        echo             run-homm2.bat "D:\path\Heroes2.iso"
-        pause
-        exit /b 1
-    )
-    echo   Extracting the 2048-byte data track from the BIN/CUE...
-    where py >nul 2>nul
-    if not errorlevel 1 (
-        py -3 tools\extract_cd_iso.py "%CDSRC%" --out "%CDISO%"
-    ) else (
-        python tools\extract_cd_iso.py "%CDSRC%" --out "%CDISO%"
-    )
-    if errorlevel 1 (
-        echo [ERROR] Could not extract "%CDSRC%".
-        pause
-        exit /b 1
-    )
-)
-
-if not exist "%CDISO%" (
-    echo [ERROR] %CDISO% was not created.
+if not exist "%CDIMAGE%" (
+    echo [ERROR] Heroes II CD image not found.
+    echo         Expected: C:\Isos\Heroes of Might and Magic 2.cue
+    echo         Put the original BIN/CUE into C:\Isos, or pass the image:
+    echo             run-homm2.bat "D:\path\Heroes of Might and Magic 2.cue"
+    echo             run-homm2.bat "D:\path\Heroes2.iso"
     pause
     exit /b 1
 )
@@ -99,7 +72,7 @@ echo.
 echo   A: FreeDOS 1.2 + HIMEMX (DOS=HIGH) + MOUSE.COM (PS/2)
 echo      + QCDROM.SYS + MSCDEX.EXE
 if defined HDDARG echo   C: 500 MB HDD  ("%HDD%")
-echo   D: Heroes II CD  ("%CDISO%")
+echo   D: Heroes II CD  ("%CDIMAGE%")
 echo.
 echo   At the A:\^> prompt type:
 echo       D:
@@ -113,9 +86,9 @@ echo       HEROES2
 echo.
 echo   Mouse: click the window or press F1 to capture/release it.
 echo.
-echo   Note: the ISO contains the data track only; oldbox does not play
-echo   CD audio, so choose MIDI music in the game's sound options.
+echo   Note: CD-DA tracks are played through the AWE64 CD input, so choose
+echo   CD Audio music in the game's sound options (MIDI also works).
 echo.
 
-"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%GAMEFDD%" --cdrom "%CDISO%" %HDDARG%
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%GAMEFDD%" --cdrom "%CDIMAGE%" %HDDARG%
 exit /b %ERRORLEVEL%

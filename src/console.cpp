@@ -134,7 +134,8 @@ bool is_floppy_extension(const std::string& ext) {
            ext == ".144" || ext == ".360" || ext == ".720" || ext == ".120";
 }
 bool is_cdrom_extension(const std::string& ext) {
-    return ext == ".iso" || ext == ".cdr" || ext == ".udf";
+    return ext == ".iso" || ext == ".cdr" || ext == ".udf" ||
+           ext == ".cue" || ext == ".bin";
 }
 bool is_hdd_extension(const std::string& ext) {
     return ext == ".raw" || ext == ".vhd" || ext == ".vdi" || ext == ".qcow2";
@@ -502,8 +503,18 @@ void CommandConsole::cdrom_status() {
         emit("D: no CD in the ATAPI drive");
         return;
     }
-    emit(std::format("D: {} ({}, {} x 2048-byte sectors)", ata.cdrom_path(),
-                     format_bytes(ata.cdrom_bytes()), ata.cdrom_sectors()));
+    std::string s = std::format("D: {} ({}, {} x 2048-byte sectors)", ata.cdrom_path(),
+                                format_bytes(ata.cdrom_bytes()), ata.cdrom_sectors());
+    const u32 tracks = ata.cdrom_track_count();
+    if (tracks) {
+        u32 audio = 0;
+        for (u32 i = 0; i < tracks; ++i)
+            if (ata.cdrom_track_audio(i)) ++audio;
+        s += std::format(", {} tracks ({} audio)", tracks, audio);
+    }
+    if (ata.cdrom_audio_playing()) s += "  [CD-DA playing]";
+    else if (ata.cdrom_audio_paused()) s += "  [CD-DA paused]";
+    emit(s);
 }
 
 void CommandConsole::insert_cdrom(const std::string& path) {
@@ -514,7 +525,8 @@ void CommandConsole::insert_cdrom(const std::string& path) {
         throw Error(std::format("cannot mount CD image '{}'", path));
     emit(std::format("D: inserted {} ({}, {} sectors)", path, format_bytes(bytes),
                      machine_.ata().cdrom_sectors()));
-    if (bytes % 2048 != 0)
+    const std::string ext = lower_ascii(std::filesystem::path(path).extension().string());
+    if ((ext == ".iso" || ext == ".cdr" || ext == ".udf") && bytes % 2048 != 0)
         emit("warning: the image size is not a multiple of 2048 bytes (ISO logical sectors)");
 }
 

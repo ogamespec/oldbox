@@ -21,7 +21,11 @@ public:
     bool attach_primary_slave(const std::string& path);
     bool attach_secondary_master(const std::string& path);
     bool attach_secondary_slave(const std::string& path);
-    bool mount_cdrom(const std::string& iso_path);
+    // Mounts an ISO 9660 image or a BIN/CUE set.  A .cue sheet is parsed
+    // into a CD-DA/ISO track table; the referenced BINARY file(s) are read
+    // on demand instead of being copied into guest memory, so the native
+    // HoMM2 BIN/CUE (about 730 MiB) mounts without allocating it twice.
+    bool mount_cdrom(const std::string& image_path);
     // Removes the CD from the secondary-master tray.  The ATAPI device stays
     // attached (IDENTIFY/INQUIRY keep working) but reports "medium not
     // present" (02/3A/00) to TEST UNIT READY, READ CAPACITY and READ, exactly
@@ -35,8 +39,34 @@ public:
         return d.atapi && d.sectors != 0;
     }
     [[nodiscard]] const std::string& cdrom_path() const { return channels_[1].drives[0].path; }
-    [[nodiscard]] u64 cdrom_bytes() const { return channels_[1].drives[0].data.size(); }
+    [[nodiscard]] u64 cdrom_bytes() const { return channels_[1].drives[0].cd.bytes; }
     [[nodiscard]] u64 cdrom_sectors() const { return channels_[1].drives[0].sectors; }
+    // Disc track table (1-based cue track numbers, LBA address space).
+    [[nodiscard]] u32 cdrom_track_count() const {
+        return u32(channels_[1].drives[0].cd.tracks.size());
+    }
+    [[nodiscard]] u32 cdrom_track_number(u32 index) const;
+    [[nodiscard]] bool cdrom_track_audio(u32 index) const;
+    [[nodiscard]] u32 cdrom_track_start(u32 index) const;
+    [[nodiscard]] u32 cdrom_track_length(u32 index) const;
+    // CD-DA transport state.  The drive generates the analog audio stream
+    // that a real CD-ROM feeds to the sound card through its 4-pin cable.
+    [[nodiscard]] bool cdrom_audio_playing() const {
+        const auto& p = channels_[1].drives[0].cd_play;
+        return p.active && !p.paused;
+    }
+    [[nodiscard]] bool cdrom_audio_paused() const {
+        const auto& p = channels_[1].drives[0].cd_play;
+        return p.active && p.paused;
+    }
+    [[nodiscard]] u32 cdrom_audio_lba() const {
+        const auto& p = channels_[1].drives[0].cd_play;
+        return u32(p.pos / 588.0);
+    }
+    // Renders up to `out.size()/2` interleaved stereo CD-DA samples at
+    // `host_rate`.  The sound card mixes this stream through its CD input
+    // (CT1745 register 0x28), exactly like the analog cable on real hardware.
+    void render_cd_audio(std::span<i16> out, u32 host_rate);
     [[nodiscard]] std::string status() const;
 
     // BIOS INT 13h services for the primary master hard disk.
@@ -79,6 +109,42 @@ public:
 private:
     enum class Phase { idle, ata_read, ata_write, identify, atapi_cmd, atapi_in };
 
+    // One entry of the CD table of contents.  `start_lba`/`end_lba` use the
+    // logical block address space of the whole disc (LBA 0 = MSF 00:02:00),
+    // and `file_offset` points at INDEX 01 inside the BINARY image.
+    struct CdTrack {
+        u32 number = 0;
+        bool audio = false;
+        bool mode2 = false;
+        bool preemphasis = false;
+        u32 sector_size = 2352;
+        u32 start_lba = 0;
+        u32 end_lba = 0;
+        u64 file_offset = 0;
+        std::string path;
+    };
+
+    struct CdImage {
+        std::vector<CdTrack> tracks;
+        u32 leadout_lba = 0;
+        u64 bytes = 0;
+    };
+
+    // CD-DA transport.  Positions are in 44100 Hz stereo source frames so a
+    // fractional resampler can follow any host sample rate.  Each CD sector
+    // carries 588 frames (2352 bytes of little-endian S16 stereo).
+    struct CdPlayback {
+        bool active = false;
+        bool paused = false;
+        bool completed = false;
+        double pos = 0.0;
+        double end = 0.0;
+        u32 start_lba = 0;
+        u32 end_lba = 0;
+        u64 cached_lba = ~u64(0);
+        std::vector<u8> cache;
+    };
+
     struct IdeDrive {
         std::string path;
         std::vector<u8> data;
@@ -87,6 +153,8 @@ private:
         bool atapi = false;
         bool removable = false;
         u16 identify[256]{};
+        CdImage cd;
+        CdPlayback cd_play;
 
         u8 error = 0, feature = 0;
         u8 sector_count = 0, lba_low = 0, lba_mid = 0, lba_high = 0;
@@ -194,6 +262,17 @@ private:
     [[nodiscard]] static u32 cdb_lba(const std::array<u8, 12>& p, int off, int len);
 
     bool load_iso(IdeDrive& d, const std::string& path);
+    bool load_cue(IdeDrive& d, const std::string& path);
+    bool load_raw_bin(IdeDrive& d, const std::string& path);
+    bool finish_cd_mount(IdeDrive& d, std::vector<CdTrack> tracks, u64 bytes,
+                         const std::string& path);
+    [[nodiscard]] const CdTrack* cd_track_at(const IdeDrive& d, u32 lba) const;
+    [[nodiscard]] u32 cd_track_index_at(const IdeDrive& d, u32 lba) const;
+    bool cd_read_raw(const IdeDrive& d, u32 lba, std::vector<u8>& out) const;
+    bool cd_read_user_range(const IdeDrive& d, u32 lba, u32 count, u8* out) const;
+    bool cd_play(IdeDrive& d, u32 start_lba, u32 length_lba);
+    void cd_stop(IdeDrive& d, bool completed);
+    [[nodiscard]] static u8 cd_audio_status(const CdPlayback& p);
     bool attach_drive(int channel, int unit, const std::string& path, bool atapi);
     void remap_bars();
     void map_bar(int idx);

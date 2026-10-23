@@ -209,7 +209,11 @@ public:
 
     void reset();
     void tick(u64 cpu_cycles);
-    void render(std::span<i16> out, u32 host_rate);
+    // Renders the card output.  `cd_in` is the analog CD-DA stream arriving
+    // over the drive's 4-pin audio cable; it is mixed through the CT1745 CD
+    // input level (registers 0x28/0x36/0x37) just like the real card.
+    void render(std::span<i16> out, u32 host_rate,
+                std::span<const i16> cd_in = {});
     [[nodiscard]] u32 sample_rate() const { return output_rate_; }
     [[nodiscard]] const AudioConfig& config() const { return cfg_; }
     [[nodiscard]] std::string status() const;

@@ -86,7 +86,10 @@ void Awe64::reset_mixer() {
     mixer_[0x0a] = 0x00;
     mixer_[0x22] = 0xcc;
     mixer_[0x26] = 0xcc;
-    mixer_[0x28] = 0x00;
+    // CD audio is an analog input from the drive's 4-pin cable.  Boot it at
+    // 0 dB as well: DOS games often start a CD track without programming the
+    // mixer, and a real installation leaves the Creative mixer at full scale.
+    mixer_[0x28] = 0xcc;
     mixer_[0x2e] = 0x00;
     // Fine-grained 5-bit controls.  The CT1745 reset value is 24/31
     // (-14 dB) for the main paths, but DOS software (Megafortress predates
@@ -99,8 +102,8 @@ void Awe64::reset_mixer() {
     mixer_[0x33] = 0x1f;
     mixer_[0x34] = 0x1f;
     mixer_[0x35] = 0x1f;
-    mixer_[0x36] = 0x00;
-    mixer_[0x37] = 0x00;
+    mixer_[0x36] = 0x1f; // CD input L
+    mixer_[0x37] = 0x1f; // CD input R
     mixer_[0x38] = 0x00;
     mixer_[0x39] = 0x00;
     mixer_[0x3a] = 0x00;
@@ -993,11 +996,21 @@ void Awe64::tick(u64 cpu_cycles) {
     }
 }
 
-void Awe64::render(std::span<i16> out, u32 host_rate) {
+void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in) {
     if (out.size() < 2) return;
     const u32 frames = u32(out.size() / 2);
     const u32 rate = host_rate ? host_rate : output_rate_;
     const double ratio = double(kInternalRate) / double(rate);
+    const bool have_cd = cd_in.size() >= size_t(frames) * 2;
+    // CT1745 output mixer switches 0x3C: bit 2 = CD.L, bit 3 = CD.R.
+    const float cd_gain_l = (mixer_[0x3c] & 0x04 ? 1.0f : 0.0f) *
+                            mixer_gain(mixer_[0x36], 31) *
+                            mixer_gain(mixer_[0x30], 31) *
+                            std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
+    const float cd_gain_r = (mixer_[0x3c] & 0x08 ? 1.0f : 0.0f) *
+                            mixer_gain(mixer_[0x37], 31) *
+                            mixer_gain(mixer_[0x31], 31) *
+                            std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
 
     for (u32 f = 0; f < frames; ++f) {
         if (mix_pos_ < 0.0) mix_pos_ = 0.0;
@@ -1006,10 +1019,14 @@ void Awe64::render(std::span<i16> out, u32 host_rate) {
         while (idx + 1 >= mix_generated_) mix_internal(1);
         const u32 i0 = u32(idx & (mix_ring_size - 1));
         const u32 i1 = u32((idx + 1) & (mix_ring_size - 1));
-        const float l = float(mix_ring_[size_t(i0) * 2]) * (1.0f - frac) +
-                        float(mix_ring_[size_t(i1) * 2]) * frac;
-        const float r = float(mix_ring_[size_t(i0) * 2 + 1]) * (1.0f - frac) +
-                        float(mix_ring_[size_t(i1) * 2 + 1]) * frac;
+        float l = float(mix_ring_[size_t(i0) * 2]) * (1.0f - frac) +
+                  float(mix_ring_[size_t(i1) * 2]) * frac;
+        float r = float(mix_ring_[size_t(i0) * 2 + 1]) * (1.0f - frac) +
+                  float(mix_ring_[size_t(i1) * 2 + 1]) * frac;
+        if (have_cd) {
+            l += float(cd_in[size_t(f) * 2]) * cd_gain_l;
+            r += float(cd_in[size_t(f) * 2 + 1]) * cd_gain_r;
+        }
         out[size_t(f) * 2] = clamp_i16(l);
         out[size_t(f) * 2 + 1] = clamp_i16(r);
         mix_pos_ += ratio;

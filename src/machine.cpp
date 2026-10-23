@@ -487,7 +487,13 @@ void Machine::render_audio(std::span<i16> out, u32 host_rate) {
     // timeline on top.  Synthesis itself runs in Awe64::tick (AWE64 node).
     PerfScope scope(PerfNode::AudioMix);
     if (audio_) {
-        audio_->render(out, host_rate);
+        if (ata_.cdrom_audio_playing()) {
+            cd_audio_buffer_.assign(out.size(), 0);
+            ata_.render_cd_audio(cd_audio_buffer_, host_rate);
+            audio_->render(out, host_rate, std::span<const i16>(cd_audio_buffer_));
+        } else {
+            audio_->render(out, host_rate);
+        }
     } else {
         std::fill(out.begin(), out.end(), i16(0));
     }

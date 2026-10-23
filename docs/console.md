@@ -66,10 +66,10 @@ insert C:\Isos\Windows95OSR2.iso
 | `floppy [a\|b] status` | что вставлено в A: или B: |
 | `floppy [a\|b] insert PATH` | вставить образ дискеты |
 | `floppy [a\|b] eject` | вынуть дискету |
-| `cdrom status` | что вставлено в ATAPI-привод D: |
-| `cdrom insert PATH` | вставить ISO (образ CD) |
+| `cdrom status` | что вставлено в ATAPI-привод D: (треки, CD-DA) |
+| `cdrom insert PATH` | вставить ISO или BIN/CUE (`.cue`, `.bin`) |
 | `cdrom eject` | вынуть CD |
-| `insert PATH` | вставить по расширению: `.iso` → CD, `.img`/`.ima` → A: |
+| `insert PATH` | вставить по расширению: `.iso`/`.cue`/`.bin` → CD, `.img`/`.ima` → A: |
 | `eject [floppy\|cdrom\|a\|b]` | вынуть носитель (по умолчанию A:) |
 | `images [DIR]` | список образов в каталоге (по умолчанию текущий) |
 | `key NAME[+NAME…]` | нажать клавиши гостя: `key enter`, `key ctrl+alt+del`, `key f1` |
@@ -104,8 +104,10 @@ insert C:\Isos\Windows95OSR2.iso
   GET CONFIGURATION продолжают работать), но очищает носитель:
   `TEST UNIT READY`, `READ CAPACITY` и `READ(10/12)` возвращают
   `CHECK CONDITION`, sense `NOT READY (02) / ASC 3Ah` — «в лотке нет диска».
-  `insert` монтирует ISO заново; при необходимости DOS-драйвер (MSCDEX)
-  увидит смену носителя.
+  `insert` монтирует ISO или BIN/CUE заново; при необходимости DOS-драйвер
+  (MSCDEX) увидит смену носителя. У CUE-образа `cdrom status` показывает
+  число дорожек и состояние CD-DA; аудио идёт в CD-вход AWE64, как по
+  четырёхконтактному кабелю от привода к карте.
 - Образы, доступные только на чтение, подключаются как write-protected
   (проверяются права и возможность открыть файл на запись).
 

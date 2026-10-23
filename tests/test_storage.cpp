@@ -3,6 +3,8 @@
 #include "oldbox/storage.hpp"
 #include "oldbox/dma.hpp"
 #include "tests/test.hpp"
+#include <algorithm>
+#include <array>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
@@ -103,6 +105,55 @@ std::vector<u16> read_identify(Bus& bus, u16 base) {
     std::vector<u16> id(256);
     for (int i = 0; i < 256; ++i) id[size_t(i)] = bus.io_read16(base);
     return id;
+}
+
+// A base name with spaces, so the CUE parser's quoted FILE handling and its
+// resolve-relative-to-the-sheet rule are both exercised.
+std::string unique_stem(const char* tag) {
+    static int counter = 0;
+    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    return (std::filesystem::temp_directory_path() /
+            std::format("oldbox {} {} {}", tag, stamp, ++counter)).string();
+}
+
+void atapi_packet(Bus& bus, u16 base, const std::array<u8, 12>& cdb) {
+    bus.io_write8(u16(base + 7), 0xA0); // PACKET
+    for (u8 b : cdb) bus.io_write8(base, b);
+}
+
+std::vector<u8> atapi_read(Bus& bus, u16 base, size_t bytes) {
+    std::vector<u8> out(bytes);
+    for (size_t i = 0; i < bytes; ++i) out[i] = bus.io_read8(base);
+    (void)bus.io_read8(u16(base + 7)); // acknowledge command completion
+    return out;
+}
+
+// Build one MODE1/2352 sector: 12-byte sync, 4-byte header, 2048-byte user
+// data, then zero EDC/reserved/ECC (the emulator never validates them).
+void append_mode1_sector(std::vector<u8>& image, u32 lba, const std::vector<u8>& user) {
+    const size_t off = image.size();
+    image.resize(off + 2352, 0);
+    image[off + 1] = 0xFF;
+    for (int i = 2; i <= 10; ++i) image[off + size_t(i)] = 0xFF;
+    const u32 frames = lba + 150;
+    image[off + 12] = u8(frames / (60 * 75));
+    image[off + 13] = u8((frames / 75) % 60);
+    image[off + 14] = u8(frames % 75);
+    image[off + 15] = 0x01;
+    std::memcpy(image.data() + off + 16, user.data(), std::min<size_t>(2048, user.size()));
+}
+
+void append_audio_sector(std::vector<u8>& image, const i16* frames, u32 count) {
+    const size_t off = image.size();
+    image.resize(off + 2352, 0);
+    for (u32 i = 0; i < count && i < 588; ++i) {
+        const u16 l = u16(frames[i * 2]);
+        const u16 r = u16(frames[i * 2 + 1]);
+        image[off + size_t(i) * 4 + 0] = u8(l);
+        image[off + size_t(i) * 4 + 1] = u8(l >> 8);
+        image[off + size_t(i) * 4 + 2] = u8(r);
+        image[off + size_t(i) * 4 + 3] = u8(r >> 8);
+    }
 }
 
 } // namespace
@@ -611,4 +662,227 @@ TEST(floppy_drive_b_media_commands) {
     }
     CHECK(dma.terminal_count(2));
     drop(path);
+}
+
+TEST(cue_bin_mode1_and_cdda_playback) {
+    const std::string stem = unique_stem("cue audio");
+    const std::string cue_path = stem + ".cue";
+    const std::string bin_path = stem + ".bin";
+
+    std::vector<u8> bin;
+    std::vector<u8> pvd(2048, 0);
+    pvd[0] = 0x01;
+    std::memcpy(pvd.data() + 1, "CD001", 5);
+    pvd[6] = 0x01;
+    put_le32(pvd.data() + 80, 2); // ISO volume space size (data track only)
+    append_mode1_sector(bin, 0, pvd);
+    std::vector<u8> payload(2048, 0);
+    std::memcpy(payload.data(), "HELLO CUE AUDIO!", 16);
+    append_mode1_sector(bin, 1, payload);
+
+    // Two complete CD-DA sectors = 1176 stereo frames at 44100 Hz.
+    std::vector<i16> pcm(1176 * 2);
+    for (u32 i = 0; i < 1176; ++i) {
+        pcm[size_t(i) * 2] = i16(i32(i % 1000) - 500);
+        pcm[size_t(i) * 2 + 1] = i16(-i32(i % 700));
+    }
+    append_audio_sector(bin, pcm.data(), 588);
+    append_audio_sector(bin, pcm.data() + 588 * 2, 588);
+    write_file(bin_path, bin);
+
+    const std::string bin_name = std::filesystem::path(bin_path).filename().string();
+    const std::string cue_text = std::format(
+        "FILE \"{}\" BINARY\r\n"
+        "  TRACK 01 MODE1/2352\r\n"
+        "    INDEX 01 00:00:00\r\n"
+        "  TRACK 02 AUDIO\r\n"
+        "    INDEX 01 00:00:02\r\n", bin_name);
+    write_file(cue_path, std::vector<u8>(cue_text.begin(), cue_text.end()));
+
+    Bus bus(2u * 1024 * 1024);
+    IrqLog irq;
+    AtaController ata(bus, irq.ata());
+    CHECK(ata.mount_cdrom(cue_path));
+    CHECK_EQ(ata.cdrom_path(), cue_path);
+    CHECK_EQ(ata.cdrom_track_count(), 2u);
+    CHECK(!ata.cdrom_track_audio(0));
+    CHECK(ata.cdrom_track_audio(1));
+    CHECK_EQ(ata.cdrom_track_number(1), 2u);
+    CHECK_EQ(ata.cdrom_track_start(1), 2u);
+    CHECK_EQ(ata.cdrom_track_length(1), 2u);
+    CHECK_EQ(ata.cdrom_sectors(), 4u);
+    CHECK_EQ(ata.cdrom_bytes(), u64(bin.size()));
+
+    ata_select(bus, 0x170, 0xA0);
+
+    // READ(10) extracts the 2048-byte user field from the 2352-byte sector.
+    atapi_packet(bus, 0x170, {0x28, 0, 0, 0, 0, 1, 0, 0, 1, 0, 0, 0});
+    const auto read_payload = atapi_read(bus, 0x170, 2048);
+    CHECK_EQ(std::string(reinterpret_cast<const char*>(read_payload.data()), 16),
+             std::string("HELLO CUE AUDIO!"));
+
+    // QCDROM's raw mode uses READ CD with all fields (CDB[9] = 0xF8): the
+    // mode-1 sector must be reconstructed byte-for-byte as 12+4+2048+288.
+    atapi_packet(bus, 0x170, {0xBE, 0x08, 0, 0, 0, 1, 0, 0, 1, 0xF8, 0, 0});
+    const auto raw_sector = atapi_read(bus, 0x170, 2352);
+    CHECK_EQ(std::memcmp(raw_sector.data(), bin.data() + 2352, 2352), 0);
+
+    // User-data-only READ CD for a mode-1 track returns 2048 bytes.
+    atapi_packet(bus, 0x170, {0xBE, 0x08, 0, 0, 0, 1, 0, 0, 1, 0x10, 0, 0});
+    const auto cooked = atapi_read(bus, 0x170, 2048);
+    CHECK_EQ(std::memcmp(cooked.data(), payload.data(), 2048), 0);
+
+    // TOC format 0 with LBA addresses: data control 0x14, audio control 0x10.
+    atapi_packet(bus, 0x170, {0x43, 0x00, 0x00, 0, 0, 0, 0, 0, 28, 0, 0, 0});
+    const auto toc = atapi_read(bus, 0x170, 28);
+    CHECK_EQ(int(toc[0]), 0x00);
+    CHECK_EQ(int(toc[1]), 26); // 2 + three 8-byte descriptors
+    CHECK_EQ(int(toc[2]), 1);
+    CHECK_EQ(int(toc[3]), 2);
+    CHECK_EQ(int(toc[4]), 0x00);
+    CHECK_EQ(int(toc[5]), 0x14); // data track
+    CHECK_EQ(int(toc[6]), 1);
+    CHECK_EQ(int(toc[13]), 0x10); // audio track
+    CHECK_EQ(int(toc[14]), 2);
+    CHECK_EQ(int(toc[16]), 0);
+    CHECK_EQ(int(toc[17]), 0);
+    CHECK_EQ(int(toc[18]), 0);
+    CHECK_EQ(int(toc[19]), 2); // track 2 starts at LBA 2
+    CHECK_EQ(int(toc[22]), 0xAA); // lead-out
+    CHECK_EQ(int(toc[27]), 4);    // lead-out LBA
+
+    // Format 1 is multi-session info: one session and the first track of
+    // that session.  QCDROM uses its byte 3/6 to select the data track.
+    atapi_packet(bus, 0x170, {0x43, 0x00, 0x01, 0, 0, 0, 0, 0, 12, 0, 0, 0});
+    const auto toc_multi = atapi_read(bus, 0x170, 12);
+    CHECK_EQ(int(toc_multi[1]), 10); // 2 + one 8-byte descriptor
+    CHECK_EQ(int(toc_multi[2]), 1);  // first complete session
+    CHECK_EQ(int(toc_multi[3]), 1);  // last complete session (single session)
+    CHECK_EQ(int(toc_multi[5]), 0x14);
+    CHECK_EQ(int(toc_multi[6]), 1);  // first track of the session
+    CHECK_EQ(int(toc_multi[8]), 0);
+    CHECK_EQ(int(toc_multi[9]), 0);
+    CHECK_EQ(int(toc_multi[10]), 0);
+    CHECK_EQ(int(toc_multi[11]), 0); // session starts at LBA 0
+
+    // The MSF bit (CDB[1] bit 1) is independent of the TOC format code.
+    atapi_packet(bus, 0x170, {0x43, 0x02, 0x00, 0, 0, 0, 0, 0, 28, 0, 0, 0});
+    const auto toc_msf = atapi_read(bus, 0x170, 28);
+    CHECK_EQ(int(toc_msf[5]), 0x14);
+    CHECK_EQ(int(toc_msf[17]), 0);
+    CHECK_EQ(int(toc_msf[18]), 2); // track 2 at 00:02:02 (LBA 2 + 150)
+    CHECK_EQ(int(toc_msf[19]), 2);
+    CHECK_EQ(int(toc_msf[27]), 4); // lead-out at 00:02:04
+
+    // MODE SENSE(10) page 2Ah advertises CD-DA/audio-play support; QCDROM
+    // checks the 0x71 capability byte before enabling the MSCDEX audio calls.
+    atapi_packet(bus, 0x170, {0x5A, 0, 0x2A, 0, 0, 0, 0, 0, 24, 0, 0, 0});
+    const auto mode_2a = atapi_read(bus, 0x170, 24);
+    CHECK_EQ(int(mode_2a[8]), 0x2A);
+    CHECK_EQ(int(mode_2a[9]), 0x0E);
+    CHECK_EQ(int(mode_2a[10]), 0x07);
+    CHECK_EQ(int(mode_2a[12]), 0x71); // audio play + composite + digital port
+    CHECK_EQ(int(mode_2a[13]), 0xFF); // CDDA supported and accurate
+
+    // READ CD returns the raw 2352-byte CD-DA sectors.
+    atapi_packet(bus, 0x170, {0xBE, 0x04, 0, 0, 0, 2, 0, 0, 2, 0x10, 0, 0});
+    const auto audio_raw = atapi_read(bus, 0x170, 2 * 2352);
+    CHECK_EQ(std::memcmp(audio_raw.data(), bin.data() + 2 * 2352, 2 * 2352), 0);
+
+    // PLAY AUDIO(10): two blocks from track 2.  The drive emits the analog
+    // stream that the card mixes through its CD input.
+    atapi_packet(bus, 0x170, {0x45, 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0});
+    CHECK(ata.cdrom_audio_playing());
+    CHECK_EQ(ata.cdrom_audio_lba(), 2u);
+    std::vector<i16> rendered(1176 * 2);
+    ata.render_cd_audio(rendered, 44100);
+    CHECK_EQ(std::memcmp(rendered.data(), pcm.data(), pcm.size() * sizeof(i16)), 0);
+    CHECK(ata.cdrom_audio_playing());
+    ata.render_cd_audio(rendered, 44100); // observes the end of the play range
+    CHECK(!ata.cdrom_audio_playing());
+
+    // PAUSE/RESUME freezes and restarts the transport position.
+    atapi_packet(bus, 0x170, {0x45, 0, 0, 0, 0, 2, 0, 0, 2, 0, 0, 0});
+    std::vector<i16> part(100 * 2);
+    ata.render_cd_audio(part, 44100);
+    const u32 before_pause = ata.cdrom_audio_lba();
+    atapi_packet(bus, 0x170, {0x4B, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+    CHECK(ata.cdrom_audio_paused());
+    ata.render_cd_audio(part, 44100);
+    CHECK_EQ(ata.cdrom_audio_lba(), before_pause);
+
+    // READ SUB-CHANNEL reports "play in progress" and the current track.
+    atapi_packet(bus, 0x170, {0x4B, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0}); // resume
+    CHECK(ata.cdrom_audio_playing());
+    atapi_packet(bus, 0x170, {0x42, 0, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0});
+    const auto sub = atapi_read(bus, 0x170, 16);
+    CHECK_EQ(int(sub[1]), 0x11); // audio play in progress
+    CHECK_EQ(int(sub[3]), 12);   // Q sub-channel length
+    CHECK_EQ(int(sub[4]), 0x01); // current-position format
+    CHECK_EQ(int(sub[6]), 2);    // track 2
+    CHECK_EQ(int(sub[7]), 1);    // index 1
+    CHECK_EQ(int(sub[11]), 2);   // LBA address format: current LBA 2
+
+    // The TIME bit selects the MSF address layout instead.
+    atapi_packet(bus, 0x170, {0x42, 0x02, 0, 0, 0, 0, 0, 0, 16, 0, 0, 0});
+    const auto sub_msf = atapi_read(bus, 0x170, 16);
+    CHECK_EQ(int(sub_msf[9]), 0);  // zero field before M/S/F
+    CHECK_EQ(int(sub_msf[10]), 2); // 00:02:02 (LBA 2 + 150)
+    CHECK_EQ(int(sub_msf[11]), 2);
+
+    // MMC: a PLAY AUDIO length of zero is a no-op and must not stop the
+    // transport that is already running.
+    atapi_packet(bus, 0x170, {0x45, 0, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0});
+    CHECK(ata.cdrom_audio_playing());
+
+    atapi_packet(bus, 0x170, {0x4E, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+    CHECK(!ata.cdrom_audio_playing());
+    CHECK(ata.eject_cdrom());
+    CHECK_EQ(ata.cdrom_track_count(), 0u);
+    CHECK(!ata.cdrom_media_present());
+    drop(cue_path);
+    drop(bin_path);
+}
+
+TEST(cue_multiple_files_are_contiguous) {
+    const std::string stem = unique_stem("cue multi");
+    const std::string cue_path = stem + ".cue";
+    const std::string data_path = stem + " data.bin";
+    const std::string audio_path = stem + " audio.bin";
+
+    std::vector<u8> data;
+    std::vector<u8> pvd(2048, 0);
+    pvd[0] = 0x01;
+    std::memcpy(pvd.data() + 1, "CD001", 5);
+    put_le32(pvd.data() + 80, 2);
+    append_mode1_sector(data, 0, pvd);
+    append_mode1_sector(data, 1, std::vector<u8>(2048, 0x5A));
+    write_file(data_path, data);
+    write_file(audio_path, std::vector<u8>(2352, 0x33));
+
+    const std::string cue_text = std::format(
+        "FILE \"{}\" BINARY\n"
+        "  TRACK 01 MODE1/2352\n"
+        "    INDEX 01 00:00:00\n"
+        "FILE \"{}\" BINARY\n"
+        "  TRACK 02 AUDIO\n"
+        "    INDEX 01 00:00:00\n",
+        std::filesystem::path(data_path).filename().string(),
+        std::filesystem::path(audio_path).filename().string());
+    write_file(cue_path, std::vector<u8>(cue_text.begin(), cue_text.end()));
+
+    Bus bus(2u * 1024 * 1024);
+    IrqLog irq;
+    AtaController ata(bus, irq.ata());
+    CHECK(ata.mount_cdrom(cue_path));
+    CHECK_EQ(ata.cdrom_track_count(), 2u);
+    CHECK_EQ(ata.cdrom_track_start(0), 0u);
+    CHECK_EQ(ata.cdrom_track_length(0), 2u);
+    CHECK_EQ(ata.cdrom_track_start(1), 2u); // contiguous disc address space
+    CHECK_EQ(ata.cdrom_track_length(1), 1u);
+    CHECK_EQ(ata.cdrom_sectors(), 3u);
+    CHECK(ata.eject_cdrom());
+    drop(cue_path);
+    drop(data_path);
+    drop(audio_path);
 }

@@ -15,8 +15,8 @@ SDL3-фронтендом. Проект написан с нуля по перв
 | Flash | W29C020-12 (2MBit) |
 | 2D video | S3 Trio64 (86C764), 4 MiB VRAM, VGA + S3 2D engine |
 | 3D video | 3dfx Voodoo Graphics (SST-1, Diamond Monster 3D), 4 MiB, софтверный растеризатор |
-| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, MPU-401, EMU8000, OPL3 (YMF262) FM в отдельном модуле (AWE64 CQM не моделируется) |
-| Storage | PIIX4 IDE (PIO), ATA/ATAPI CD-ROM, 82077AA FDC 1.44 MiB |
+| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, CD-вход (CD-DA), MPU-401, EMU8000, OPL3 (YMF262) FM в отдельном модуле (AWE64 CQM не моделируется) |
+| Storage | PIIX4 IDE (PIO), ATA/ATAPI CD-ROM (ISO и BIN/CUE с CD-DA), 82077AA FDC 1.44 MiB |
 | Input | PS/2 keyboard + PS/2 mouse через 8042 |
 | Firmware | Award BIOS из `specs/`, встроенный диагностический POST ROM, S3 Trio64 option ROM |
 
@@ -59,12 +59,15 @@ standard mode. Make sure you have installed HIMEM.SYS...».
 В `A:\>` нужно набрать `D:` и `INSTALL.EXE`. Дискету собирает
 `python3 tools/make_games_floppy.py --cd --out assets/floppy/freedos-games-cd.img`.
 `run-homm2.bat` запускает Heroes of Might and Magic II (DOS) с той же
-дискетой: C: — 500-МБ диск, D: — `assets\cdrom\heroes2.iso`.
-В `A:\>` нужно набрать `D:`, затем `CD \HEROES2` и `INSTALL`; игра ставится
-в `C:\HEROES2` (около 60 МБ). Родной образ — BIN/CUE с 2352-байтовыми
-секторами и аудиодорожками; `tools/extract_cd_iso.py` вырезает из него
-data-дорожку в 2048-байтовый ISO (CD-аудио oldbox пока не проигрывает,
-поэтому в игре лучше выбрать MIDI).
+дискетой: C: — 500-МБ диск, D: — родной BIN/CUE
+`C:\Isos\Heroes of Might and Magic 2.cue` (data-дорожка 2352 байта + 42
+CD-DA дорожки). oldbox монтирует CUE напрямую, отдаёт data-дорожку как
+2048-байтовые логические блоки и проигрывает аудио через CD-вход AWE64
+(как четырёхконтактный кабель CD-ROM → звуковая карта). В `A:\>` нужно
+набрать `D:`, затем `CD \HEROES2` и `INSTALL`; игра ставится в `C:\HEROES2`
+(около 60 МБ), в звуковых настройках можно выбрать CD Audio.
+`tools/extract_cd_iso.py` по-прежнему умеет вырезать data-дорожку в
+2048-байтовый ISO для старых наборов ассетов.
 SDL3 при отсутствии системного пакета скачивается CMake-ом (release 3.2.30).
 На Linux без заголовков X11/Wayland SDL собирается в console-режиме; для окна
 нужны `libx11-dev`/`libwayland-dev` (или Windows-сборка).
@@ -203,7 +206,9 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   контроллера и устройства, 3-байтовые пакеты, IRQ12); в гостевой FreeDOS
   на `freedos-games.img` грузится штатный Microsoft `MMOUSE.COM`
   (INT 33h), собирается `tools/make_games_floppy.py`.
-- ATA/ATAPI и FDC: PIO-команды, IDENTIFY, ISO9660 CD, 1.44M floppy + DMA2.
+- ATA/ATAPI и FDC: PIO-команды, IDENTIFY, ISO9660 CD, BIN/CUE с CD-DA
+  (PLAY/PAUSE/STOP, READ CD, TOC, SUB-CHANNEL) через CD-вход AWE64,
+  1.44M floppy + DMA2.
 - I/O: полная 64K-карта портов, 8/16/32-битные доступы, разбиение при
   пересечении границ устройств, IOPL/CPL и I/O permission bitmap в TSS.
 - A20: mask в Bus, port 0x92 и 8042 output port, тесты на aliasing.
@@ -310,8 +315,11 @@ SB16/EMU8000/OPL3, счётчики производительности (ари
   принимает внешний дамп.
 - Voodoo: tDetail, часть texture-combine, NCC I/Q, gamma CLUT и triple
   buffering не реализованы; см. docs/voodoo.md.
-- ATA bus-master/UDMA и CD-DA не реализованы; PIO/ATAPI достаточно для
-  загрузки и чтения ISO9660.
+- ATA bus-master/UDMA не реализован: используется PIO/ATAPI.
+- CD-DA реализовано для CUE-образов (`PLAY AUDIO`, `PAUSE/RESUME`,
+  `STOP`, `READ CD`, `READ SUB-CHANNEL`, `READ TOC`); экстракция аудио
+  снимает только 2352-байтовые кадры, без коррекции C2. CD-вход AWE64
+  смешивается через CT1745 (регистры 0x28/0x36/0x37).
 
 ## Лицензия и firmware
 

@@ -809,3 +809,49 @@ TEST(pc_speaker_gate_timeline_produces_brrr) {
     const double low_flat = tone_energy(flat, 70.0, rate);
     CHECK(low > low_flat * 3.0);
 }
+
+TEST(audio_cd_input_is_mixed_through_ct1745_cd_volume) {
+    Rig rig;
+    auto read_reg = [&](u8 reg) {
+        rig.card.io_write8(u16(kSb + 4), reg);
+        return rig.card.io_read8(u16(kSb + 5));
+    };
+    auto write_reg = [&](u8 reg, u8 value) {
+        rig.card.io_write8(u16(kSb + 4), reg);
+        rig.card.io_write8(u16(kSb + 5), value);
+    };
+
+    // The CD input defaults to 0 dB, like the other analog/digital paths.
+    CHECK_EQ(read_reg(0x36), 0x1f);
+    CHECK_EQ(read_reg(0x37), 0x1f);
+    CHECK_EQ(read_reg(0x28), 0xff);
+
+    std::vector<i16> cd(256 * 2);
+    for (std::size_t i = 0; i < cd.size(); ++i)
+        cd[i] = i16((int(i * 37) % 4000) - 2000);
+    std::vector<i16> out(cd.size(), 0);
+    rig.card.render(out, 44100, std::span<const i16>(cd));
+    for (std::size_t i = 0; i < cd.size(); ++i) CHECK_EQ(int(out[i]), int(cd[i]));
+
+    // A zero CD level mutes the cable, just as the CT1745 does.
+    write_reg(0x28, 0x00);
+    std::vector<i16> muted(cd.size(), 1);
+    rig.card.render(muted, 44100, std::span<const i16>(cd));
+    CHECK_EQ(peak(muted), 0);
+
+    // Half-scale CD volume is audible again and quieter than 0 dB.
+    write_reg(0x28, 0x88);
+    std::vector<i16> half(cd.size(), 0);
+    rig.card.render(half, 44100, std::span<const i16>(cd));
+    CHECK(peak(half) > 0);
+    CHECK(peak(half) < peak(cd));
+
+    // Output mixer switches 0x3C bits 2/3 gate the CD.L/CD.R paths.
+    write_reg(0x3c, 0x13); // 0x1f with CD.L and CD.R open
+    std::vector<i16> switched(cd.size(), 1);
+    rig.card.render(switched, 44100, std::span<const i16>(cd));
+    CHECK_EQ(peak(switched), 0);
+    write_reg(0x3c, 0x1f);
+    rig.card.render(switched, 44100, std::span<const i16>(cd));
+    CHECK(peak(switched) > 0);
+}

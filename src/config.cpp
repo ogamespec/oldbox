@@ -170,7 +170,7 @@ void print_usage(const char* argv0) {
         "  --vga-bios FILE        load an S3 Trio64 option ROM\n"
         "  --flash FILE           writable W29C020 flash image (programmed by AWDFLASH)\n"
         "  --hdd FILE             attach raw hard-disk image\n"
-        "  --cdrom FILE           attach ISO image to secondary master\n"
+        "  --cdrom FILE           attach ISO or BIN/CUE image to secondary master\n"
         "  --floppy FILE          attach 1.44 MiB floppy image\n"
         "  --boot-menu            start with the built-in boot menu\n"
         "  --screenshot FILE      write the final frame as a PPM file\n"

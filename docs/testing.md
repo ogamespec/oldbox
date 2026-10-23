@@ -8,7 +8,7 @@ ctest --test-dir build --output-on-failure
 ./build/oldbox_tests audit_
 ```
 
-374 теста, сгруппированных по файлам:
+390 тестов, сгруппированных по файлам:
 
 | Файл | Что проверяет |
 |---|---|
@@ -21,8 +21,8 @@ ctest --test-dir build --output-on-failure
 | `test_io.cpp` | Bus I/O dispatch 8/16/32, boundaries, port 0x80, A20, CPU in/out, IOPL/CPL, TSS bitmap, 0x92/8042 A20 |
 | `test_voodoo.cpp` | 28 тестов Voodoo: PCI/BAR, регистры, треугольники, клиппинг, Z/alpha/chroma/fog/stipple, текстуры/mip/bilinear, LFB, swap |
 | `test_s3.cpp` | PCI/ROM/BAR, VGA text/mode13/12, raster ops, S3 engine, linear modes, timing |
-| `test_audio.cpp` | DSP reset/version/UART, CT1745 mixer и алиасы, EMU8000 SF2-банк/регистры/звуковая память, 8/16-бит DMA, ADPCM, OPL3 (таймеры, 4-оп, стерео), MPU-401, DAC/DMA IRQ |
-| `test_storage.cpp` | ATA IDENTIFY/read-write, LBA48, missing drive, FDC read/write, ATAPI ISO, native BAR |
+| `test_audio.cpp` | DSP reset/version/UART, CT1745 mixer и алиасы, CD-вход и его громкость, EMU8000 SF2-банк/регистры/звуковая память, 8/16-бит DMA, ADPCM, OPL3 (таймеры, 4-оп, стерео), MPU-401, DAC/DMA IRQ |
+| `test_storage.cpp` | ATA IDENTIFY/read-write, LBA48, missing drive, FDC read/write, ATAPI ISO, BIN/CUE (MODE1/2352 + CD-DA, несколько FILE), TOC/READ CD/PLAY/PAUSE/STOP/SUB-CHANNEL, native BAR |
 | `test_devices.cpp` | PIC/PIT/RTC/SMBus |
 | `test_jit.cpp` | дифференциальные тесты JIT против интерпретатора: ALU/флаги, адресация, переходы, I/O и сегменты, самомодифицирующийся код, fallback на неподдержанной инструкции; сквозная загрузка FreeDOS с `--jit` |
 | `test_machine.cpp` | сквозная загрузка FreeDOS с настоящим `EP-ZXA.bin` до промпта `A:\>` |

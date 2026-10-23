@@ -3,8 +3,13 @@
 #include "oldbox/storage.hpp"
 #include "oldbox/perf.hpp"
 #include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <sstream>
 
 namespace oldbox {
@@ -52,6 +57,240 @@ void put_ident_string(u16* id, int first_word, int words, std::string_view text)
     for (int i = 0; i < words; ++i) {
         id[first_word + i] = u16(u16(u8(s[size_t(i) * 2])) << 8) | u16(u8(s[size_t(i) * 2 + 1]));
     }
+}
+
+std::string upper_ascii(std::string s) {
+    for (char& c : s) c = char(std::toupper(static_cast<unsigned char>(c)));
+    return s;
+}
+
+std::string trim_ascii(std::string s) {
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.front()))) s.erase(s.begin());
+    while (!s.empty() && std::isspace(static_cast<unsigned char>(s.back()))) s.pop_back();
+    return s;
+}
+
+// CUE INDEX times are mm:ss:ff at 75 frames per second, counted from the
+// start of the BINARY file.  LBA 0 is therefore 00:00:00 in the sheet.
+bool parse_msf(std::string_view text, u32& frames) {
+    unsigned mm = 0, ss = 0, ff = 0;
+    const std::string s(text);
+    if (std::sscanf(s.c_str(), "%u:%u:%u", &mm, &ss, &ff) != 3) return false;
+    if (ss >= 60 || ff >= 75) return false;
+    frames = (mm * 60 + ss) * 75 + ff;
+    return true;
+}
+
+bool read_host_range(const std::string& path, u64 offset, u8* out, size_t bytes) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.seekg(std::streamoff(offset));
+    if (!f) return false;
+    f.read(reinterpret_cast<char*>(out), std::streamsize(bytes));
+    return f.gcount() == std::streamsize(bytes);
+}
+
+struct CueTrackDesc {
+    u32 number = 0;
+    bool audio = false;
+    bool mode2 = false;
+    bool preemphasis = false;
+    u32 sector_size = 2352;
+    std::string file;
+    u64 file_size = 0;
+    u64 file_offset = 0;
+    u32 index01 = 0;
+    bool has_index01 = false;
+    u32 start_lba = 0;
+    u32 length = 0;
+};
+
+// Parses a CUE sheet into track descriptors.  Only the BINARY file form is
+// accepted (the HoMM2 and WORLD9 sheets both use one raw 2352-byte BIN).
+// FILE paths are resolved relative to the sheet, not the process CWD.
+bool parse_cue_sheet(const std::string& cue_path, std::vector<CueTrackDesc>& tracks,
+                     u64& total_bytes, std::string& error) {
+    std::ifstream in(cue_path);
+    if (!in) {
+        error = "cannot open cue sheet";
+        return false;
+    }
+    const std::filesystem::path base = std::filesystem::path(cue_path).parent_path();
+    std::string current_file;
+    u64 current_size = 0;
+    std::size_t current_track = std::size_t(-1);
+    std::string line;
+    int line_no = 0;
+    total_bytes = 0;
+    while (std::getline(in, line)) {
+        ++line_no;
+        if (line_no == 1 && line.size() >= 3 &&
+            static_cast<unsigned char>(line[0]) == 0xef &&
+            static_cast<unsigned char>(line[1]) == 0xbb &&
+            static_cast<unsigned char>(line[2]) == 0xbf) {
+            line.erase(0, 3);
+        }
+        line = trim_ascii(line);
+        if (line.empty() || line.rfind("REM", 0) == 0) continue;
+        std::istringstream head(line);
+        std::string keyword;
+        head >> keyword;
+        keyword = upper_ascii(keyword);
+
+        if (keyword == "FILE") {
+            std::string rest = trim_ascii(line.substr(4));
+            std::string file;
+            std::string type;
+            if (!rest.empty() && rest.front() == '"') {
+                const std::size_t close = rest.find('"', 1);
+                if (close == std::string::npos) {
+                    error = std::format("line {}: unterminated FILE name", line_no);
+                    return false;
+                }
+                file = rest.substr(1, close - 1);
+                type = trim_ascii(rest.substr(close + 1));
+                std::istringstream ts(type);
+                ts >> type;
+            } else {
+                std::istringstream fs(rest);
+                fs >> file >> type;
+            }
+            if (file.empty()) {
+                error = std::format("line {}: FILE without a name", line_no);
+                return false;
+            }
+            if (upper_ascii(type) != "BINARY") {
+                error = std::format("line {}: unsupported FILE type '{}' (BINARY required)",
+                                    line_no, type);
+                return false;
+            }
+            // Windows sheets use backslashes; both POSIX and Win32 accept the
+            // forward-slash form, so normalise before resolving.
+            std::replace(file.begin(), file.end(), '\\', '/');
+            std::filesystem::path resolved(file);
+            if (resolved.is_relative()) resolved = base / resolved;
+            std::error_code ec;
+            const u64 size = std::filesystem::file_size(resolved, ec);
+            if (ec) {
+                error = std::format("line {}: cannot stat '{}': {}", line_no,
+                                    resolved.string(), ec.message());
+                return false;
+            }
+            current_file = resolved.string();
+            current_size = size;
+            total_bytes += size;
+            current_track = std::size_t(-1);
+        } else if (keyword == "TRACK") {
+            if (current_file.empty()) {
+                error = std::format("line {}: TRACK before FILE", line_no);
+                return false;
+            }
+            std::istringstream ts(line.substr(5));
+            CueTrackDesc t;
+            std::string type;
+            if (!(ts >> t.number >> type)) {
+                error = std::format("line {}: malformed TRACK", line_no);
+                return false;
+            }
+            type = upper_ascii(type);
+            t.file = current_file;
+            t.file_size = current_size;
+            if (type == "AUDIO") {
+                t.audio = true;
+                t.sector_size = 2352;
+            } else if (type == "MODE1/2352") {
+                t.sector_size = 2352;
+            } else if (type == "MODE1/2048") {
+                t.sector_size = 2048;
+            } else if (type == "MODE2/2352") {
+                t.mode2 = true;
+                t.sector_size = 2352;
+            } else if (type == "MODE2/2336") {
+                t.mode2 = true;
+                t.sector_size = 2336;
+            } else if (type == "MODE2/2048") {
+                t.mode2 = true;
+                t.sector_size = 2048;
+            } else {
+                error = std::format("line {}: unsupported TRACK type '{}'", line_no, type);
+                return false;
+            }
+            tracks.push_back(t);
+            current_track = tracks.size() - 1;
+        } else if (keyword == "INDEX") {
+            if (current_track == std::size_t(-1)) {
+                error = std::format("line {}: INDEX before TRACK", line_no);
+                return false;
+            }
+            std::istringstream is(line.substr(5));
+            unsigned number = 0;
+            std::string time;
+            if (!(is >> number >> time)) {
+                error = std::format("line {}: malformed INDEX", line_no);
+                return false;
+            }
+            u32 frames = 0;
+            if (!parse_msf(time, frames)) {
+                error = std::format("line {}: malformed INDEX time '{}'", line_no, time);
+                return false;
+            }
+            if (number == 1) {
+                tracks[current_track].index01 = frames;
+                tracks[current_track].has_index01 = true;
+            }
+        } else if (keyword == "FLAGS") {
+            if (current_track != std::size_t(-1)) {
+                std::istringstream fs(line.substr(5));
+                std::string flag;
+                while (fs >> flag) {
+                    if (upper_ascii(flag) == "PRE") tracks[current_track].preemphasis = true;
+                }
+            }
+        }
+    }
+    if (tracks.empty()) {
+        error = "no TRACK entries";
+        return false;
+    }
+    // Derive each track's file offset and LBA extent.  Within one FILE a
+    // track ends where the next INDEX 01 begins; the last track in a FILE
+    // runs to the end of the file.  This also gives multi-FILE sheets a
+    // contiguous disc address space.
+    u32 disc_lba = 0;
+    for (std::size_t i = 0; i < tracks.size(); ++i) {
+        CueTrackDesc& t = tracks[i];
+        if (!t.has_index01) {
+            error = std::format("track {} has no INDEX 01", t.number);
+            return false;
+        }
+        t.file_offset = u64(t.index01) * t.sector_size;
+        if (t.file_offset > t.file_size) {
+            error = std::format("track {} starts past the end of '{}'", t.number, t.file);
+            return false;
+        }
+        u64 end_offset = t.file_size;
+        if (i + 1 < tracks.size() && tracks[i + 1].file == t.file) {
+            const CueTrackDesc& next = tracks[i + 1];
+            if (!next.has_index01 || next.index01 <= t.index01) {
+                error = std::format("track {} overlaps the next TRACK", t.number);
+                return false;
+            }
+            end_offset = u64(next.index01) * next.sector_size;
+        }
+        if (end_offset > t.file_size || end_offset < t.file_offset) {
+            error = std::format("track {} extends past the end of '{}'", t.number, t.file);
+            return false;
+        }
+        const u64 length = (end_offset - t.file_offset) / t.sector_size;
+        if (length == 0 || length > 0xFFFFFFFFull - disc_lba) {
+            error = std::format("track {} has an invalid length", t.number);
+            return false;
+        }
+        t.start_lba = disc_lba;
+        t.length = u32(length);
+        disc_lba += t.length;
+    }
+    return true;
 }
 
 } // namespace
@@ -251,6 +490,8 @@ void AtaController::reset_drive(IdeDrive& d) {
     d.atapi_phase_cmd = false;
     d.atapi_phase_data = false;
     d.atapi_check = false;
+    // A device reset also stops the CD-DA transport.
+    d.cd_play = CdPlayback{};
 }
 
 void AtaController::reset_channel(Channel& ch) {
@@ -557,35 +798,140 @@ bool AtaController::attach_drive(int channel, int unit, const std::string& path,
     return true;
 }
 
-bool AtaController::load_iso(IdeDrive& d, const std::string& path) {
-    std::vector<u8> data;
-    try {
-        data = read_file(path);
-    } catch (const Error&) {
-        return false;
-    }
+bool AtaController::finish_cd_mount(IdeDrive& d, std::vector<CdTrack> tracks, u64 bytes,
+                                    const std::string& path) {
+    if (tracks.empty() || tracks.back().end_lba == 0) return false;
     d.path = path;
-    d.data = std::move(data);
+    d.data.clear();
+    d.data.shrink_to_fit();
+    d.cd.tracks = std::move(tracks);
+    d.cd.leadout_lba = d.cd.tracks.back().end_lba;
+    d.cd.bytes = bytes;
     d.present = true;
     d.atapi = true;
     d.removable = true;
     d.sector_size = kAtapiSector;
     d.atapi_block_size = kAtapiSector;
-    d.sectors = d.data.size() / kAtapiSector;
-
-    // ISO9660 primary volume descriptor lives in logical sector 16.
-    const size_t pvd = size_t(16) * kAtapiSector;
-    if (d.data.size() >= pvd + 88 && std::memcmp(d.data.data() + pvd + 1, "CD001", 5) == 0) {
-        const u32 volume = le32(d.data.data() + pvd + 80);
-        if (volume != 0 && volume < d.sectors) d.sectors = volume;
-    }
+    d.sectors = d.cd.leadout_lba;
     d.error = 0;
     d.drq = false;
     d.phase = Phase::idle;
     reset_drive(d);
     recompute_geometry(d);
     build_identify(d, true);
+    logf(LogLevel::info, "atapi", "mounted {} ({} tracks, {} sectors, {} bytes)",
+         path, d.cd.tracks.size(), d.sectors, bytes);
     return true;
+}
+
+bool AtaController::load_iso(IdeDrive& d, const std::string& path) {
+    std::error_code ec;
+    const u64 bytes = std::filesystem::file_size(path, ec);
+    if (ec || bytes == 0) return false;
+    u32 end_lba = u32(bytes / kAtapiSector);
+    if (end_lba == 0) return false;
+
+    // ISO9660 primary volume descriptor lives in logical sector 16.
+    u8 pvd[88]{};
+    if (read_host_range(path, u64(16) * kAtapiSector, pvd, sizeof(pvd)) &&
+        std::memcmp(pvd + 1, "CD001", 5) == 0) {
+        const u32 volume = le32(pvd + 80);
+        if (volume != 0 && volume < end_lba) end_lba = volume;
+    }
+
+    CdTrack t;
+    t.number = 1;
+    t.sector_size = kAtapiSector;
+    t.start_lba = 0;
+    t.end_lba = end_lba;
+    t.path = path;
+    std::vector<CdTrack> tracks{t};
+    return finish_cd_mount(d, std::move(tracks), bytes, path);
+}
+
+// Without a sheet, a raw .bin can still be mounted if it is a single
+// MODE1/2352 data track: the ISO PVD is then 16 bytes into sector 16.
+bool AtaController::load_raw_bin(IdeDrive& d, const std::string& path) {
+    std::error_code ec;
+    const u64 bytes = std::filesystem::file_size(path, ec);
+    if (ec || bytes < u64(17) * 2352 || bytes % 2352 != 0) return false;
+    u8 pvd[88]{};
+    if (!read_host_range(path, u64(16) * 2352 + 16, pvd, sizeof(pvd))) return false;
+    if (std::memcmp(pvd + 1, "CD001", 5) != 0) return false;
+
+    CdTrack t;
+    t.number = 1;
+    t.sector_size = 2352;
+    t.start_lba = 0;
+    t.end_lba = u32(bytes / 2352);
+    t.path = path;
+    std::vector<CdTrack> tracks{t};
+    return finish_cd_mount(d, std::move(tracks), bytes, path);
+}
+
+bool AtaController::load_cue(IdeDrive& d, const std::string& path) {
+    std::vector<CueTrackDesc> descs;
+    u64 bytes = 0;
+    std::string error;
+    if (!parse_cue_sheet(path, descs, bytes, error)) {
+        logf(LogLevel::warn, "atapi", "cannot parse cue sheet '{}': {}", path, error);
+        return false;
+    }
+    std::vector<CdTrack> tracks;
+    tracks.reserve(descs.size());
+    for (const CueTrackDesc& desc : descs) {
+        CdTrack t;
+        t.number = desc.number;
+        t.audio = desc.audio;
+        t.mode2 = desc.mode2;
+        t.preemphasis = desc.preemphasis;
+        t.sector_size = desc.sector_size;
+        t.start_lba = desc.start_lba;
+        t.end_lba = desc.start_lba + desc.length;
+        t.file_offset = desc.file_offset;
+        t.path = desc.file;
+        tracks.push_back(std::move(t));
+    }
+    return finish_cd_mount(d, std::move(tracks), bytes, path);
+}
+
+bool AtaController::mount_cdrom(const std::string& image_path) {
+    IdeDrive& d = channels_[1].drives[0];
+    std::string ext = std::filesystem::path(image_path).extension().string();
+    ext = upper_ascii(std::move(ext));
+    if (ext == ".CUE") return load_cue(d, image_path);
+    if (ext == ".BIN") {
+        // Prefer a sibling sheet: the raw .bin alone has no track table.
+        std::filesystem::path cue = std::filesystem::path(image_path);
+        cue.replace_extension(".cue");
+        std::error_code ec;
+        if (std::filesystem::exists(cue, ec) && load_cue(d, cue.string())) return true;
+        cue.replace_extension(".CUE");
+        if (std::filesystem::exists(cue, ec) && load_cue(d, cue.string())) return true;
+        if (load_raw_bin(d, image_path)) return true;
+        // Fall through: a .bin holding a plain 2048-byte ISO image.
+    }
+    return load_iso(d, image_path);
+}
+
+u32 AtaController::cdrom_track_number(u32 index) const {
+    const auto& tracks = channels_[1].drives[0].cd.tracks;
+    return index < tracks.size() ? tracks[index].number : 0;
+}
+
+bool AtaController::cdrom_track_audio(u32 index) const {
+    const auto& tracks = channels_[1].drives[0].cd.tracks;
+    return index < tracks.size() && tracks[index].audio;
+}
+
+u32 AtaController::cdrom_track_start(u32 index) const {
+    const auto& tracks = channels_[1].drives[0].cd.tracks;
+    return index < tracks.size() ? tracks[index].start_lba : 0;
+}
+
+u32 AtaController::cdrom_track_length(u32 index) const {
+    const auto& tracks = channels_[1].drives[0].cd.tracks;
+    return index < tracks.size() ? tracks[index].end_lba - tracks[index].start_lba : 0;
 }
 
 bool AtaController::attach_primary_master(const std::string& path) {
@@ -600,9 +946,6 @@ bool AtaController::attach_secondary_master(const std::string& path) {
 bool AtaController::attach_secondary_slave(const std::string& path) {
     return attach_drive(1, 1, path, false);
 }
-bool AtaController::mount_cdrom(const std::string& iso_path) {
-    return load_iso(channels_[1].drives[0], iso_path);
-}
 
 bool AtaController::eject_cdrom() {
     Channel& ch = channels_[1];
@@ -611,6 +954,10 @@ bool AtaController::eject_cdrom() {
     d.path.clear();
     d.data.clear();
     d.data.shrink_to_fit();
+    d.cd.tracks.clear();
+    d.cd.leadout_lba = 0;
+    d.cd.bytes = 0;
+    d.cd_play = CdPlayback{};
     d.sectors = 0;
     // The drive itself stays attached to the channel: only the medium is
     // gone, so IDENTIFY/INQUIRY keep working while TUR reports 02/3A/00.
@@ -623,6 +970,135 @@ bool AtaController::eject_cdrom() {
     ch.irq_due_at = 0;
     update_irq(ch);
     return true;
+}
+
+const AtaController::CdTrack* AtaController::cd_track_at(const IdeDrive& d, u32 lba) const {
+    for (const CdTrack& t : d.cd.tracks) {
+        if (lba >= t.start_lba && lba < t.end_lba) return &t;
+    }
+    return nullptr;
+}
+
+u32 AtaController::cd_track_index_at(const IdeDrive& d, u32 lba) const {
+    for (std::size_t i = 0; i < d.cd.tracks.size(); ++i) {
+        if (lba >= d.cd.tracks[i].start_lba && lba < d.cd.tracks[i].end_lba) return u32(i);
+    }
+    return ~u32(0);
+}
+
+bool AtaController::cd_read_raw(const IdeDrive& d, u32 lba, std::vector<u8>& out) const {
+    const CdTrack* t = cd_track_at(d, lba);
+    if (!t) return false;
+    out.assign(t->sector_size, 0);
+    return read_host_range(t->path, t->file_offset + u64(lba - t->start_lba) * t->sector_size,
+                           out.data(), out.size());
+}
+
+// Reads logical 2048-byte blocks from the data track(s).  MODE1/2352 has 16
+// bytes of sync+header before the user data; MODE2/2352 has 24 bytes (sync+
+// header+subheader) and MODE2/2336 has 8 (subheader).  One host file handle
+// is used per contiguous track run, which keeps large directory reads cheap.
+bool AtaController::cd_read_user_range(const IdeDrive& d, u32 lba, u32 count, u8* out) const {
+    u32 done = 0;
+    while (done < count) {
+        const CdTrack* t = cd_track_at(d, lba);
+        if (!t || t->audio || t->sector_size < kAtapiSector) return false;
+        const u32 n = std::min<u32>(count - done, t->end_lba - lba);
+        std::ifstream f(t->path, std::ios::binary);
+        if (!f) return false;
+        f.seekg(std::streamoff(t->file_offset + u64(lba - t->start_lba) * t->sector_size));
+        if (!f) return false;
+        std::vector<u8> sector(t->sector_size);
+        u32 user_offset = 0;
+        if (t->sector_size == 2352) user_offset = t->mode2 ? 24u : 16u;
+        else if (t->sector_size == 2336) user_offset = t->mode2 ? 8u : 0u;
+        if (user_offset + kAtapiSector > sector.size()) return false;
+        for (u32 i = 0; i < n; ++i) {
+            f.read(reinterpret_cast<char*>(sector.data()), std::streamsize(sector.size()));
+            if (f.gcount() != std::streamsize(sector.size())) return false;
+            std::memcpy(out + size_t(done) * kAtapiSector,
+                        sector.data() + user_offset, kAtapiSector);
+            ++done;
+            ++lba;
+        }
+    }
+    return true;
+}
+
+bool AtaController::cd_play(IdeDrive& d, u32 start_lba, u32 length_lba) {
+    // MMC: a play length of zero means no audio operation, not "play to the
+    // end of the disc".  Leave an already-running transport untouched.
+    if (length_lba == 0) return true;
+    // FFFFFFFFh means "start at the current optical position".
+    if (start_lba == 0xFFFFFFFFu) {
+        if (!d.cd_play.active) return false;
+        start_lba = u32(d.cd_play.pos / 588.0);
+    }
+    const CdTrack* t = cd_track_at(d, start_lba);
+    if (!t || !t->audio) return false;
+    const u64 end_lba = std::min<u64>(u64(start_lba) + length_lba, d.cd.leadout_lba);
+    if (end_lba <= start_lba) return false;
+    d.cd_play = CdPlayback{};
+    d.cd_play.active = true;
+    d.cd_play.pos = double(start_lba) * 588.0;
+    d.cd_play.end = double(end_lba) * 588.0;
+    d.cd_play.start_lba = start_lba;
+    d.cd_play.end_lba = u32(end_lba);
+    return true;
+}
+
+void AtaController::cd_stop(IdeDrive& d, bool completed) {
+    d.cd_play.active = false;
+    d.cd_play.paused = false;
+    d.cd_play.completed = completed;
+    d.cd_play.cache.clear();
+    d.cd_play.cached_lba = ~u64(0);
+}
+
+u8 AtaController::cd_audio_status(const CdPlayback& p) {
+    if (p.active) return p.paused ? 0x12 : 0x11;
+    return p.completed ? 0x13 : 0x15;
+}
+
+void AtaController::render_cd_audio(std::span<i16> out, u32 host_rate) {
+    std::fill(out.begin(), out.end(), i16(0));
+    if (out.size() < 2) return;
+    IdeDrive& d = channels_[1].drives[0];
+    CdPlayback& p = d.cd_play;
+    if (!p.active || p.paused) return;
+
+    const u32 frames = u32(out.size() / 2);
+    const double step = 44100.0 / double(host_rate ? host_rate : 44100);
+    for (u32 f = 0; f < frames; ++f) {
+        if (p.pos >= p.end) {
+            cd_stop(d, true);
+            return;
+        }
+        const u64 lba = u64(p.pos / 588.0);
+        const u32 offset = u32(p.pos - double(lba) * 588.0);
+        const CdTrack* t = cd_track_at(d, u32(lba));
+        if (!t || !t->audio) {
+            cd_stop(d, true);
+            return;
+        }
+        if (p.cached_lba != lba) {
+            if (!cd_read_raw(d, u32(lba), p.cache)) {
+                cd_stop(d, false);
+                return;
+            }
+            p.cached_lba = lba;
+        }
+        const size_t idx = size_t(offset) * 4;
+        if (idx + 3 >= p.cache.size()) {
+            cd_stop(d, false);
+            return;
+        }
+        const i16 l = i16(u16(p.cache[idx]) | (u16(p.cache[idx + 1]) << 8));
+        const i16 r = i16(u16(p.cache[idx + 2]) | (u16(p.cache[idx + 3]) << 8));
+        out[size_t(f) * 2] = l;
+        out[size_t(f) * 2 + 1] = r;
+        p.pos += step;
+    }
 }
 
 void AtaController::flush_all() {
@@ -1125,6 +1601,10 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
     IdeDrive& d = ch.drives[drv];
     const auto& p = d.packet_;
     const u8 op = p[0];
+    if (std::getenv("OLDBOX_ATAPI_TRACE")) {
+        std::fprintf(stderr, "ATAPI cmd %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x %02x\n",
+                     p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[9], p[10], p[11]);
+    }
 
     auto respond = [&](std::vector<u8> data, size_t alloc) {
         if (alloc == 0) {
@@ -1199,15 +1679,26 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
         const size_t alloc = p[4];
         std::vector<u8> pages;
         auto add_2a = [&] {
-            pages.insert(pages.end(), {0x2A, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
+            // MMC-3 CD-ROM mechanical status: CD-DA support, audio play,
+            // tray loading, 8X read and 256 volume levels.  DOS CD drivers
+            // (QCDROM included) read this page to decide whether to offer
+            // the MSCDEX audio functions, so the audio-play bit must be set.
+            pages.insert(pages.end(), {0x2A, 0x0E, 0x07, 0x00, 0x71, 0xFF, 0x2F, 0x03,
+                                       0x05, 0x80, 0x01, 0x00, 0x05, 0x80, 0x00, 0x00});
+        };
+        auto add_0e = [&] {
+            // MMC-3 CD audio control: output port 0/1 map to channels 0/1
+            // at 0 dB, ports 2/3 are unused.
+            pages.insert(pages.end(), {0x0E, 0x0E, 0x04, 0x00, 0x00, 0x00, 0x00, 0x4B,
+                                       0x01, 0xFF, 0x02, 0xFF, 0x00, 0x00, 0x00, 0x00});
         };
         auto add_01 = [&] {
             pages.insert(pages.end(), {0x01, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
                                        0x00, 0x00, 0x00, 0x00, 0x00});
         };
-        if (page_code == 0x3F) { add_01(); add_2a(); }
+        if (page_code == 0x3F) { add_01(); add_0e(); add_2a(); }
         else if (page_code == 0x2A) add_2a();
+        else if (page_code == 0x0E) add_0e();
         else if (page_code == 0x01) add_01();
         std::vector<u8> v(4, 0);
         v[0] = u8(3 + pages.size());
@@ -1223,18 +1714,22 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
         const u8 page_code = u8(p[2] & 0x3F);
         const size_t alloc = size_t(p[7]) << 8 | p[8];
         std::vector<u8> pages;
-        if (page_code == 0x3F) {
+        auto add_2a = [&] {
+            pages.insert(pages.end(), {0x2A, 0x0E, 0x07, 0x00, 0x71, 0xFF, 0x2F, 0x03,
+                                       0x05, 0x80, 0x01, 0x00, 0x05, 0x80, 0x00, 0x00});
+        };
+        auto add_0e = [&] {
+            pages.insert(pages.end(), {0x0E, 0x0E, 0x04, 0x00, 0x00, 0x00, 0x00, 0x4B,
+                                       0x01, 0xFF, 0x02, 0xFF, 0x00, 0x00, 0x00, 0x00});
+        };
+        auto add_01 = [&] {
             pages.insert(pages.end(), {0x01, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
                                        0x00, 0x00, 0x00, 0x00, 0x00});
-            pages.insert(pages.end(), {0x2A, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
-        } else if (page_code == 0x2A) {
-            pages.insert(pages.end(), {0x2A, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00});
-        } else if (page_code == 0x01) {
-            pages.insert(pages.end(), {0x01, 0x0A, 0x00, 0x00, 0x00, 0x00, 0x00,
-                                       0x00, 0x00, 0x00, 0x00, 0x00});
-        }
+        };
+        if (page_code == 0x3F) { add_01(); add_0e(); add_2a(); }
+        else if (page_code == 0x2A) add_2a();
+        else if (page_code == 0x0E) add_0e();
+        else if (page_code == 0x01) add_01();
         std::vector<u8> v(8, 0);
         const u16 mlen = u16(6 + pages.size());
         v[0] = u8(mlen >> 8);
@@ -1262,7 +1757,7 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
 
     case 0x28:   // READ(10)
     case 0xA8:   // READ(12)
-    case 0xBE: { // READ CD (2048-byte user data only)
+    case 0xBE: { // READ CD
         const u32 lba_ = cdb_lba(p, 2, 4);
         u32 count;
         if (op == 0x28) count = (u32(p[7]) << 8) | p[8];
@@ -1277,32 +1772,213 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
             atapi_error(ch, drv, 0x05, 0x21, 0x00);
             break;
         }
-        std::vector<u8> out(size_t(count) * kAtapiSector, 0);
-        for (u32 i = 0; i < count; ++i) {
-            const size_t off = (size_t(lba_) + i) * kAtapiSector;
-            const size_t n = std::min<size_t>(kAtapiSector, d.data.size() - off);
-            std::memcpy(out.data() + size_t(i) * kAtapiSector, d.data.data() + off, n);
+
+        if (op != 0xBE) {
+            // READ(10/12) returns logical 2048-byte blocks.  CD-DA tracks
+            // have no logical blocks; a real drive answers ILLEGAL MODE.
+            const CdTrack* first = cd_track_at(d, lba_);
+            if (!first || first->audio) {
+                atapi_error(ch, drv, 0x05, 0x64, 0x00);
+                break;
+            }
+            std::vector<u8> out(size_t(count) * kAtapiSector, 0);
+            if (!cd_read_user_range(d, lba_, count, out.data())) {
+                atapi_error(ch, drv, 0x05, 0x11, 0x00);
+                break;
+            }
+            atapi_data_in(ch, drv, std::move(out));
+            break;
         }
-        atapi_data_in(ch, drv, std::move(out));
+
+        // READ CD (MMC-6 6.19).  CDB[1] bits 2..4 select the expected sector
+        // type, CDB[9] the fields to return, CDB[10] the sub-channel data.
+        const u8 expected = u8((p[1] >> 2) & 0x07);
+        const bool want_sync = (p[9] & 0x80) != 0;
+        const bool want_subheader = (p[9] & 0x40) != 0;
+        const bool want_header = (p[9] & 0x20) != 0;
+        const bool want_user = (p[9] & 0x10) != 0;
+        const bool want_ecc = (p[9] & 0x08) != 0;
+        const u8 c2_mode = u8((p[9] >> 1) & 0x03);
+        const u8 subchannel = u8(p[10] & 0x07);
+        bool failed = false;
+        std::vector<u8> out;
+        out.reserve(size_t(count) * 2352);
+        auto append = [&](const u8* src, size_t n) {
+            out.insert(out.end(), src, src + n);
+        };
+        auto fail = [&](u8 asc) {
+            atapi_error(ch, drv, 0x05, asc, 0x00);
+            failed = true;
+        };
+        // Sequential 2352-byte reads keep one file handle per contiguous
+        // track run; raw-mode QCDROM reads can span hundreds of sectors.
+        const CdTrack* stream_track = nullptr;
+        std::ifstream stream;
+        u32 stream_lba = 0;
+        std::vector<u8> raw;
+        for (u32 i = 0; i < count && !failed; ++i) {
+            const u32 cur = lba_ + i;
+            const CdTrack* t = cd_track_at(d, cur);
+            if (!t) {
+                fail(0x21);
+                break;
+            }
+            if (t != stream_track) {
+                stream.close();
+                stream.clear();
+                stream.open(t->path, std::ios::binary);
+                if (!stream) {
+                    fail(0x11);
+                    break;
+                }
+                stream_track = t;
+                stream_lba = 0;
+            }
+            if (stream_lba != cur) {
+                stream.seekg(std::streamoff(t->file_offset +
+                                            u64(cur - t->start_lba) * t->sector_size));
+                if (!stream) {
+                    fail(0x11);
+                    break;
+                }
+            }
+            raw.assign(t->sector_size, 0);
+            stream.read(reinterpret_cast<char*>(raw.data()), std::streamsize(raw.size()));
+            if (stream.gcount() != std::streamsize(raw.size())) {
+                fail(0x11);
+                break;
+            }
+            stream_lba = cur + 1;
+            const bool audio = t->audio;
+            const bool raw2352 = t->sector_size == 2352;
+            const bool raw2336 = t->sector_size == 2336;
+            bool form2 = false;
+            if (t->mode2) {
+                if (raw2352 && raw.size() >= 19) form2 = (raw[18] & 0x20) != 0;
+                else if (raw2336 && raw.size() >= 3) form2 = (raw[2] & 0x20) != 0;
+            }
+            const bool type_ok =
+                expected == 0 ||
+                (expected == 1 && audio) ||
+                (expected == 2 && !audio && !t->mode2) ||
+                (expected == 3 && !audio && t->mode2) ||
+                (expected == 4 && !audio && t->mode2 && !form2) ||
+                (expected == 5 && !audio && t->mode2 && form2);
+            if (!type_ok) {
+                fail(0x64); // illegal mode for this track
+                break;
+            }
+            if (audio) {
+                // CD-DA carries no sync/header/ECC structure: all 2352
+                // bytes are the stereo S16 sample stream.
+                if (raw.size() != 2352) {
+                    fail(0x64);
+                    break;
+                }
+                append(raw.data(), raw.size());
+            } else {
+                if (want_sync) {
+                    if (!raw2352) { fail(0x64); break; }
+                    append(raw.data(), 12);
+                }
+                if (want_header) {
+                    if (!raw2352) { fail(0x64); break; }
+                    append(raw.data() + 12, 4);
+                }
+                if (want_subheader && t->mode2) {
+                    if (raw2352) append(raw.data() + 16, 8);
+                    else if (raw2336) append(raw.data(), 8);
+                }
+                if (want_user) {
+                    if (expected == 3 && t->mode2) {
+                        if (raw2352) append(raw.data() + 16, 2336);
+                        else if (raw2336) append(raw.data(), 2336);
+                        else { fail(0x64); break; }
+                    } else if (t->sector_size == 2048) {
+                        append(raw.data(), 2048);
+                    } else if (raw2352) {
+                        if (t->mode2) append(raw.data() + 24, form2 ? 2324 : 2048);
+                        else append(raw.data() + 16, 2048);
+                    } else if (raw2336) {
+                        if (t->mode2) append(raw.data() + 8, form2 ? 2324 : 2048);
+                        else append(raw.data(), 2048);
+                    }
+                }
+                if (want_ecc) {
+                    if (raw2352) {
+                        if (!t->mode2) append(raw.data() + 2064, 288);
+                        else if (form2) append(raw.data() + 2348, 4);
+                        else append(raw.data() + 2072, 280);
+                    } else if (raw2336) {
+                        if (form2) append(raw.data() + 2332, 4);
+                        else append(raw.data() + 2056, 280);
+                    }
+                }
+            }
+            if (c2_mode) {
+                const size_t c2 = c2_mode == 2 ? 296 : 294;
+                out.insert(out.end(), c2, 0);
+            }
+            if (subchannel) {
+                const size_t n = subchannel == 2 ? 16 : 96;
+                out.insert(out.end(), n, 0);
+            }
+        }
+        if (!failed) atapi_data_in(ch, drv, std::move(out));
         break;
     }
 
     case 0x43: { // READ TOC/PMA/ATIP
+        const bool use_msf = (p[1] & 0x02) != 0;
         const u8 format = u8(p[2] & 0x0F);
         const size_t alloc = size_t(p[7]) << 8 | p[8];
+        const auto& tracks = d.cd.tracks;
+        const u8 first_track = tracks.empty() ? 1 : u8(tracks.front().number);
+        const u8 last_track = tracks.empty() ? 1 : u8(tracks.back().number);
+        const u8 start_track = p[6] ? p[6] : first_track;
         std::vector<u8> desc;
-        auto msf = [](u32 frames) {
-            const u32 sec = frames / 75;
-            return std::array<u8, 3>{u8(sec / 60), u8(sec % 60), u8(frames % 75)};
+        auto address = [&](std::vector<u8>& out, u32 frames) {
+            if (use_msf) {
+                const u32 sec = (frames + 150) / 75;
+                out.push_back(0x00); // zero field before M/S/F
+                out.push_back(u8(sec / 60));
+                out.push_back(u8(sec % 60));
+                out.push_back(u8((frames + 150) % 75));
+            } else {
+                out.push_back(u8(frames >> 24));
+                out.push_back(u8(frames >> 16));
+                out.push_back(u8(frames >> 8));
+                out.push_back(u8(frames));
+            }
         };
-        auto add_desc = [&](u8 track, u32 frames) {
+        if (format == 1) {
+            // MMC format 1 is multi-session info for the last closed
+            // session, not a second copy of the format-0 track list.  QCDROM
+            // and MSCDEX use it to find the first track of the session.
+            const CdTrack* ft = tracks.empty() ? nullptr : &tracks.front();
+            std::vector<u8> v = {0x00, 0x0A, 0x01, 0x01}; // length=10, sessions=1/1
+            v.push_back(0x00); // reserved
+            v.push_back(u8(0x10 | (ft ? (ft->audio ? (ft->preemphasis ? 0x01 : 0x00)
+                                                       : 0x04) : 0x04)));
+            v.push_back(ft ? u8(ft->number) : 1); // first track in last session
+            v.push_back(0x00);
+            address(v, ft ? ft->start_lba : 0);
+            respond(std::move(v), alloc);
+            break;
+        }
+        auto msf = [](u32 frames) {
+            const u32 sec = (frames + 150) / 75;
+            return std::array<u8, 3>{u8(sec / 60), u8(sec % 60),
+                                     u8((frames + 150) % 75)};
+        };
+        auto add_desc = [&](u8 track, u32 frames, u8 control) {
             desc.push_back(0x00);
-            desc.push_back(0x14); // ADR=1, control=4 (data track)
+            desc.push_back(u8(0x10 | (control & 0x0F))); // ADR=1, CONTROL
             desc.push_back(track);
             desc.push_back(0x00);
-            if (format == 1) {
-                auto m = msf(frames + 150);
-                desc.push_back(0x00); // reserved byte in the address field
+            if (use_msf) {
+                auto m = msf(frames);
+                desc.push_back(0x00); // zero field before M/S/F
                 desc.insert(desc.end(), m.begin(), m.end());
             } else {
                 desc.push_back(u8(frames >> 24));
@@ -1311,15 +1987,100 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
                 desc.push_back(u8(frames));
             }
         };
-        add_desc(1, 0);
-        add_desc(0xAA, u32(d.sectors));
+        for (const CdTrack& t : tracks) {
+            if (t.number < start_track) continue;
+            add_desc(u8(t.number), t.start_lba,
+                     t.audio ? (t.preemphasis ? 0x01 : 0x00) : 0x04);
+        }
+        const u8 leadout_control =
+            tracks.empty() ? 0x04 : (tracks.back().audio ? 0x00 : 0x04);
+        add_desc(0xAA, u32(d.sectors), leadout_control);
         std::vector<u8> v;
         const u16 length = u16(2 + desc.size());
         v.push_back(u8(length >> 8));
         v.push_back(u8(length));
-        v.push_back(1);
-        v.push_back(1);
+        v.push_back(first_track);
+        v.push_back(last_track);
         v.insert(v.end(), desc.begin(), desc.end());
+        respond(std::move(v), alloc);
+        break;
+    }
+
+    case 0x42: { // READ SUB-CHANNEL
+        if (!d.present || d.sectors == 0) {
+            atapi_error(ch, drv, 0x02, 0x3A, 0x00);
+            break;
+        }
+        const size_t alloc = size_t(p[7]) << 8 | p[8];
+        const u8 format = u8(p[3] & 0x0F);
+        const u32 lba_ = u32(d.cd_play.pos / 588.0);
+        const u32 idx = cd_track_index_at(d, lba_);
+        const CdTrack* t = idx == ~u32(0) ? nullptr : &d.cd.tracks[idx];
+        auto msf7 = [](u32 frames) {
+            const u32 sec = frames / 75;
+            return std::array<u8, 3>{u8(sec / 60), u8(sec % 60), u8(frames % 75)};
+        };
+        std::vector<u8> sub;
+        if (format == 0 || format == 1) { // current position
+            sub.assign(12, 0);
+            sub[0] = 0x01;
+            sub[1] = u8(0x10 | (t ? (t->audio ? (t->preemphasis ? 0x01 : 0x00) : 0x04) : 0));
+            sub[2] = t ? u8(t->number) : 0;
+            sub[3] = t ? 0x01 : 0x00;
+            const u32 rel = t && lba_ >= t->start_lba ? lba_ - t->start_lba : 0;
+            if (p[1] & 0x02) { // MSF address format
+                const auto abs = msf7(lba_ + 150);
+                sub[4] = 0x00;
+                sub[5] = abs[0];
+                sub[6] = abs[1];
+                sub[7] = abs[2];
+                const auto rel_msf = msf7(rel);
+                sub[8] = 0x00;
+                sub[9] = rel_msf[0];
+                sub[10] = rel_msf[1];
+                sub[11] = rel_msf[2];
+            } else { // LBA address format
+                sub[4] = u8(lba_ >> 24);
+                sub[5] = u8(lba_ >> 16);
+                sub[6] = u8(lba_ >> 8);
+                sub[7] = u8(lba_);
+                sub[8] = u8(rel >> 24);
+                sub[9] = u8(rel >> 16);
+                sub[10] = u8(rel >> 8);
+                sub[11] = u8(rel);
+            }
+        } else if (format == 2) { // media catalog number (none present)
+            sub.assign(12, 0);
+            sub[0] = 0x02;
+            sub[1] = 0x10;
+        } else if (format == 3) { // ISRC (none present)
+            sub.assign(12, 0);
+            sub[0] = 0x03;
+            sub[1] = 0x10;
+        }
+        std::vector<u8> v(4, 0);
+        v[1] = cd_audio_status(d.cd_play);
+        v[2] = u8(sub.size() >> 8);
+        v[3] = u8(sub.size());
+        v.insert(v.end(), sub.begin(), sub.end());
+        respond(std::move(v), alloc);
+        break;
+    }
+
+    case 0x44: { // READ HEADER
+        if (!d.present || d.sectors == 0) {
+            atapi_error(ch, drv, 0x02, 0x3A, 0x00);
+            break;
+        }
+        const size_t alloc = size_t(p[7]) << 8 | p[8];
+        const u32 lba_ = u32(d.cd_play.pos / 588.0);
+        std::vector<u8> v(8, 0);
+        v[1] = 0x06;
+        v[3] = cd_audio_status(d.cd_play);
+        const u32 sec = (lba_ + 150) / 75;
+        v[5] = u8(sec / 60);
+        v[6] = u8(sec % 60);
+        v[7] = u8((lba_ + 150) % 75);
         respond(std::move(v), alloc);
         break;
     }
@@ -1354,16 +2115,94 @@ void AtaController::atapi_execute(Channel& ch, int drv) {
         atapi_complete(ch, drv);
         break;
 
+    case 0x45: { // PLAY AUDIO(10)
+        if (!d.present || d.sectors == 0) {
+            atapi_error(ch, drv, 0x02, 0x3A, 0x00);
+            break;
+        }
+        const u32 start = cdb_lba(p, 2, 4);
+        const u32 length = (u32(p[7]) << 8) | p[8];
+        if (length != 0 && start != 0xFFFFFFFFu && start >= d.sectors)
+            atapi_error(ch, drv, 0x05, 0x21, 0x00);
+        else if (!cd_play(d, start, length))
+            atapi_error(ch, drv, 0x05, 0x64, 0x00);
+        else
+            atapi_complete(ch, drv);
+        break;
+    }
+
+    case 0xA5: { // PLAY AUDIO(12)
+        if (!d.present || d.sectors == 0) {
+            atapi_error(ch, drv, 0x02, 0x3A, 0x00);
+            break;
+        }
+        const u32 start = cdb_lba(p, 2, 4);
+        const u32 length = cdb_lba(p, 6, 4);
+        if (length != 0 && start != 0xFFFFFFFFu && start >= d.sectors)
+            atapi_error(ch, drv, 0x05, 0x21, 0x00);
+        else if (!cd_play(d, start, length))
+            atapi_error(ch, drv, 0x05, 0x64, 0x00);
+        else
+            atapi_complete(ch, drv);
+        break;
+    }
+
+    case 0x47: { // PLAY AUDIO MSF
+        if (!d.present || d.sectors == 0) {
+            atapi_error(ch, drv, 0x02, 0x3A, 0x00);
+            break;
+        }
+        auto to_lba = [](u8 m, u8 s, u8 f) -> u32 {
+            const u32 frames = (u32(m) * 60 + s) * 75 + f;
+            return frames > 150 ? frames - 150 : 0;
+        };
+        const bool start_current = p[3] == 0xFF && p[4] == 0xFF && p[5] == 0xFF;
+        u32 start = start_current ? 0 : to_lba(p[3], p[4], p[5]);
+        if (start_current) {
+            if (!d.cd_play.active) {
+                atapi_error(ch, drv, 0x05, 0x2C, 0x00);
+                break;
+            }
+            start = u32(d.cd_play.pos / 588.0);
+        }
+        const bool end_leadout = p[6] == 0xFF && p[7] == 0xFF && p[8] == 0xFF;
+        const u32 end = end_leadout ? d.sectors : to_lba(p[6], p[7], p[8]);
+        const u32 length = end > start ? end - start : 0;
+        if (!cd_play(d, start, length))
+            atapi_error(ch, drv, 0x05, 0x64, 0x00);
+        else
+            atapi_complete(ch, drv);
+        break;
+    }
+
+    case 0x4B: // PAUSE/RESUME
+        if (d.cd_play.active) {
+            d.cd_play.paused = (p[8] & 0x01) == 0;
+            if (!d.cd_play.paused) d.cd_play.completed = false;
+            atapi_complete(ch, drv);
+        } else {
+            atapi_error(ch, drv, 0x05, 0x2C, 0x00); // command sequence error
+        }
+        break;
+
+    case 0x4E: // STOP PLAY/SCAN
+        cd_stop(d, false);
+        atapi_complete(ch, drv);
+        break;
+
     case 0x1B: // START STOP UNIT
+        if (!(p[4] & 0x01)) cd_stop(d, false);
+        atapi_complete(ch, drv);
+        break;
+
     case 0x1E: // PREVENT ALLOW MEDIUM REMOVAL
-    case 0x0B: // SEEK(10)
+    case 0x0B: // SEEK(6)
+    case 0x2B: // SEEK(10), used by QCDROM before CD-DA playback
     case 0x2F: // VERIFY(10)
     case 0x15: // MODE SELECT(6)
     case 0x55: // MODE SELECT(10)
     case 0x35: // SYNCHRONIZE CACHE
-    case 0x45: // PLAY(10) (accepted, audio not modelled)
     case 0x4A: // GET EVENT STATUS NOTIFICATION
-    case 0x4B: // PAUSE/RESUME
     case 0x51: // READ DISC INFORMATION
     case 0x52: // READ TRACK INFORMATION
         if (op == 0x4A) {
@@ -1656,10 +2495,19 @@ std::string AtaController::status() const {
         if (d.atapi && d.sectors == 0) return std::string("ATAPI CD-ROM (tray empty)");
         std::string s = d.atapi ? "ATAPI CD-ROM " : "ATA ";
         s += d.atapi ? "OLDBOX VIRTUAL CD-ROM" : "OLDBOX VIRTUAL HDD";
+        const u64 bytes = d.atapi ? d.cd.bytes : d.data.size();
         s += std::format(" {} ({} sectors, PIO{}, {:04x})",
-                         format_bytes(d.data.size()), d.sectors, d.pio_mode,
+                         format_bytes(bytes), d.sectors, d.pio_mode,
                          u32(d.identify[0]));
-        if (d.atapi) s += " CD-ROM";
+        if (d.atapi) {
+            s += " CD-ROM";
+            if (!d.cd.tracks.empty()) {
+                const u32 audio = u32(std::count_if(d.cd.tracks.begin(), d.cd.tracks.end(),
+                    [](const CdTrack& t) { return t.audio; }));
+                s += std::format(" {} tracks/{} audio", d.cd.tracks.size(), audio);
+            }
+            if (d.cd_play.active) s += d.cd_play.paused ? " (paused)" : " (playing)";
+        }
         if (d.dirty) s += " dirty";
         return s;
     };
