@@ -23,11 +23,13 @@ using i16 = std::int16_t;
 // 6.1 Hz vibrato LFOs.  With NEW=0 (OPL2 mode) only the first nine channels
 // exist, four-operator synthesis is off and waveforms are limited to 0..3.
 //
-// The envelope time constants are an original approximation rather than a
-// copy of Yamaha's rate table (the YMF262 datasheet does not publish one):
-// the register semantics, the documented key-scale-rate formula
-// (actual rate = rate*4 + Rof, rate 0 exempt) and the ADSR/EGT stages are
-// implemented, but individual envelope timings are not cycle-exact.
+// Envelope timing is table-driven: the four-bit AR/DR/RR value is converted
+// to the chip's 0..63 internal rate with the documented key-scale offset
+// (actual rate = rate*4 + Rof, rate 0 exempt) and the resulting rate indexes
+// hard-coded attack/release time tables.  The tables follow the OPL3 envelope
+// rate progression instead of deriving the times from an exponential formula
+// at run time.  KSL attenuation and KSR Rof likewise come from the datasheet
+// tables.
 class Opl3 {
 public:
     Opl3();
@@ -41,7 +43,8 @@ public:
     // index port.
     void write_index(bool secondary, u8 value);
     void write_data(bool secondary, u8 value);
-    [[nodiscard]] u8 read_status() const;
+    // Reading the status port returns the timer flags and clears them.
+    [[nodiscard]] u8 read_status();
 
     // Advance the two OPL timers by `cpu_cycles` of the host CPU clock.
     void tick(u64 cpu_cycles);
@@ -67,6 +70,9 @@ private:
         u8 sl = 0;
         u8 rr = 0;
         u8 wave = 0;
+        u8 eg_ar = 0;   // internal 0..63 rates after KSR
+        u8 eg_dr = 0;
+        u8 eg_rr = 0;
 
         // Runtime state.
         float phase = 0.0f;

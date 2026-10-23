@@ -36,9 +36,77 @@ constexpr float kFeedback[8] = {0.0f, 3.14159265f / 16.0f, 3.14159265f / 8.0f,
                                 3.14159265f / 4.0f, 3.14159265f / 2.0f,
                                 3.14159265f, 6.2831853f, 12.5663706f};
 
-// Key-scale-level attenuation, dB per octave.
-// KSL register value 0..3: 0, 1.5, 3, 6 dB/octave (datasheet page 10).
-constexpr float kKslDb[4] = {0.0f, 1.5f, 3.0f, 6.0f};
+// Key-scale-level ROM (datasheet page 10).  The table is indexed by the top
+// four bits of F-number and is scaled by block.  One unit is 0.1875 dB.
+constexpr u8 kKslRom[16] = {
+    0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64,
+};
+
+// KSL register 0..3: 0, 3, 1.5, 6 dB/octave.  The datasheet lists the
+// columns in the order 0, 2, 1, 3, so value 1 is 3 dB/oct and value 2 is
+// 1.5 dB/oct.  The shifts scale the 6 dB/oct ROM value.
+constexpr u8 kKslShift[4] = {8, 1, 2, 0};
+
+// Key-scale-rate offset table (datasheet page 10): Rof is the key scale
+// number itself for KSR=1 and key scale number / 4 for KSR=0.
+constexpr u8 kKsrRof[2][16] = {
+    {0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3},
+    {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
+};
+
+// OPL3 envelope rate tables for the internal rate 0..63.  Entries are the
+// time for a full-scale sweep (attack) or a one-percent release/decay tail.
+// Rate 0 means "no movement" (AR/DR/RR=0).  The values follow the hardware
+// rate progression (a factor of 2^(1/4) per internal rate step).  The rate-60
+// entries, i.e. AR/DR/RR=15 with KSR=0, are the familiar 0.2 ms attack and
+// 50 ms release; higher internal rates (reached with KSR) are shorter.
+constexpr float kEgAttackSeconds[64] = {
+    0.0f, 5.51089875f, 4.634095f, 3.89679387f,
+    3.2768f, 2.75544937f, 2.3170475f, 1.94839694f,
+    1.6384f, 1.37772469f, 1.15852375f, 0.974198469f,
+    0.8192f, 0.688862343f, 0.579261875f, 0.487099234f,
+    0.4096f, 0.344431172f, 0.289630938f, 0.243549617f,
+    0.2048f, 0.172215586f, 0.144815469f, 0.121774809f,
+    0.1024f, 0.0861077929f, 0.0724077344f, 0.0608874043f,
+    0.0512f, 0.0430538965f, 0.0362038672f, 0.0304437021f,
+    0.0256f, 0.0215269482f, 0.0181019336f, 0.0152218511f,
+    0.0128f, 0.0107634741f, 0.0090509668f, 0.00761092554f,
+    0.0064f, 0.00538173706f, 0.0045254834f, 0.00380546277f,
+    0.0032f, 0.00269086853f, 0.0022627417f, 0.00190273138f,
+    0.0016f, 0.00134543426f, 0.00113137085f, 0.000951365692f,
+    0.0008f, 0.000672717132f, 0.000565685425f, 0.000475682846f,
+    0.0004f, 0.000336358566f, 0.000282842712f, 0.000237841423f,
+    0.0002f, 0.000168179283f, 0.000141421356f, 0.000118920712f,
+};
+
+constexpr float kEgReleaseSeconds[64] = {
+    0.0f, 1377.72469f, 1158.52375f, 974.198469f,
+    819.2f, 688.862343f, 579.261875f, 487.099234f,
+    409.6f, 344.431172f, 289.630938f, 243.549617f,
+    204.8f, 172.215586f, 144.815469f, 121.774809f,
+    102.4f, 86.1077929f, 72.4077344f, 60.8874043f,
+    51.2f, 43.0538965f, 36.2038672f, 30.4437021f,
+    25.6f, 21.5269482f, 18.1019336f, 15.2218511f,
+    12.8f, 10.7634741f, 9.0509668f, 7.61092554f,
+    6.4f, 5.38173706f, 4.5254834f, 3.80546277f,
+    3.2f, 2.69086853f, 2.2627417f, 1.90273138f,
+    1.6f, 1.34543426f, 1.13137085f, 0.951365692f,
+    0.8f, 0.672717132f, 0.565685425f, 0.475682846f,
+    0.4f, 0.336358566f, 0.282842712f, 0.237841423f,
+    0.2f, 0.168179283f, 0.141421356f, 0.118920712f,
+    0.1f, 0.0840896415f, 0.0707106781f, 0.0594603558f,
+    0.05f, 0.0420448208f, 0.0353553391f, 0.0297301779f,
+};
+
+// Total-level and KSL attenuation are expressed in the same 0.1875 dB
+// units: TL is 0.75 dB per step, i.e. four of these units.
+constexpr float kAttenUnitDb = 0.1875f;
+
+// A full-scale operator output shifts the carrier phase by one cycle; the
+// operator output is 13-bit while the phase accumulator is 10-bit, so the
+// hardware phase adder discards three low bits.  The modulation argument is
+// in radians, hence the 2*pi scale.
+constexpr float kFmPhaseScale = kTwoPi;
 
 // LFO frequencies: tremolo 3.7 Hz, vibrato 6.1 Hz (datasheet page 9).
 constexpr float kTremoloHz = 3.7f;
@@ -266,50 +334,48 @@ void Opl3::refresh_operator(u32 index) {
 
     op.mult_factor = kMultiple[op.mult & 0x0f];
 
-    // Key scale rate: "Actual rate = Rate value*4 + Rof.  If rate value=0,
-    // actual rate=0." (datasheet page 10).  The key scale number is
-    // BLOCK*2 plus one F-number bit; NOTE-SEL selects the split point:
-    // NTS=0 uses F-number bit 8, NTS=1 uses bit 9 (datasheet page 9).
-    // Rof = key scale number / 4, added as quarter rate steps.
-    u32 rof = 0;
-    if (op.ksr) {
-        const u32 split = (u32(ch.fnum) >> (nts_ ? 9 : 8)) & 1u;
-        rof = (((u32(ch.block) << 1) | split) >> 2) & 3u;
-    }
-    const float ksr_scale = std::exp2(-0.25f * float(rof));
+    // Key scale number: BLOCK*2 plus one F-number bit.  NOTE-SEL selects
+    // whether that bit is F-number bit 8 or bit 9 (datasheet page 9).
+    const u32 fnum = u32(ch.fnum) & 0x3ffu;
+    const u32 block = u32(ch.block) & 0x07u;
+    const u32 key_scale = (block << 1) |
+                          ((fnum >> (nts_ ? 9u : 8u)) & 1u);
+    // Rof comes straight from the datasheet table; KSR=0 is the key scale
+    // number divided by four, KSR=1 is the number itself.
+    const u32 rof = kKsrRof[op.ksr ? 1 : 0][key_scale & 0x0fu];
 
-    const u32 ar = std::min<u32>(15, u32(op.ar));
-    const u32 dr = std::min<u32>(15, u32(op.dr));
-    const u32 rr = std::min<u32>(15, u32(op.rr));
+    // "Actual rate = Rate value*4 + Rof.  If rate value=0, actual rate=0."
+    const auto actual_rate = [&](u8 value) -> u8 {
+        if (value == 0) return 0;
+        return u8(std::min<u32>(63u, u32(value) * 4u + rof));
+    };
+    op.eg_ar = actual_rate(op.ar);
+    op.eg_dr = actual_rate(op.dr);
+    op.eg_rr = actual_rate(op.rr);
+
     const float sr = float(sample_rate_);
-
-    // Approximate audible ranges: AR=15 ~0.2 ms, AR=0 ~6.5 s; DR=15
-    // ~50 ms, DR=0 ~27 min; RR=15 ~50 ms, RR=0 ~27 min.  The exact EG
-    // rate table is not in the YMF262 datasheet; these values keep drum
-    // hits and release tails audible instead of degenerating into clicks.
-    // The documented KSR offset scales these by 2^(-Rof/4); a rate value
-    // of 0 is exempt from key scaling.
-    const float at = 0.0002f * std::exp2(15.0f - float(ar)) *
-                     (op.ar == 0 ? 1.0f : ksr_scale);
-    const float dt = 0.05f * std::exp2(15.0f - float(dr)) *
-                     (op.dr == 0 ? 1.0f : ksr_scale);
-    const float rt = 0.05f * std::exp2(15.0f - float(rr)) *
-                     (op.rr == 0 ? 1.0f : ksr_scale);
-    op.attack_step = 1.0f / std::max(1.0f, at * sr);
-    op.decay_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, dt * sr));
-    op.release_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, rt * sr));
+    const float at = kEgAttackSeconds[op.eg_ar];
+    const float dt = kEgReleaseSeconds[op.eg_dr];
+    const float rt = kEgReleaseSeconds[op.eg_rr];
+    // Rate 0 is "no movement", not the slowest rate.
+    op.attack_step = at > 0.0f ? 1.0f / (at * sr) : 0.0f;
+    op.decay_coeff = dt > 0.0f ? 1.0f - std::exp(-4.6f / (dt * sr)) : 0.0f;
+    op.release_coeff = rt > 0.0f ? 1.0f - std::exp(-4.6f / (rt * sr)) : 0.0f;
 
     // Standard OPL convention: SL=0 is the loudest sustain, SL=15 is off.
     op.sustain = op.sl >= 15 ? 0.0f : std::pow(10.0f, -3.0f * float(op.sl) / 20.0f);
 
-    // Total level: 0.75 dB per step, TL=0 loudest, TL=63 softest.
-    float gain = std::pow(10.0f, -0.75f * float(op.tl) / 20.0f);
-
-    // Key scale level: higher blocks are attenuated according to KSL.
-    const float oct = std::max(0.0f, float(ch.block) - 3.0f + float(ch.fnum) / 1024.0f);
-    const float ksl_db = kKslDb[op.ksl & 0x03] * oct;
-    gain *= std::pow(10.0f, -ksl_db / 20.0f);
-    op.gain = gain;
+    // Total level is 0.75 dB per step; KSL comes from the 16-entry ROM and
+    // is shifted by the register's dB/octave selector.  Both are summed in
+    // the envelope generator's 0.1875 dB units.
+    const u32 tl_att = u32(op.tl) * 4u;
+    const int ksl_rom = int(kKslRom[(fnum >> 6) & 0x0fu]) * 4 -
+                        int((8u - block) * 32u);
+    const u32 ksl_att = ksl_rom > 0
+                            ? u32(ksl_rom) >> kKslShift[op.ksl & 0x03]
+                            : 0u;
+    const u32 attenuation = std::min<u32>(511u, tl_att + ksl_att);
+    op.gain = std::pow(10.0f, -kAttenUnitDb * float(attenuation) / 20.0f);
 }
 
 void Opl3::key_on(u32 channel, bool on) {
@@ -388,14 +454,18 @@ void Opl3::write_timer_control(u8 value) {
     if (!t2_start_) t2_running_ = false;
 }
 
-u8 Opl3::read_status() const {
+u8 Opl3::read_status() {
     // The FT1/FT2 flags are set on every overflow; the mask bits only
-    // suppress the IRQ output bit (datasheet pages 8 and 15).
+    // suppress the IRQ output bit.  The status port is read-to-clear, so a
+    // poller observes each timer overflow once; writing RST (bit 7 of
+    // register 04h) clears the same flags.
     const bool masked1 = (regs_[0x04] & 0x40) != 0;
     const bool masked2 = (regs_[0x04] & 0x20) != 0;
     const bool irq = ((status_ & 0x40) && !masked1) ||
                      ((status_ & 0x20) && !masked2);
-    return u8((status_ & 0x60) | (irq ? 0x80 : 0x00));
+    const u8 result = u8((status_ & 0x60) | (irq ? 0x80 : 0x00));
+    status_ &= 0x9fu;
+    return result;
 }
 
 void Opl3::tick(u64 cpu_cycles) {
@@ -428,17 +498,26 @@ void Opl3::tick(u64 cpu_cycles) {
 }
 
 float Opl3::waveform(u8 wave, float phase) const {
-    const float s = std::sin(kTwoPi * phase);
+    // phase is in cycles.  The shapes follow the YMF262 waveform table
+    // (datasheet page 14): 3 is a quarter-sine pulse in each half, 4 and 5
+    // only produce their waveform during the first half ("even periods
+    // only"), and 7 is the derived-square sawtooth.
+    const float p = phase - std::floor(phase);
+    const float s = std::sin(kTwoPi * p);
     switch (wave & 0x07) {
-    case 0: return s;
-    case 1: return std::max(0.0f, s);
-    case 2: return std::fabs(s);
-    case 3: return s >= 0.0f ? 1.0f : 0.0f; // pulse sine
-    case 4: return phase < 0.5f ? s : 0.0f;
-    case 5: return phase < 0.5f ? std::fabs(s) : 0.0f;
-    case 6: return s >= 0.0f ? 1.0f : -1.0f; // square
-    case 7: return 1.0f - phase;             // derived square
-    default: return s;
+    case 1: return p < 0.5f ? s : 0.0f;                 // half sine
+    case 2: return std::fabs(s);                        // absolute sine
+    case 3: {                                            // pulse sine
+        // One quarter-sine pulse at the start of each half period.
+        const float q = p - 0.5f * std::floor(2.0f * p);
+        return q < 0.25f ? std::sin(kTwoPi * q) : 0.0f;
+    }
+    case 4: return p < 0.5f ? std::sin(2.0f * kTwoPi * p) : 0.0f;
+    case 5: return p < 0.5f ? std::fabs(std::sin(2.0f * kTwoPi * p)) : 0.0f;
+    case 6: return p < 0.5f ? 1.0f : -1.0f;             // square
+    case 7: return 1.0f - 2.0f * p;                     // derived square
+    case 0:
+    default: return s;                                  // sine
     }
 }
 
@@ -568,7 +647,7 @@ void Opl3::render_channel_2op(u32 channel, float& l, float& r) {
         const float b = render_operator(o2, 0.0f, ch);
         out = a + b;
     } else {
-        out = render_operator(o2, a * 4.0f, ch);
+        out = render_operator(o2, a * kFmPhaseScale, ch);
     }
 
     if (stereo_left(channel)) l += out;
@@ -593,23 +672,23 @@ void Opl3::render_channel_4op(u32 base, u32 second, float& l, float& r) {
     float out = 0.0f;
     if (!con1 && !con2) {
         // FM-FM: Op1*Op2*Op3*Op4
-        const float b = render_operator(b_i, a * 4.0f, fch);
-        const float c = render_operator(c_i, b * 4.0f, fch);
-        out = render_operator(d_i, c * 4.0f, fch);
+        const float b = render_operator(b_i, a * kFmPhaseScale, fch);
+        const float c = render_operator(c_i, b * kFmPhaseScale, fch);
+        out = render_operator(d_i, c * kFmPhaseScale, fch);
     } else if (con1 && !con2) {
         // AM-FM: Op1 + (Op2*Op3*Op4)
         const float b = render_operator(b_i, 0.0f, fch);
-        const float c = render_operator(c_i, b * 4.0f, fch);
-        out = a + render_operator(d_i, c * 4.0f, fch);
+        const float c = render_operator(c_i, b * kFmPhaseScale, fch);
+        out = a + render_operator(d_i, c * kFmPhaseScale, fch);
     } else if (!con1 && con2) {
         // FM-AM: (Op1*Op2) + (Op3*Op4)
-        const float b = render_operator(b_i, a * 4.0f, fch);
+        const float b = render_operator(b_i, a * kFmPhaseScale, fch);
         const float c = render_operator(c_i, 0.0f, fch);
-        out = b + render_operator(d_i, c * 4.0f, fch);
+        out = b + render_operator(d_i, c * kFmPhaseScale, fch);
     } else {
         // AM-AM: Op1 + (Op2*Op3) + Op4
         const float b = render_operator(b_i, 0.0f, fch);
-        const float c = render_operator(c_i, b * 4.0f, fch);
+        const float c = render_operator(c_i, b * kFmPhaseScale, fch);
         out = a + c + render_operator(d_i, 0.0f, fch);
     }
 

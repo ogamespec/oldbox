@@ -55,6 +55,36 @@ struct Rig {
     return std::sqrt(re * re + im * im) / double(frames ? frames : 1);
 }
 
+// Render one isolated carrier waveform (the modulator is muted) so the
+// datasheet waveform shapes can be checked without the card mixer.
+[[nodiscard]] std::vector<i16> render_opl_wave(u8 wave, u32 frames = 8192) {
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    auto wr = [&](bool secondary, u8 reg, u8 value) {
+        opl.write_index(secondary, reg);
+        opl.write_data(secondary, value);
+    };
+    wr(true, 0x05, 0x01);  // OPL3 mode
+    wr(false, 0x01, 0x20); // waveform select enable
+    // Channel 0 modulator: full attenuation, instant attack.
+    wr(false, 0x20, 0x01);
+    wr(false, 0x40, 0x3f);
+    wr(false, 0x60, 0xf0);
+    wr(false, 0x80, 0x00);
+    // Channel 0 carrier: full output, selected waveform.
+    wr(false, 0x23, 0x01);
+    wr(false, 0x43, 0x00);
+    wr(false, 0x63, 0xf0);
+    wr(false, 0x83, 0x00);
+    wr(false, 0xe3, wave);
+    wr(false, 0xc0, 0x31); // additive, both speakers
+    wr(false, 0xa0, 0x00);
+    wr(false, 0xb0, 0x2a); // block 2, key on, F-number 0x200
+    std::vector<i16> buffer(size_t(frames) * 2);
+    opl.render(buffer.data(), frames);
+    return buffer;
+}
+
 } // namespace
 
 TEST(audio_dsp_reset_and_version) {
@@ -336,6 +366,119 @@ TEST(audio_opl3_adlib_detection_sequence) {
     fm_write(0x04, 0x21); // restart
     rig.card.tick(20000);
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+}
+
+TEST(audio_opl3_status_read_clears_timer_flags) {
+    // The status port is read-to-clear: a poller must observe each timer
+    // overflow exactly once, and the next read must not report the stale
+    // FT1/IRQ bits again.
+    Rig rig;
+    auto fm_write = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    fm_write(0x04, 0x80); // reset flags
+    fm_write(0x02, 0xFF); // one 80 us tick to overflow
+    fm_write(0x04, 0x21); // unmask and start timer 1
+    rig.card.tick(20000);
+
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
+}
+
+TEST(audio_opl3_waveform_shapes) {
+    // Datasheet page 14: waveform 3 is a quarter-sine pulse in each half,
+    // 4/5 are active only in the first half, and 7 is the falling sawtooth.
+    const double inc = 512.0 * 49716.0 * std::exp2(-18.0) / 44100.0;
+
+    auto extrema = [&](const std::vector<i16>& buffer, double lo, double hi,
+                       int& minimum, int& maximum) {
+        minimum = maximum = 0;
+        const std::size_t frames = buffer.size() / 2;
+        for (std::size_t i = 1000; i < frames; ++i) {
+            const double phase = std::fmod(double(i + 1) * inc, 1.0);
+            if (phase < lo || phase >= hi) continue;
+            minimum = std::min(minimum, int(buffer[i * 2]));
+            maximum = std::max(maximum, int(buffer[i * 2]));
+        }
+    };
+
+    const std::vector<i16> wave3 = render_opl_wave(3);
+    const int peak3 = peak(wave3);
+    int mn = 0, mx = 0;
+    extrema(wave3, 0.05, 0.20, mn, mx);
+    CHECK(mx > peak3 / 2);
+    CHECK(mn > -peak3 / 10);
+    extrema(wave3, 0.30, 0.45, mn, mx);
+    CHECK(std::max(std::abs(mn), std::abs(mx)) < peak3 / 4);
+    extrema(wave3, 0.55, 0.70, mn, mx);
+    CHECK(mx > peak3 / 2);
+
+    const std::vector<i16> wave4 = render_opl_wave(4);
+    const int peak4 = peak(wave4);
+    extrema(wave4, 0.05, 0.20, mn, mx);
+    CHECK(mx > peak4 / 2);
+    extrema(wave4, 0.30, 0.45, mn, mx);
+    CHECK(mn < -peak4 / 2);
+    extrema(wave4, 0.55, 0.95, mn, mx);
+    CHECK(std::max(std::abs(mn), std::abs(mx)) < peak4 / 4);
+
+    const std::vector<i16> wave5 = render_opl_wave(5);
+    const int peak5 = peak(wave5);
+    extrema(wave5, 0.05, 0.20, mn, mx);
+    CHECK(mx > peak5 / 2);
+    extrema(wave5, 0.30, 0.45, mn, mx);
+    CHECK(mx > peak5 / 2);
+    extrema(wave5, 0.55, 0.95, mn, mx);
+    CHECK(std::max(std::abs(mn), std::abs(mx)) < peak5 / 4);
+
+    const std::vector<i16> wave7 = render_opl_wave(7);
+    const int peak7 = peak(wave7);
+    extrema(wave7, 0.00, 0.20, mn, mx);
+    CHECK(mx > peak7 / 2);
+    extrema(wave7, 0.80, 1.00, mn, mx);
+    CHECK(mn < -peak7 / 2);
+}
+
+TEST(audio_opl3_key_scale_level_attenuates_high_notes) {
+    // Two identical high notes; the right channel uses KSL=3 (6 dB/oct) and
+    // must be much quieter than the left channel's KSL=0.
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    auto wr = [&](bool secondary, u8 reg, u8 value) {
+        opl.write_index(secondary, reg);
+        opl.write_data(secondary, value);
+    };
+    wr(true, 0x05, 0x01);  // OPL3 mode
+    wr(false, 0x01, 0x20); // waveform select
+
+    // Channel 0 (left) and channel 1 (right): operator 0/3 and 1/4.
+    for (u8 off : {u8(0x00), u8(0x01), u8(0x03), u8(0x04)}) {
+        wr(false, u8(0x20 + off), 0x01);
+        wr(false, u8(0x60 + off), 0xf0);
+        wr(false, u8(0x80 + off), 0x00);
+        wr(false, u8(0x40 + off), 0x3f); // mute modulators/carriers first
+    }
+    wr(false, 0x43, 0x00); // channel 0 carrier: KSL=0, TL=0
+    wr(false, 0x44, 0xc0); // channel 1 carrier: KSL=3, TL=0
+    wr(false, 0xc0, 0x11); // left only, additive
+    wr(false, 0xc1, 0x21); // right only, additive
+    wr(false, 0xa0, 0xff);
+    wr(false, 0xb0, 0x3f); // block 7, key on, F-number 0x3ff
+    wr(false, 0xa1, 0xff);
+    wr(false, 0xb1, 0x3f);
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    opl.render(buffer.data(), 4096);
+    int left = 0, right = 0;
+    for (size_t i = 0; i < 4096; ++i) {
+        left = std::max(left, std::abs(int(buffer[i * 2])));
+        right = std::max(right, std::abs(int(buffer[i * 2 + 1])));
+    }
+    CHECK(left > 500);
+    CHECK(right > 0);
+    CHECK(right < left / 10);
 }
 
 TEST(audio_opl3_note_is_audible) {
