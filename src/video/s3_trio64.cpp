@@ -844,6 +844,12 @@ u32 S3Trio64::plane_addr(int plane, u32 off) const {
     return mask ? (addr & mask) : (addr % u32(vram_.size()));
 }
 
+u32 S3Trio64::row_base(int y) const {
+    if (mode_.split && y >= int(mode_.split_row))
+        return u32(y - int(mode_.split_row)) * mode_.pitch;
+    return mode_.start + u32(y) * mode_.pitch;
+}
+
 void S3Trio64::update_timing() const {
     ModeInfo& m = mode_;
     u32 pitch_reg = crtc_[0x13];
@@ -903,7 +909,15 @@ void S3Trio64::update_timing() const {
     } else {
         m.bpp = 4;
     }
-    m.planar = !m.text && m.bpp == 4;
+    // Unchained 256-colour modes (VGA Mode X) keep the four-plane layout
+    // even though each plane byte is a complete 8-bit pixel: four
+    // consecutive pixels are fetched from the four planes at the same
+    // address.  Only chain-4 (mode 13h) and the S3 enhanced doubleword
+    // mappings store 8bpp pixels linearly.
+    m.planar = !m.text && (m.bpp == 4 || (m.bpp == 8 && !m.chain4 && !m.enhanced));
+    // In 256-colour modes AR13 has only four positions: 0, 2, 4, 6 shift
+    // the stream by 0..3 pixels (odd values are reserved, see H_PX_PAN).
+    if (!m.text && m.bpp == 8) m.pan = (int(attr_[0x13]) & 0x06) >> 1;
     if (std::getenv("OLDBOX_S3_TRACE"))
         std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x crtc31=%02x crtc35=%02x crtc51=%02x crtc6a=%02x\n",
                      int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.chain4),
@@ -938,6 +952,17 @@ void S3Trio64::update_timing() const {
 
     m.cols = m.hde;
     m.rows = std::max(1, m.vde / m.scan_per_row);
+    // VGA line compare (CR18 + CR7 bit 4 + CR9 bit 6 + CR5E bit 6).  When
+    // the scan-line counter reaches it the memory address counter is
+    // cleared, so screen B is fetched from address 0 instead of the display
+    // start.  The Lost Vikings uses this for its bottom status panel: without
+    // it the panel area shows the top rows of the playfield again.
+    const u32 line_compare = u32(crtc_[0x18]) | ((u32(crtc_[0x07]) & 0x10u) << 4) |
+                             ((u32(crtc_[0x09]) & 0x40u) << 3) |
+                             ((u32(crtc_[0x5E]) & 0x40u) << 4);
+    m.split = !m.text && line_compare < u32(m.vde);
+    m.split_row = m.split ? (line_compare + u32(m.scan_per_row) - 1u) / u32(m.scan_per_row) : 0u;
+    if (m.split_row >= u32(m.rows)) m.split = false;
 
     if (m.text) {
         m.width = m.hde * m.char_w;
@@ -1224,7 +1249,14 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
     auto byte = [&](u32 addr) -> u8 { return vram_[mask ? (addr & mask) : (addr % u32(vram_.size()))]; };
     if (m.planar) {
         const u32 px = u32(x) + u32(m.pan);
-        const u32 off = (m.start + u32(y) * m.pitch + px / 8u) & (m.addr_limit - 1u);
+        if (m.bpp == 8) {
+            // Mode X: one full colour index per plane byte, four pixels per
+            // CRTC address.  Reading the planes linearly repeats the first
+            // quarter of every scan line four times across the screen.
+            const u32 off = (row_base(y) + px / 4u) & (m.addr_limit - 1u);
+            return palette_rgb(byte(plane_addr(int(px & 3u), off)));
+        }
+        const u32 off = (row_base(y) + px / 8u) & (m.addr_limit - 1u);
         u32 idx = 0;
         for (int p = 0; p < 4; ++p) {
             const u8 v = byte(plane_addr(p, off));
@@ -1233,7 +1265,7 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
         return palette_rgb(u8(attr_palette_index(u8(idx))));
     }
     const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (m.start + u32(y) * m.pitch + px * u32(std::max(1, (m.bpp + 7) / 8))) &
+    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
                      (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15: {
@@ -1360,7 +1392,11 @@ u32 S3Trio64::native_pixel(int x, int y) const {
     if (m.text) return 0;
     if (m.planar) {
         const u32 px = u32(x) + u32(m.pan);
-        const u32 off = (m.start + u32(y) * m.pitch + px / 8u) & (m.addr_limit - 1u);
+        if (m.bpp == 8) {
+            const u32 off = (row_base(y) + px / 4u) & (m.addr_limit - 1u);
+            return byte(plane_addr(int(px & 3u), off));
+        }
+        const u32 off = (row_base(y) + px / 8u) & (m.addr_limit - 1u);
         u32 idx = 0;
         for (int p = 0; p < 4; ++p) {
             const u8 v = byte(plane_addr(p, off));
@@ -1369,7 +1405,7 @@ u32 S3Trio64::native_pixel(int x, int y) const {
         return idx;
     }
     const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (m.start + u32(y) * m.pitch + px * u32(std::max(1, (m.bpp + 7) / 8))) &
+    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
                      (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15:
@@ -1389,7 +1425,15 @@ void S3Trio64::native_write(int x, int y, u32 value) {
     if (m.text) return;
     if (m.planar) {
         const u32 px = u32(x) + u32(m.pan);
-        const u32 off = (m.start + u32(y) * m.pitch + px / 8u) & (m.addr_limit - 1u);
+        if (m.bpp == 8) {
+            const u32 off = (row_base(y) + px / 4u) & (m.addr_limit - 1u);
+            const u32 addr = plane_addr(int(px & 3u), off);
+            const u32 a = mask ? (addr & mask) : (addr % u32(vram_.size()));
+            vram_[a] = u8(value);
+            dirty();
+            return;
+        }
+        const u32 off = (row_base(y) + px / 8u) & (m.addr_limit - 1u);
         const u8 bit = u8(0x80u >> (px & 7u));
         for (int p = 0; p < 4; ++p) {
             const u32 addr = plane_addr(p, off);
@@ -1401,7 +1445,7 @@ void S3Trio64::native_write(int x, int y, u32 value) {
         return;
     }
     const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (m.start + u32(y) * m.pitch + px * u32(std::max(1, (m.bpp + 7) / 8))) &
+    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
                      (m.addr_limit - 1u);
     auto put = [&](u32 a, u8 v) {
         const u32 idx = mask ? (a & mask) : (a % u32(vram_.size()));

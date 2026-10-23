@@ -78,7 +78,7 @@ private:
     // Everything needed to draw one pixel, derived from the VGA register set.
     struct ModeInfo {
         bool text = true;
-        bool planar = false;      // 4bpp planar (VGA mode 12h style)
+        bool planar = false;      // four-plane layout: 4bpp or unchained 8bpp (Mode X)
         bool chain4 = false;
         bool odd_even = true;
         bool enhanced = false;    // S3 enhanced (non-planar) mode functions
@@ -98,6 +98,10 @@ private:
         int rows = 25;
         int width = 720;
         int height = 400;
+        // VGA split screen: at line compare the memory address counter is
+        // cleared, so the remaining rows are fetched from address 0.
+        bool split = false;
+        u32 split_row = 0;        // first logical row taken from address 0
     };
 
     // S3 graphics engine register file (ports 0x82E8-0xE2EA and packed MMIO).
@@ -266,6 +270,7 @@ private:
     [[nodiscard]] u32 display_start_word() const;
     [[nodiscard]] u32 plane_base(int plane) const;
     [[nodiscard]] u32 plane_addr(int plane, u32 off) const;
+    [[nodiscard]] u32 row_base(int y) const;
     [[nodiscard]] u32 sample_rgb(int x, int y) const;
     [[nodiscard]] u32 text_rgb(int x, int y) const;
     [[nodiscard]] u32 palette_rgb(u8 index) const;

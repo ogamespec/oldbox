@@ -52,6 +52,24 @@ struct Fix {
         attr(0x10, 0x01); attr(0x12, 0x0F); attr(0x13, 0x00); attr(0x14, 0x00);
     }
 
+    void mode_x() {
+        // The Lost Vikings' 320x240x256 mode: four-plane (unchained) 8bpp.
+        s3.set_mode13h();
+        crtc(0x11, 0x00);
+        crtc(0x01, 79);                  // 80 character clocks = 320 pixels
+        crtc(0x12, 0xDF);                // 480 scan lines...
+        crtc(0x07, 0x1E);                // ...vertical display end bit 8 set
+        crtc(0x09, 0x01);                // 2-line cells; CR9.6 (LC bit 9) clear
+        crtc(0x13, 0x2B);                // 43 * 2 = 86-byte planar pitch
+        crtc(0x17, 0xE3);
+        crtc(0x0C, 0x00);
+        crtc(0x0D, 0x00);
+        seq(0x04, 0x06);                 // unchained, odd/even off
+        seq(0x02, 0x0F);
+        gfx(0x05, 0x40);                 // 256-colour shift mode
+        attr(0x10, 0x61);                // graphics on, 256-colour DAC
+    }
+
     void linear_mode(int bpp, int hde = 0x4F, int vde = 479, u8 cr7 = 0x1E) {
         unlock();
         crtc(0x11, 0x00);
@@ -445,6 +463,61 @@ TEST(s3_crtc_byte_mode_start_address) {
     CHECK_EQ(f.s3.width(), 640);
     CHECK_EQ(f.s3.read_vram8(0x20), 0xFF);
     CHECK_EQ(f.s3.pixel(0, 0), 0x000000AAu);
+}
+
+// VGA Mode X (320x240x256) keeps four separate planes: pixel x lives in
+// plane x&3 at address start + y*pitch + x/4.  Sampling that memory linearly
+// repeats the first quarter of each scan line four times across the screen
+// (The Lost Vikings' Interplay logo appeared as a 4x4 grid).
+TEST(s3_mode_x_8bpp_planar) {
+    Fix f;
+    f.mode_x();
+    f.dac(5, 63, 0, 0);                  // index 5 = red
+    f.dac(6, 0, 63, 0);                  // index 6 = green
+    (void)f.s3.frame();
+    CHECK_EQ(f.s3.width(), 320);
+    CHECK_EQ(f.s3.height(), 240);
+
+    // Pixels 0 and 4 come from plane 0 at addresses 0 and 1; pixel 1 comes
+    // from plane 1 at address 0.
+    f.seq(0x02, 0x01); f.bus.write8(0xA0000, 5);
+    f.seq(0x02, 0x02); f.bus.write8(0xA0000, 6);
+    f.seq(0x02, 0x01); f.bus.write8(0xA0001, 5);
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
+    CHECK_EQ(f.s3.pixel(1, 0), 0x0000FF00u);
+    CHECK_EQ(f.s3.pixel(4, 0), 0x00FF0000u);
+
+    // Native writes must land in the same plane-interleaved layout.
+    f.s3.put_pixel(2, 0, 0x0000FF);
+    CHECK(f.s3.pixel(2, 0) != 0u);
+}
+
+// Line compare splits the screen: at the match the memory address counter
+// is cleared, so screen B is fetched from address 0.  The Lost Vikings uses
+// this for its status panel; ignoring the split repeats the top 32 rows of
+// the playfield at the bottom of the screen.
+TEST(s3_line_compare_fetches_screen_b_from_zero) {
+    Fix f;
+    f.mode_x();
+    f.dac(5, 63, 0, 0);                  // index 5 = red (screen B)
+    f.dac(6, 0, 63, 0);                  // index 6 = green (screen A)
+    f.crtc(0x11, 0x00);
+    f.crtc(0x18, 100);                   // line compare = 100 scan lines
+    f.crtc(0x07, 0x0E);                  // clear line-compare bit 8 (CR7.4)
+    (void)f.s3.frame();
+    CHECK_EQ(f.s3.height(), 240);
+
+    // Screen A: rows 0..49 come from start (0) + y*86.  Screen B: rows
+    // 50..239 restart at address 0, so row 50 is address 0 and row 49 is the
+    // last row of screen A.
+    f.seq(0x02, 0x01);
+    f.bus.write8(0xA0000 + 49u * 86u, 6);
+    f.bus.write8(0xA0000, 5);
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(0, 49), 0x0000FF00u);
+    CHECK_EQ(f.s3.pixel(0, 50), 0x00FF0000u); // address 0, not row 50
+    CHECK_EQ(f.s3.pixel(0, 40), 0x00000000u);
 }
 
 TEST(s3_vga_raster_ops) {
