@@ -37,8 +37,12 @@ constexpr float kFeedback[8] = {0.0f, 3.14159265f / 16.0f, 3.14159265f / 8.0f,
                                 3.14159265f, 6.2831853f, 12.5663706f};
 
 // Key-scale-level attenuation, dB per octave.
-// KSL register value 0..3: 0, 3, 1.5, 6 dB/octave (datasheet page 10).
-constexpr float kKslDb[4] = {0.0f, 3.0f, 1.5f, 6.0f};
+// KSL register value 0..3: 0, 1.5, 3, 6 dB/octave (datasheet page 10).
+constexpr float kKslDb[4] = {0.0f, 1.5f, 3.0f, 6.0f};
+
+// LFO frequencies: tremolo 3.7 Hz, vibrato 6.1 Hz (datasheet page 9).
+constexpr float kTremoloHz = 3.7f;
+constexpr float kVibratoHz = 6.1f;
 
 int operator_offset_index(u8 off) {
     for (int i = 0; i < 18; ++i)
@@ -62,12 +66,14 @@ void Opl3::reset() {
     wave_enable_ = false;
     four_op_ = 0;
     noise_ = 0x1f123bb5u;
-    lfo_phase_ = 0.0f;
-    lfo_ = 0.0f;
+    trem_lfo_phase_ = 0.0f;
+    trem_lfo_ = 0.0f;
+    vib_lfo_phase_ = 0.0f;
+    vib_lfo_ = 0.0f;
     trem_depth_ = false;
     vib_depth_ = false;
     rhythm_ = false;
-    rhythm_prev_ = 0;
+    nts_ = false;
     for (bool& k : rhythm_key_) k = false;
     reset_timers();
     for (u32 i = 0; i < 36; ++i) refresh_operator(i);
@@ -75,8 +81,9 @@ void Opl3::reset() {
 
 void Opl3::set_cpu_mhz(u32 mhz) {
     cpu_mhz_ = std::max(1u, mhz);
-    t1_period_ = u64(cpu_mhz_) * 808u / 10u;
-    t2_period_ = u64(cpu_mhz_) * 3231u / 10u;
+    // Timer 1 resolution 80 us, timer 2 resolution 320 us (datasheet page 8).
+    t1_period_ = u64(cpu_mhz_) * 80u;
+    t2_period_ = u64(cpu_mhz_) * 320u;
 }
 
 void Opl3::set_sample_rate(u32 hz) {
@@ -139,7 +146,15 @@ void Opl3::write_data(bool secondary, u8 value) {
         write_timer_control(value);
         return;
     }
-    if (!secondary && base == 0x08) return; // CSM / NOTE-SEL
+    if (!secondary && base == 0x08) { // NOTE-SEL (bit 6); CSM (bit 7) is not
+        // documented for the YMF262 and is ignored.
+        const bool nts = (value & 0x40) != 0;
+        if (nts != nts_) {
+            nts_ = nts;
+            for (u32 i = 0; i < 36; ++i) refresh_operator(i);
+        }
+        return;
+    }
     if (!secondary && base == 0xbd) {
         rhythm_ = (value & 0x20) != 0;
         trem_depth_ = (value & 0x80) != 0;
@@ -152,7 +167,6 @@ void Opl3::write_data(bool secondary, u8 value) {
             if (on && !rhythm_key_[i]) rhythm_key(i, true);
             else if (!on && rhythm_key_[i]) rhythm_key(i, false);
         }
-        rhythm_prev_ = now;
         return;
     }
 
@@ -252,23 +266,35 @@ void Opl3::refresh_operator(u32 index) {
 
     op.mult_factor = kMultiple[op.mult & 0x0f];
 
-    // Key scaling adds up to four rate steps at the top of the keyboard.
-    u32 ksr = 0;
-    if (op.ksr) ksr = (u32(ch.block) << 1) | (u32(ch.fnum) >> 9);
-    const u32 add = ksr >> 2;
+    // Key scale rate: "Actual rate = Rate value*4 + Rof.  If rate value=0,
+    // actual rate=0." (datasheet page 10).  The key scale number is
+    // BLOCK*2 plus one F-number bit; NOTE-SEL selects the split point:
+    // NTS=0 uses F-number bit 8, NTS=1 uses bit 9 (datasheet page 9).
+    // Rof = key scale number / 4, added as quarter rate steps.
+    u32 rof = 0;
+    if (op.ksr) {
+        const u32 split = (u32(ch.fnum) >> (nts_ ? 9 : 8)) & 1u;
+        rof = (((u32(ch.block) << 1) | split) >> 2) & 3u;
+    }
+    const float ksr_scale = std::exp2(-0.25f * float(rof));
 
-    const u32 ar = std::min<u32>(15, u32(op.ar) + add);
-    const u32 dr = std::min<u32>(15, u32(op.dr) + add);
-    const u32 rr = std::min<u32>(15, u32(op.rr) + add);
+    const u32 ar = std::min<u32>(15, u32(op.ar));
+    const u32 dr = std::min<u32>(15, u32(op.dr));
+    const u32 rr = std::min<u32>(15, u32(op.rr));
     const float sr = float(sample_rate_);
 
     // Approximate audible ranges: AR=15 ~0.2 ms, AR=0 ~6.5 s; DR=15
     // ~50 ms, DR=0 ~27 min; RR=15 ~50 ms, RR=0 ~27 min.  The exact EG
     // rate table is not in the YMF262 datasheet; these values keep drum
     // hits and release tails audible instead of degenerating into clicks.
-    const float at = 0.0002f * std::exp2(15.0f - float(ar));
-    const float dt = 0.05f * std::exp2(15.0f - float(dr));
-    const float rt = 0.05f * std::exp2(15.0f - float(rr));
+    // The documented KSR offset scales these by 2^(-Rof/4); a rate value
+    // of 0 is exempt from key scaling.
+    const float at = 0.0002f * std::exp2(15.0f - float(ar)) *
+                     (op.ar == 0 ? 1.0f : ksr_scale);
+    const float dt = 0.05f * std::exp2(15.0f - float(dr)) *
+                     (op.dr == 0 ? 1.0f : ksr_scale);
+    const float rt = 0.05f * std::exp2(15.0f - float(rr)) *
+                     (op.rr == 0 ? 1.0f : ksr_scale);
     op.attack_step = 1.0f / std::max(1.0f, at * sr);
     op.decay_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, dt * sr));
     op.release_coeff = 1.0f - std::exp(-4.6f / std::max(1.0f, rt * sr));
@@ -363,6 +389,8 @@ void Opl3::write_timer_control(u8 value) {
 }
 
 u8 Opl3::read_status() const {
+    // The FT1/FT2 flags are set on every overflow; the mask bits only
+    // suppress the IRQ output bit (datasheet pages 8 and 15).
     const bool masked1 = (regs_[0x04] & 0x40) != 0;
     const bool masked2 = (regs_[0x04] & 0x20) != 0;
     const bool irq = ((status_ & 0x40) && !masked1) ||
@@ -405,11 +433,11 @@ float Opl3::waveform(u8 wave, float phase) const {
     case 0: return s;
     case 1: return std::max(0.0f, s);
     case 2: return std::fabs(s);
-    case 3: return s >= 0.0f ? 1.0f : -1.0f;
+    case 3: return s >= 0.0f ? 1.0f : 0.0f; // pulse sine
     case 4: return phase < 0.5f ? s : 0.0f;
     case 5: return phase < 0.5f ? std::fabs(s) : 0.0f;
-    case 6: return s >= 0.0f ? 1.0f : -1.0f;
-    case 7: return phase < 0.5f ? 1.0f - 2.0f * phase : 1.0f - 2.0f * (phase - 0.5f);
+    case 6: return s >= 0.0f ? 1.0f : -1.0f; // square
+    case 7: return 1.0f - phase;             // derived square
     default: return s;
     }
 }
@@ -442,12 +470,13 @@ float Opl3::render_operator(u32 index, float modulation,
     if (!op.key && op.env <= 1e-5f) return 0.0f;
 
     const Channel& ch = freq_channel;
-    if (ch.fnum == 0) return 0.0f;
 
+    // F-number 0 simply leaves the phase accumulator where it is; the
+    // envelope still has to run.
     float freq = float(ch.fnum) * 49716.0f * std::exp2(float(ch.block) - 20.0f) *
                  op.mult_factor;
     if (op.vib) {
-        const float cents = (vib_depth_ ? 14.0f : 7.0f) * lfo_;
+        const float cents = (vib_depth_ ? 14.0f : 7.0f) * vib_lfo_;
         freq *= std::exp2(cents / 1200.0f);
     }
     op.phase += freq / float(sample_rate_);
@@ -470,7 +499,9 @@ float Opl3::render_operator(u32 index, float modulation,
             op.env += (op.sustain - op.env) * op.decay_coeff;
             if (op.env < op.sustain) op.env = op.sustain;
         } else if (!op.egt) {
-            op.env -= op.env * op.decay_coeff;
+            // EGT=0: "the RELEASE RATE takes effect even if KON is
+            // maintained at 1" (datasheet page 9).
+            op.env -= op.env * op.release_coeff;
             if (op.env < 1e-5f) op.env = 0.0f;
         }
     } else {
@@ -479,13 +510,19 @@ float Opl3::render_operator(u32 index, float modulation,
     }
 
     float trem = 1.0f;
-    if (op.am) trem = 1.0f - (trem_depth_ ? 0.24f : 0.05f) * (0.5f + 0.5f * lfo_);
+    if (op.am) {
+        // DAM: 0 = 1.0 dB, 1 = 4.8 dB of attenuation at the LFO peak
+        // (datasheet page 11).
+        const float depth_db = trem_depth_ ? 4.8f : 1.0f;
+        const float depth = 1.0f - std::pow(10.0f, -depth_db / 20.0f);
+        trem = 1.0f - depth * (0.5f + 0.5f * trem_lfo_);
+    }
     const float out = s * op.env * op.gain * trem;
     op.prev = out;
     return out;
 }
 
-float Opl3::render_noise_operator(u32 index) {
+float Opl3::render_noise_operator(u32 index, float noise) {
     if (index >= 36) return 0.0f;
     Operator& op = ops_[index];
     if (!op.key && op.env <= 1e-5f) return 0.0f;
@@ -501,14 +538,15 @@ float Opl3::render_noise_operator(u32 index) {
             op.env += (op.sustain - op.env) * op.decay_coeff;
             if (op.env < op.sustain) op.env = op.sustain;
         } else if (!op.egt) {
-            op.env -= op.env * op.decay_coeff;
+            // EGT=0 decays with the release rate even while KON is held.
+            op.env -= op.env * op.release_coeff;
             if (op.env < 1e-5f) op.env = 0.0f;
         }
     } else {
         op.env -= op.env * op.release_coeff;
         if (op.env < 1e-5f) op.env = 0.0f;
     }
-    const float out = noise_value() * op.env * op.gain;
+    const float out = noise * op.env * op.gain;
     op.prev = out;
     return out;
 }
@@ -579,11 +617,12 @@ void Opl3::render_channel_4op(u32 base, u32 second, float& l, float& r) {
     if (stereo_right(base)) r += out;
 }
 
-void Opl3::render_rhythm(float& l, float& r) {
+void Opl3::render_rhythm(float& l, float& r, float noise) {
     // BD is a normal two-operator channel.
     if (rhythm_key_[0]) render_channel_2op(6, l, r);
 
-    // SD, CY and HH use the noise source; TT uses its tone operator.
+    // SD, CY and HH share the single noise source; TT uses its tone
+    // operator (datasheet page 11, rhythm slots 14-18).
     static constexpr u8 kPercOp[4] = {16, 14, 17, 13};
     static constexpr u8 kPercCh[4] = {7, 8, 8, 7};
     for (int i = 0; i < 4; ++i) {
@@ -591,7 +630,7 @@ void Opl3::render_rhythm(float& l, float& r) {
         const u32 idx = kPercOp[i];
         const u32 ch = kPercCh[i];
         const float out = (i == 1) ? render_operator(idx, 0.0f, channels_[ch])
-                                   : render_noise_operator(idx);
+                                   : render_noise_operator(idx, noise);
         if (stereo_left(ch)) l += out;
         if (stereo_right(ch)) r += out;
     }
@@ -599,29 +638,43 @@ void Opl3::render_rhythm(float& l, float& r) {
 
 void Opl3::render(i16* out, u32 frames) {
     if (out == nullptr) return;
+    const float sr = float(sample_rate_);
     for (u32 f = 0; f < frames; ++f) {
-        lfo_ = std::sin(kTwoPi * lfo_phase_);
-        lfo_phase_ += 6.1f / float(sample_rate_);
-        if (lfo_phase_ >= 1.0f) lfo_phase_ -= std::floor(lfo_phase_);
+        // Two independent LFOs: tremolo at 3.7 Hz, vibrato at 6.1 Hz
+        // (datasheet page 9).
+        trem_lfo_ = std::sin(kTwoPi * trem_lfo_phase_);
+        trem_lfo_phase_ += kTremoloHz / sr;
+        if (trem_lfo_phase_ >= 1.0f) trem_lfo_phase_ -= std::floor(trem_lfo_phase_);
+
+        vib_lfo_ = std::sin(kTwoPi * vib_lfo_phase_);
+        vib_lfo_phase_ += kVibratoHz / sr;
+        if (vib_lfo_phase_ >= 1.0f) vib_lfo_phase_ -= std::floor(vib_lfo_phase_);
+
+        // The noise LFSR is advanced once per sample and shared by the
+        // snare drum, top cymbal and hi-hat.
+        const float noise = noise_value();
 
         float l = 0.0f, r = 0.0f;
         bool used[18] = {};
 
-        // Six optional four-operator channels.
-        for (int bit = 0; bit < 6; ++bit) {
-            if ((four_op_ & (1u << bit)) == 0) continue;
-            const u32 base = kFourOpPairs[bit][0];
-            const u32 second = kFourOpPairs[bit][1];
-            render_channel_4op(base, second, l, r);
-            used[base] = used[second] = true;
+        // Six optional four-operator channels (OPL3 mode only).
+        if (opl3_mode_) {
+            for (int bit = 0; bit < 6; ++bit) {
+                if ((four_op_ & (1u << bit)) == 0) continue;
+                const u32 base = kFourOpPairs[bit][0];
+                const u32 second = kFourOpPairs[bit][1];
+                render_channel_4op(base, second, l, r);
+                used[base] = used[second] = true;
+            }
         }
 
         if (rhythm_) {
-            render_rhythm(l, r);
+            render_rhythm(l, r, noise);
             used[6] = used[7] = used[8] = true;
         }
 
-        for (u32 ch = 0; ch < 18; ++ch) {
+        // In OPL2 mode only the first nine channels exist.
+        for (u32 ch = 0; ch < (opl3_mode_ ? 18u : 9u); ++ch) {
             if (used[ch]) continue;
             render_channel_2op(ch, l, r);
         }

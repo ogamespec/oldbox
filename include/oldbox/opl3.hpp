@@ -15,17 +15,19 @@ using i16 = std::int16_t;
 //
 // The public interface is the register file seen through the four OPL ports:
 // index/status, data, secondary index and secondary data.  The model follows
-// the YMF262 programmer's guide: 18 two-operator channels (36 operators),
-// six optional four-operator channels, two-operator additive/FM, the four
-// four-operator connection schemes, rhythm mode, eight waveforms, feedback,
-// stereo output on the C0h L/R bits, and the two programmable timers.
+// the YMF262 datasheet and the OPL3 programmer's guide: 18 two-operator
+// channels (36 operators), six optional four-operator channels, two-operator
+// additive/FM, the four four-operator connection schemes, rhythm mode, eight
+// waveforms, feedback, stereo output on the C0h L/R bits, two programmable
+// timers, NOTE-SEL key scale split, and the separate 3.7 Hz tremolo and
+// 6.1 Hz vibrato LFOs.  With NEW=0 (OPL2 mode) only the first nine channels
+// exist, four-operator synthesis is off and waveforms are limited to 0..3.
 //
-// The envelope generator is an original approximation rather than a copy of
-// Yamaha's exact rate table: the register semantics, key scaling, ADSR
-// stages and the audible rate ranges are implemented, but individual
-// envelope timings are not cycle-exact.  Phase generation, frequency
-// calculation, modulation routing and the register map are implemented from
-// the datasheet.
+// The envelope time constants are an original approximation rather than a
+// copy of Yamaha's rate table (the YMF262 datasheet does not publish one):
+// the register semantics, the documented key-scale-rate formula
+// (actual rate = rate*4 + Rof, rate 0 exempt) and the ADSR/EGT stages are
+// implemented, but individual envelope timings are not cycle-exact.
 class Opl3 {
 public:
     Opl3();
@@ -108,19 +110,21 @@ private:
     u8 index_ = 0;
     bool opl3_mode_ = false;
     bool wave_enable_ = false;
+    bool nts_ = false; // NOTE-SEL: 0 = F-num bit 8 split, 1 = bit 9 split
     u8 four_op_ = 0;
     u32 sample_rate_ = 44100;
     u32 cpu_mhz_ = 48;
 
     u32 noise_ = 0x1f123bb5u;
-    float lfo_phase_ = 0.0f;
-    float lfo_ = 0.0f;
+    float trem_lfo_phase_ = 0.0f;
+    float trem_lfo_ = 0.0f;
+    float vib_lfo_phase_ = 0.0f;
+    float vib_lfo_ = 0.0f;
     bool trem_depth_ = false;
     bool vib_depth_ = false;
 
     // Rhythm mode (register BDh).
     bool rhythm_ = false;
-    u8 rhythm_prev_ = 0;
     bool rhythm_key_[5] = {false, false, false, false, false};
 
     void reset_timers();
@@ -138,10 +142,10 @@ private:
 
     [[nodiscard]] float render_operator(u32 index, float modulation,
                                         const Channel& freq_channel);
-    [[nodiscard]] float render_noise_operator(u32 index);
+    [[nodiscard]] float render_noise_operator(u32 index, float noise);
     void render_channel_2op(u32 channel, float& l, float& r);
     void render_channel_4op(u32 base, u32 second, float& l, float& r);
-    void render_rhythm(float& l, float& r);
+    void render_rhythm(float& l, float& r, float noise);
 
     [[nodiscard]] float waveform(u8 wave, float phase) const;
     [[nodiscard]] float noise_value();

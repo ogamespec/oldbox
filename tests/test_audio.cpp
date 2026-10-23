@@ -293,7 +293,8 @@ TEST(audio_opl3_adlib_detection_sequence) {
     // CHKSYS.EXE and MEGA.EXE): after masking and resetting the timers the
     // status must read 00h; after programming timer 1 to 0FFh, starting it
     // and waiting about half a millisecond it must read C0h (IRQ + FT1).
-    // 0FFh overflows after a single 80.8 us tick, i.e. (256 - 0FFh) ticks.
+    // 0FFh overflows after a single 80 us tick, i.e. (256 - 0FFh) ticks
+    // (datasheet page 8).
     Rig rig;
     auto fm_write = [&](u8 reg, u8 value) {
         rig.card.io_write8(0x388, reg);
@@ -308,10 +309,10 @@ TEST(audio_opl3_adlib_detection_sequence) {
     fm_write(0x04, 0x21); // unmask + start timer 1
     rig.card.tick(2000);  // 2000 cycles at 233 MHz = 8.6 us: no overflow yet
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
-    rig.card.tick(20000); // + 86 us: the single 80.8 us tick has fired
+    rig.card.tick(20000); // + 86 us: the single 80 us tick has fired
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
 
-    // Timer 2 uses the 323.1 us tick: 0FEh overflows after two ticks.
+    // Timer 2 uses the 320 us tick: 0FEh overflows after two ticks.
     fm_write(0x04, 0x80); // reset flags again
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
     fm_write(0x03, 0xFE);
@@ -467,7 +468,9 @@ TEST(audio_opl3_drum_has_decay_tail) {
     };
     w(0x01, 0x20); // waveform select on
     // The percussion voice Megafortress uses: half-sine modulator, two
-    // operator FM, fast attack, DR=15, EGT=0.  The envelope must produce a
+    // operator FM, fast attack, DR=15, EGT=0.  With EGT=0 the RELEASE RATE
+    // takes effect while KON is held (datasheet page 9), so the drum tail
+    // runs at the carrier's release rate.  The envelope must produce a
     // decaying tail, not a single-sample click.
     w(0x20, 0x04);
     w(0x23, 0x02);
@@ -476,7 +479,7 @@ TEST(audio_opl3_drum_has_decay_tail) {
     w(0x60, 0xff);
     w(0x63, 0xff);
     w(0x80, 0x41);
-    w(0x83, 0x00);
+    w(0x83, 0x0f); // carrier sustain 0, release 15: fast decaying tail
     w(0xe0, 0x01);
     w(0xc0, 0x00);
     w(0xa0, 0x41);
@@ -495,6 +498,67 @@ TEST(audio_opl3_drum_has_decay_tail) {
     CHECK(early > 500);
     CHECK(tail > 0);          // a real envelope tail
     CHECK(tail < early);      // and it is decaying
+}
+
+// EGT=0 selects "decay": the release rate takes effect even while KON is
+// held (datasheet page 9).  With SL=0 the decay stage itself is a no-op, so
+// two otherwise identical carriers with RR=0 and RR=15 must differ only in
+// their tail rate.
+TEST(audio_opl3_egt_zero_uses_release_rate) {
+    Rig rig;
+    auto w = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    auto ws = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x38a, reg);
+        rig.card.io_write8(0x38b, value);
+    };
+    ws(0x05, 0x01); // OPL3 mode
+    // Channel 0: additive, left speaker, carrier RR=0 (slow tail).  The
+    // modulator is silenced with TL=63 so only the carrier envelope shows.
+    w(0x20, 0x21);  // modulator: EGT=1, holds full level
+    w(0x40, 0x3f);
+    w(0x60, 0xf0);
+    w(0x80, 0x00);
+    w(0x23, 0x01);  // carrier: EGT=0, SL=0, RR=0
+    w(0x43, 0x00);
+    w(0x63, 0xf0);
+    w(0x83, 0x00);
+    w(0xc0, 0x11); // additive, left only
+    w(0xa0, 0x80);
+    w(0xb0, 0x30); // key on, block 4
+    // Channel 9: same voice, right speaker, carrier RR=15 (fast tail).
+    ws(0x20, 0x21);
+    ws(0x40, 0x3f);
+    ws(0x60, 0xf0);
+    ws(0x80, 0x00);
+    ws(0x23, 0x01);
+    ws(0x43, 0x00);
+    ws(0x63, 0xf0);
+    ws(0x83, 0x0f);
+    ws(0xc0, 0x21); // additive, right only
+    ws(0xa0, 0x80);
+    ws(0xb0, 0x30);
+
+    std::vector<i16> buffer(size_t(4410) * 2);
+    rig.card.render(buffer, 44100);
+    auto peak_range = [&](int channel, size_t first, size_t last) {
+        int p = 0;
+        for (size_t f = first; f < last && f * 2 + 1 < buffer.size(); ++f)
+            p = std::max(p, std::abs(int(buffer[f * 2 + size_t(channel)])));
+        return p;
+    };
+    const int slow_early = peak_range(0, 0, 441);
+    const int slow_tail = peak_range(0, 1764, 2646);
+    const int fast_early = peak_range(1, 0, 441);
+    const int fast_tail = peak_range(1, 1764, 2646);
+
+    CHECK(fast_early > 500);
+    CHECK(fast_tail > 0);
+    CHECK(fast_tail < fast_early / 4);   // RR=15: the tail has decayed away
+    CHECK(slow_early > 500);
+    CHECK(slow_tail > slow_early / 2);   // RR=0: the level is nearly held
 }
 
 TEST(audio_dsp_reset_exits_sb_midi_uart) {
