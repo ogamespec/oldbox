@@ -24,7 +24,6 @@ ctest --test-dir build --output-on-failure
 | `test_audio.cpp` | DSP reset/version/UART, CT1745 mixer и алиасы, CD-вход и его громкость, EMU8000 SF2-банк/регистры/звуковая память, 8/16-бит DMA, ADPCM, OPL3 (таймеры, 4-оп, стерео), MPU-401, DAC/DMA IRQ |
 | `test_storage.cpp` | ATA IDENTIFY/read-write, LBA48, missing drive, FDC read/write, ATAPI ISO, BIN/CUE (MODE1/2352 + CD-DA, несколько FILE), TOC/READ CD/PLAY/PAUSE/STOP/SUB-CHANNEL, native BAR |
 | `test_devices.cpp` | PIC/PIT/RTC/SMBus |
-| `test_jit.cpp` | дифференциальные тесты JIT против интерпретатора: ALU/флаги, адресация, переходы, I/O и сегменты, самомодифицирующийся код, fallback на неподдержанной инструкции; сквозная загрузка FreeDOS с `--jit` |
 | `test_machine.cpp` | сквозная загрузка FreeDOS с настоящим `EP-ZXA.bin` до промпта `A:\>` |
 | `test_console.cpp` | токенизатор CLI, insert/eject дискет A:/B:, извлечение CD (TEST UNIT READY → `NOT READY/3Ah`), команды `floppy`/`cdrom`/`insert`/`eject`/`key`, пауза и шаг, дополнение путей |
 

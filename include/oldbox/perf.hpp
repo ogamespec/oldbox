@@ -15,7 +15,7 @@ namespace oldbox {
 // The emulated machine is single-threaded, therefore the profiler needs no
 // locks: scopes are opened and closed on the thread that also commits frames.
 enum class PerfNode : u8 {
-    Cpu,       // IA-32 interpreter/JIT: guest RAM/ROM/MMIO, light I/O ports
+    Cpu,       // IA-32 interpreter: guest RAM/ROM/MMIO, light I/O ports
     Pit,       // 8254 PIT (three counters, refresh bit)
     Rtc,       // MC146818 RTC / CMOS
     Dma,       // 8237 DMA
@@ -122,7 +122,7 @@ public:
     void cancel_frame(); // drops the current frame (paused emulation)
     void end_frame(u64 guest_cycles, u64 instructions);
 
-    // The CPU node is special: the interpreter/JIT is a loop, not a function
+    // The CPU node is special: the interpreter is a loop, not a function
     // that can be wrapped in a scope.  The machine opens a phase between two
     // device tick batches; any device work that happens inside it (a Voodoo
     // triangle command, an ATA block read triggered by a port write) is

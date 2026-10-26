@@ -184,7 +184,6 @@ u32 Bus::read32_slow(u32 addr) {
 }
 
 void Bus::write8_slow(u32 addr, u8 value) {
-    if (write_observer_) write_observer_(addr, 1);
     if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 8);
     if (debug_watch_ && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write8 %05x = %02x\n", watch_cs_, watch_ip_, addr, value);
@@ -196,7 +195,6 @@ void Bus::write8_slow(u32 addr, u8 value) {
     }
 }
 void Bus::write16_slow(u32 addr, u16 value) {
-    if (write_observer_) write_observer_(addr, 2);
     if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 16);
     if (debug_watch_ && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write16 %05x = %04x\n", watch_cs_, watch_ip_, addr, value);
@@ -209,7 +207,6 @@ void Bus::write16_slow(u32 addr, u16 value) {
     write8_slow(addr, u8(value)); write8_slow(addr + 1, u8(value >> 8));
 }
 void Bus::write32_slow(u32 addr, u32 value) {
-    if (write_observer_) write_observer_(addr, 4);
     if (write_watch_ && addr >= watch_lo_ && addr <= watch_hi_) write_watch_(addr, value, 32);
     if (debug_watch_ && watch_addr(addr) && watch_line()) {
         std::fprintf(stderr, "WATCH %04x:%04x write32 %05x = %08x\n", watch_cs_, watch_ip_, addr, value);

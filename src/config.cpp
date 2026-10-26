@@ -71,8 +71,6 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--perf") c.perf = true;
         else if (a == "--no-perf") c.no_perf = true;
         else if (a == "--headless") { c.headless = true; c.no_sdl_audio = true; }
-        else if (a == "--jit" || a == "--jitc") c.jit = true;
-        else if (a == "--jit-stats") { c.jit = true; c.jit_stats = true; }
         else if (a == "--trace") c.trace = true;
         else if (a == "--log") {
             auto v = need(a);
@@ -175,8 +173,6 @@ void print_usage(const char* argv0) {
         "  --boot-menu            start with the built-in boot menu\n"
         "  --screenshot FILE      write the final frame as a PPM file\n"
         "  --headless             no window, no audio device\n"
-        "  --jit                  enable the x86-64 JIT compiler (--jitc alias)\n"
-        "  --jit-stats            enable the JIT and print cache statistics on exit\n"
         "  --console              read CLI commands from stdin (window: F2)\n"
         "  --no-console           do not read CLI commands from stdin\n"
         "  --perf                 start with the F3 panel open, print counters on exit\n"

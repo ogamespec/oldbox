@@ -9,7 +9,6 @@
 namespace oldbox {
 
 class Cpu;
-class Jit;
 
 enum : u32 {
     CF = 1u << 0,  PF = 1u << 2,  AF = 1u << 4,  ZF = 1u << 6,
@@ -118,19 +117,6 @@ public:
     void step();
     void run_cycles(u64 cycles);
 
-    // Baseline JIT compiler (src/cpu/jit.cpp).  Enabling it replaces the
-    // interpreter's per-instruction dispatch with cached native x86-64 basic
-    // blocks.  It is an optional front end: unsupported instructions fall back
-    // to the interpreter and the interpreted path remains the reference.
-    bool set_jit_enabled(bool enabled);
-    [[nodiscard]] bool jit_enabled() const;
-    void flush_jit();
-    [[nodiscard]] std::string jit_statistics() const;
-    // Machine sets this to the cycle of the next scheduled device tick (0 =
-    // no limit).  The JIT refuses to run a block that would cross it so that
-    // timer/RTC state changes at the same instruction boundaries as the
-    // interpreter.
-    void set_jit_cycle_limit(u64 limit) { jit_cycle_limit_ = limit; }
     void request_nmi() { state_.nmi_pending = true; }
     void request_smi() { state_.smi_pending = true; }
     void request_apic(int vector) { apic_vectors_.push_back(vector); }
@@ -168,7 +154,7 @@ public:
     [[nodiscard]] std::array<u32, 64> recent_pcs() const { return pc_ring_; }
     [[nodiscard]] u32 recent_pc_pos() const { return pc_ring_pos_; }
     [[nodiscard]] u32 mhz() const { return mhz_; }
-    // TSC ticks at the CPU's nominal clock even when the interpreter/JIT
+    // TSC ticks at the CPU's nominal clock even when the interpreter
     // schedules guest instructions at a lower rate for host performance.
     void set_tsc_mhz(u32 mhz) {
         tsc_mhz_ = mhz ? mhz : mhz_;
@@ -272,7 +258,6 @@ public:
 
 private:
     friend class X87;
-    friend class Jit;
     Bus& bus_;
     u32 mhz_;
     u32 tsc_mhz_ = 0;
@@ -458,10 +443,6 @@ private:
     std::array<u32, 1024> tlb_tag_{};
     std::array<u32, 1024> tlb_phys_{};
     std::array<u8, 1024> tlb_flags_{};
-
-    std::unique_ptr<Jit> jit_;
-    u64 jit_cycle_limit_ = 0;
-    bool jit_attempt();
 };
 
 } // namespace oldbox

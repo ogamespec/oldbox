@@ -14,6 +14,15 @@ namespace {
 }
 }
 
+Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes) {
+    tlb_tag_.fill(0xffffffffu);
+    tlb_phys_.fill(0);
+    tlb_flags_.fill(0);
+    reset();
+}
+
+Cpu::~Cpu() = default;
+
 void Cpu::reset() {
     vme_policy_fault_ = false;
     state_ = CpuState{};
@@ -56,8 +65,6 @@ void Cpu::reset() {
     mc_ctl_.fill(0); mc_status_.fill(0); mc_addr_.fill(0); mc_misc_.fill(0);
     last_interrupt_ = 0;
     last_opcode_ = 0;
-    jit_cycle_limit_ = 0;
-    flush_jit();
 }
 
 void Cpu::reset_segments_real() {
@@ -1474,11 +1481,6 @@ void Cpu::step() {
             deliver_interrupt(v);
         }
     }
-    // The JIT compiles whole basic blocks and executes them natively.  It
-    // bails out to the interpreter for unsupported instructions, single-step
-    // mode, debug breakpoints and interrupt-shadow instructions.
-    if (jit_ && !irq_shadow && !(state_.eflags & TF) && jit_attempt()) return;
-
     const bool trace_tf = (state_.eflags & TF) != 0;
     pc_ring_[pc_ring_pos_++ & 63u] = (u32(state_.seg[1].selector) << 16) | (state_.eip & 0xffffu);
     opcode_ip_ = state_.eip;

@@ -173,12 +173,6 @@ public:
     void set_write_watch(u32 lo, u32 hi, std::function<void(u32, u32, int)> cb) {
         watch_lo_ = lo; watch_hi_ = hi; write_watch_ = std::move(cb);
     }
-    // Every write to the physical address space (CPU, DMA, devices) is
-    // reported here.  The JIT uses it to invalidate translated code when the
-    // guest overwrites code pages.  The callback receives (address, length).
-    void set_write_observer(std::function<void(u32, u32)> cb) {
-        write_observer_ = std::move(cb);
-    }
     [[nodiscard]] u16 watch_pc() const { return watch_ip_; }
     [[nodiscard]] u16 watch_cs() const { return watch_cs_; }
     void set_port80_logging(bool v) { port80_logging_ = v; }
@@ -192,7 +186,7 @@ public:
 
 private:
     [[nodiscard]] bool write_slow_required() const {
-        return write_observer_ || write_watch_ || debug_watch_;
+        return write_watch_ || debug_watch_;
     }
     [[nodiscard]] MemoryRegion* find_region(u32 addr, u32 len = 1);
     [[nodiscard]] const MemoryRegion* find_region(u32 addr, u32 len = 1) const;
@@ -234,7 +228,6 @@ private:
     u16 watch_ip_ = 0;
     u32 watch_lo_ = 0, watch_hi_ = 0;
     std::function<void(u32, u32, int)> write_watch_;
-    std::function<void(u32, u32)> write_observer_;
     std::vector<u8> port80_history_;
 };
 
