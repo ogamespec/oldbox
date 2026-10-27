@@ -37,6 +37,7 @@ struct MemoryRegion {
 };
 
 class Bus {
+    friend class StateCodec;
 public:
     explicit Bus(u32 ram_size);
     ~Bus();

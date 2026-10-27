@@ -13,6 +13,7 @@ namespace oldbox {
 namespace {
 
 constexpr std::size_t kMaxLogLines = 1000;
+constexpr const char* kQuickState = "oldbox-quicksave.state";
 
 std::string lower_ascii(std::string_view s) {
     std::string out(s);
@@ -164,6 +165,10 @@ constexpr CommandDoc kDocs[] = {
     {"screenshot", "screenshot [FILE]", "save the current frame as PPM"},
     {"text", "text [FILE]", "dump the VGA text screen"},
     {"cmos", "cmos dump|get IDX|set IDX VAL", "read or patch CMOS bytes"},
+    {"save", "save [FILE]", "write a machine save state (default: oldbox-quicksave.state)"},
+    {"load", "load [FILE]", "restore a machine save state (default: oldbox-quicksave.state)"},
+    {"quicksave", "quicksave", "save to oldbox-quicksave.state"},
+    {"quickload", "quickload", "restore oldbox-quicksave.state"},
     {"perf", "perf [report|reset|on|off]", "performance counters (F3 opens the panel)"},
     {"pause", "pause", "stop advancing emulated time"},
     {"resume", "resume", "resume emulation"},
@@ -361,7 +366,11 @@ bool CommandConsole::execute(const std::string& line) {
             machine_.run_slice(seconds);
             emit(std::format("stepped {:.3f} s (now {:.3f} s emulated)", seconds,
                              machine_.emulated_seconds()));
-        } else if (cmd == "reset" || cmd == "reboot") boot_reset();
+        } else if (cmd == "save") save_command(args, false);
+        else if (cmd == "load" || cmd == "restore") load_command(args, false);
+        else if (cmd == "quicksave") save_command(args, true);
+        else if (cmd == "quickload") load_command(args, true);
+        else if (cmd == "reset" || cmd == "reboot") boot_reset();
         else if (cmd == "flush" || cmd == "sync") {
             machine_.floppy().flush();
             machine_.ata().flush_all();
@@ -747,7 +756,8 @@ void CommandConsole::complete(std::string& line) {
         const std::string cmd = lower_ascii(before[0]);
         bool path_arg = false;
         if (cmd == "insert" || cmd == "images" || cmd == "ls" || cmd == "screenshot" ||
-            cmd == "text" || cmd == "screen") {
+            cmd == "text" || cmd == "screen" || cmd == "save" || cmd == "load" ||
+            cmd == "restore") {
             path_arg = true;
         } else if (cmd == "floppy" || cmd == "cdrom") {
             std::size_t action = 1;
@@ -789,6 +799,24 @@ void CommandConsole::complete(std::string& line) {
         row += c;
     }
     if (!row.empty()) emit(row);
+}
+
+void CommandConsole::save_command(const std::vector<std::string>& args, bool quick) {
+    const std::string path = (!quick && args.size() > 1) ? args[1] : kQuickState;
+    machine_.floppy().flush();
+    machine_.ata().flush_all();
+    machine_.save_state(path);
+    std::error_code ec;
+    const u64 bytes = std::filesystem::file_size(path, ec);
+    emit(std::format("saved {} ({}) at {:.3f} s", path,
+                     ec ? std::string("unknown size") : format_bytes(bytes),
+                     machine_.emulated_seconds()));
+}
+
+void CommandConsole::load_command(const std::vector<std::string>& args, bool quick) {
+    const std::string path = (!quick && args.size() > 1) ? args[1] : kQuickState;
+    machine_.load_state(path);
+    emit(std::format("loaded {} (now {:.3f} s emulated)", path, machine_.emulated_seconds()));
 }
 
 void CommandConsole::perf_command(const std::vector<std::string>& args) {

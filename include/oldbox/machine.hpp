@@ -21,6 +21,7 @@ namespace oldbox {
 class SdlFrontend;
 
 class Machine {
+    friend class StateCodec;
 public:
     explicit Machine(SystemConfig cfg);
     ~Machine();
@@ -32,6 +33,11 @@ public:
     void run_slice(double seconds);
     void run_instructions(u64 count);
     void run_frame();
+
+    // Core machine snapshot (CPU, RAM, chipset, storage controller, video).
+    // The audio device is re-initialised on load; see docs/state.md.
+    void save_state(const std::string& path) const;
+    void load_state(const std::string& path);
 
     [[nodiscard]] SystemConfig& config() { return cfg_; }
     [[nodiscard]] Cpu& cpu() { return cpu_; }
@@ -92,6 +98,10 @@ private:
     PciBus pci_;
     Cpu cpu_;
     I440BX northbridge_;
+    // One AGP bridge per machine: a function-local static here used to bind
+    // every Machine in the process to the first machine's bus, which broke
+    // multi-machine tests and save-state round trips.
+    AgpBridge agp_;
     Piix4 piix4_;
     S3Trio64 s3_;
     std::unique_ptr<Voodoo> voodoo_;

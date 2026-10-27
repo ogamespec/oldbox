@@ -37,6 +37,11 @@ int main(int argc, char** argv) {
                 machine.set_cmos(u8(i), u8(b));
             }
         }
+        if (!cli.config.load_state_path.empty()) {
+            machine.load_state(cli.config.load_state_path);
+            std::fprintf(stderr, "oldbox: loaded state %s at %.3f s\n",
+                         cli.config.load_state_path.c_str(), machine.emulated_seconds());
+        }
         if (cli.config.demo == "voodoo") {
             auto* v = machine.voodoo();
             if (!v) { std::fprintf(stderr, "oldbox: Voodoo is disabled\n"); return 1; }
@@ -146,6 +151,13 @@ int main(int argc, char** argv) {
             }
         }
         if (machine.running() && cli.config.run_seconds > now) run_slice(cli.config.run_seconds - now);
+        if (!cli.config.save_state_path.empty()) {
+            machine.floppy().flush();
+            machine.ata().flush_all();
+            machine.save_state(cli.config.save_state_path);
+            std::fprintf(stderr, "oldbox: saved state %s at %.3f s\n",
+                         cli.config.save_state_path.c_str(), machine.emulated_seconds());
+        }
         if (!cli.config.trace_file.empty() && !machine.trace_history().empty()) {
             std::ofstream out(cli.config.trace_file, std::ios::binary);
             for (const auto& line : machine.trace_history()) out << line << "\n";

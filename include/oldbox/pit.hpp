@@ -8,6 +8,7 @@
 namespace oldbox {
 
 class Pit : public IoDevice {
+    friend class StateCodec;
 public:
     using IrqFn = std::function<void(bool)>;
 

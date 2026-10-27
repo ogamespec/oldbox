@@ -12,6 +12,7 @@ namespace oldbox {
 //   - LM78 hardware monitor at 7-bit address 0x2D,
 //   - ICS clock generator at 7-bit address 0x69 (programmed via block writes).
 class Smbus : public IoDevice {
+    friend class StateCodec;
 public:
     explicit Smbus(Bus& bus);
     void reset();

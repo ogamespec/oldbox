@@ -5,6 +5,7 @@
 namespace oldbox {
 
 class Dma : public IoDevice {
+    friend class StateCodec;
 public:
     explicit Dma(Bus& bus);
     void reset();

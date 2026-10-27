@@ -5,6 +5,7 @@
 namespace oldbox {
 
 class LocalApic : public MemoryDevice {
+    friend class StateCodec;
 public:
     using Deliver = std::function<void(int)>;
     explicit LocalApic(Deliver deliver = {});

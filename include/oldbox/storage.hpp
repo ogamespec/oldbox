@@ -10,6 +10,7 @@ class Dma;
 // Intel 82371AB (PIIX4) IDE controller: PCI function 8086:7111, class 0101,
 // two ATA channels with PIO, LBA28/LBA48 and ATAPI packet devices.
 class AtaController : public PciDevice, public IoDevice {
+    friend class StateCodec;
 public:
     using IrqFn = std::function<void(int, bool)>;
     AtaController(Bus& bus, IrqFn irq);
@@ -284,6 +285,7 @@ private:
 // Intel 82077AA / PC-AT floppy disk controller, primary interface at
 // 0x3F0-0x3F7, IRQ6, 8-bit DMA channel 2.
 class FloppyController : public IoDevice {
+    friend class StateCodec;
 public:
     using IrqFn = std::function<void(int, bool)>;
     FloppyController(Bus& bus, Dma& dma, IrqFn irq);

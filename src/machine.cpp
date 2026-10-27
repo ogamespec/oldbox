@@ -1,6 +1,7 @@
 #include "oldbox/machine.hpp"
 #include "oldbox/keymap.hpp"
 #include "oldbox/perf.hpp"
+#include "oldbox/state.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
@@ -40,6 +41,7 @@ Machine::Machine(SystemConfig cfg)
       pci_(),
       cpu_(bus_, sched_mhz_, cfg_.cpu == CpuModel::pentium2_333),
       northbridge_(bus_, cfg_.memory.size_mb),
+      agp_(bus_),
       piix4_(bus_, sched_mhz_, cfg_.memory.size_mb, [this]() { pending_reset_ = true; }),
       s3_(bus_, cfg_.video.s3_memory_mb, sched_mhz_),
       voodoo_(cfg_.video.voodoo_enabled ? std::make_unique<Voodoo>(bus_, cfg_.video.voodoo_memory_mb) : nullptr),
@@ -166,6 +168,9 @@ if (cfg_.watch_phys) {
 
 Machine::~Machine() = default;
 
+void Machine::save_state(const std::string& path) const { save_machine_state(*this, path); }
+void Machine::load_state(const std::string& path) { load_machine_state(*this, path); }
+
 
 
 void Machine::load_firmware() {
@@ -231,8 +236,7 @@ void Machine::load_firmware() {
 
 void Machine::setup_pci() {
     pci_.add_device(&northbridge_, 0, 0);
-    static AgpBridge agp(bus_);
-    pci_.add_device(&agp, 1, 0);
+    pci_.add_device(&agp_, 1, 0);
     piix4_.set_multifunction(true);
     pci_.add_device(&piix4_, 7, 0);
     pci_.add_device(&ata_, 7, 1);

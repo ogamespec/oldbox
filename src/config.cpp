@@ -106,6 +106,8 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--screenshot") c.screenshot_path = need(a);
         else if (a == "--dump-text") c.dump_text = true;
         else if (a == "--dump-ram") c.dump_ram_path = need(a);
+        else if (a == "--load-state") c.load_state_path = need(a);
+        else if (a == "--save-state") c.save_state_path = need(a);
         else if (a == "--demo") c.demo = need(a);
         else if (a == "--trace-cs") c.trace_cs = parse_hex(need(a), "CS selector");
         else if (a == "--trace-file") c.trace_file = need(a);
@@ -186,6 +188,8 @@ void print_usage(const char* argv0) {
         "  --enter-start N        first --enter-every press (default type-delay + 8)\n"
         "  --dump-text            print the VGA text buffer on exit\n"
         "  --dump-ram FILE        save the first 1 MiB of guest RAM\n"
+        "  --load-state FILE      restore a core save state before running\n"
+        "  --save-state FILE      write a core save state on exit\n"
         "  --max-instructions N   stop after N CPU instructions\n"
         "  --instr-log FILE       log every executed instruction to FILE\n"
         "  --trace-cs HEX         keep an instruction trace of one CS selector\n"

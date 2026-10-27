@@ -107,6 +107,7 @@ struct ModRm {
 };
 
 class Cpu {
+    friend class StateCodec;
 public:
     using InterruptAck = std::function<int()>;
 
@@ -249,6 +250,8 @@ public:
     [[nodiscard]] u32 last_exception_error() const { return last_exception_error_; }
     [[nodiscard]] int last_exception_vector() const { return last_exception_vector_; }
     [[nodiscard]] int last_delivery_size() const { return last_delivery_size_; }
+    [[nodiscard]] bool irq_line() const { return irq_line_; }
+    [[nodiscard]] bool irq_line_known() const { return irq_line_known_; }
     [[nodiscard]] u32 ldt_base() const { return ldt_base_; }
     [[nodiscard]] u32 ldt_limit() const { return ldt_limit_; }
     [[nodiscard]] u32 tr_base() const { return tr_base_; }

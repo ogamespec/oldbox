@@ -34,6 +34,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_x87.cpp
     src/cpu/cpu_system.cpp
     src/machine.cpp
+    src/state.cpp
     src/console.cpp
     src/perf.cpp
     src/keymap.cpp
@@ -113,7 +114,8 @@ if(OLDBOX_BUILD_TESTS)
     add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_audit.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_io.cpp tests/test_voodoo.cpp
         tests/test_s3.cpp tests/test_audio.cpp tests/test_storage.cpp tests/test_devices.cpp
         tests/test_chipset.cpp
-        tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp tests/test_perf.cpp)
+        tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp tests/test_perf.cpp
+        tests/test_state.cpp)
     target_link_libraries(oldbox_tests PRIVATE oldbox_core)
     target_include_directories(oldbox_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     oldbox_warnings(oldbox_tests)

@@ -11,6 +11,7 @@ namespace oldbox {
 // filtering, chroma key, alpha test/blend, fog, depth test and the FBI/TREX
 // command FIFO semantics.
 class Voodoo : public PciDevice, public MemoryDevice, public VideoSource {
+    friend class StateCodec;
 public:
     Voodoo(Bus& bus, u32 memory_mb);
     ~Voodoo() override;

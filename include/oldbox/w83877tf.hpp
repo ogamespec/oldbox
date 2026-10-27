@@ -14,6 +14,7 @@ namespace oldbox {
 //   - write 87h twice to 3F0h (HEFRAS strap = 1): index = 3F0h, data = 3F1h
 // Exit: write AAh to 3F0h, or any value != 89h to 250h.
 class W83877TF : public IoDevice {
+    friend class StateCodec;
 public:
     W83877TF();
     void reset();

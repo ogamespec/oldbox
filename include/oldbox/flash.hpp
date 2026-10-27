@@ -12,6 +12,7 @@ namespace oldbox {
 // the chip is mapped through both the 4 GiB alias and the PIIX4 low-BIOS PAM
 // window by Machine.
 class Flash : public MemoryDevice {
+    friend class StateCodec;
 public:
     Flash(std::vector<u8> image, std::string path);
     ~Flash() override;

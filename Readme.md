@@ -152,10 +152,15 @@ pressed ctrl+alt+del
 
 Команды: `help`, `status`, `devices`, `floppy [a|b] status|insert|eject`,
 `cdrom status|insert|eject`, `insert`, `eject`, `images`, `key`, `type`,
-`screenshot`, `text`, `cmos`, `perf`, `pause`, `resume`, `step`, `reset`, `flush`,
-`version`, `quit`. В панели работают `Tab` (дополнение команд и путей),
+`screenshot`, `text`, `cmos`, `perf`, `save`, `load`, `quicksave`, `quickload`,
+`pause`, `resume`, `step`, `reset`, `flush`, `version`, `quit`. В панели работают `Tab` (дополнение команд и путей),
 `Up`/`Down` (история), `PgUp`/`PgDn` (прокрутка), `Ctrl+L` (очистка),
 `Esc` (закрыть).
+
+Снимки машины: `save [FILE]` / `load [FILE]` (по умолчанию
+`oldbox-quicksave.state`), псевдонимы `quicksave`/`quickload`. Для headless-
+отладки есть `--load-state FILE` и `--save-state FILE`. Формат, состав и
+ограничения — в [docs/state.md](docs/state.md).
 
 Технически смена носителя — это не эмуляция «горячего подключения»: дискета
 взводит линию DSKCHG 82077AA (сброса контроллера нет), а CD остаётся
@@ -261,6 +266,8 @@ SB16/EMU8000/OPL3, счётчики производительности (ари
   тормозит эмулятор, как читать панель и график, `perf`/`--perf`.
 - [docs/console.md](docs/console.md) — консоль команд (F2/CLI): смена дискет и
   CD на ходу, пауза, скриншоты, `key`/`type`, `cmos` и другие команды.
+- [docs/state.md](docs/state.md) — save states: формат, `save`/`load`,
+  `--load-state`/`--save-state`, что входит в снимок и ограничения.
 - [docs/cpu.md](docs/cpu.md) — модель Pentium II, режимы, MSR, покрытие и ограничения.
 - [docs/cpu-audit.md](docs/cpu-audit.md) — методика аудита инструкций, найденные
   ошибки, покрытие по группам и остаточные пробелы.

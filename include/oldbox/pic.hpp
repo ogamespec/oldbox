@@ -4,6 +4,7 @@
 namespace oldbox {
 
 class Pic : public IoDevice {
+    friend class StateCodec;
 public:
     explicit Pic(Bus& bus);
     void reset();

@@ -8,6 +8,7 @@ namespace oldbox {
 // register/planar data path, S3 extended CRTC/sequencer registers, the
 // linear frame buffer and the packed MMIO 2D engine used by the Trio64 BIOS.
 class S3Trio64 : public PciDevice, public IoDevice, public VideoSource {
+    friend class StateCodec;
 public:
     S3Trio64(Bus& bus, u32 vram_mb, u32 cpu_mhz);
     ~S3Trio64() override;

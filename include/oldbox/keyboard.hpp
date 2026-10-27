@@ -14,6 +14,7 @@ namespace oldbox {
 // set (FF/FE/F6/F5/F4/F3/F2/F0/EE/EC/EB/EA/E9/E8/E7/E6) with the standard
 // 3-byte PS/2 movement packet.
 class Keyboard : public IoDevice {
+    friend class StateCodec;
 public:
     using IrqFn = std::function<void(int, bool)>;
     using A20Fn = std::function<void(bool)>;

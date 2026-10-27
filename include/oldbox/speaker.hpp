@@ -26,6 +26,7 @@ struct SpeakerPoint {
 // DD2 intro, so the model keeps the unipolar waveform and a ~10 Hz DC blocker
 // instead of generating a symmetric +/- square wave.
 class PcSpeaker {
+    friend class StateCodec;
 public:
     static constexpr int amplitude = 0x1800;
 

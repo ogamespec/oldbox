@@ -14,6 +14,7 @@ namespace oldbox {
 // with the integrated 8259 PICs, 8254 PIT, MC146818 RTC, 82C37 DMAs, 8042
 // interface, power-management block and the SMBus host controller.
 class Piix4 : public PciDevice, public IoDevice {
+    friend class StateCodec;
 public:
     using ResetFn = std::function<void()>;
     Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset = {});
@@ -88,6 +89,7 @@ private:
 // function also owns the power management base address (PMBA, 40-43h) and the
 // PM register enable (PMREGMISC bit 0) per the datasheet function-3 map.
 class SmbusPci : public PciDevice {
+    friend class StateCodec;
 public:
     SmbusPci(Bus& bus, Smbus& smbus, Piix4* piix4 = nullptr);
     ~SmbusPci() override;
@@ -111,6 +113,7 @@ private:
 
 // PIIX4 USB UHCI controller (device 7, function 2).
 class UsbController : public PciDevice {
+    friend class StateCodec;
 public:
     UsbController(Bus& bus);
     u32 config_read32(u8 off) override;

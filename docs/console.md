@@ -77,6 +77,10 @@ insert C:\Isos\Windows95OSR2.iso
 | `screenshot [FILE]` | сохранить текущий кадр в PPM (по умолчанию `oldbox-console.ppm`) |
 | `text [FILE]` | вывести текстовый экран VGA (в консоль или в файл) |
 | `cmos dump\|get IDX\|set IDX VAL` | чтение/запись CMOS; `set` пересчитывает контрольную сумму Award |
+| `save [FILE]` | записать save state (по умолчанию `oldbox-quicksave.state`) |
+| `load [FILE]` | восстановить save state (по умолчанию `oldbox-quicksave.state`) |
+| `quicksave` | сохранить в `oldbox-quicksave.state` |
+| `quickload` | восстановить `oldbox-quicksave.state` |
 | `perf [report\|reset\|on\|off]` | счётчики производительности: отчёт по узлам, сброс, включение/выключение сбора |
 | `pause` | остановить продвижение эмулируемого времени |
 | `resume` | продолжить |

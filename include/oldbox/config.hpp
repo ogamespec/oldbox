@@ -101,6 +101,10 @@ struct SystemConfig {
     bool dump_text = false;
     std::string dump_ram_path;
     std::string demo;
+    // Core machine snapshot (see docs/state.md).  --load-state restores after
+    // the initial reset; --save-state writes once the run finishes.
+    std::string load_state_path;
+    std::string save_state_path;
 
     // Diagnostics (see docs/debugging.md).  All addresses/selectors are hex.
     bool exc_trace = false;                        // log exceptions with full state

@@ -9,6 +9,7 @@ namespace oldbox {
 // 0101101b = 0x2D), so only its register file is modelled here; the SMBus
 // controller serves reads/writes against it.
 class Lm78 {
+    friend class StateCodec;
 public:
     Lm78();
     void reset();

@@ -9,6 +9,7 @@ namespace oldbox {
 class PciBus;
 
 class PciDevice {
+    friend class StateCodec;
 public:
     PciDevice(u16 vendor, u16 device, u8 class_code, u8 subclass, u8 prog_if = 0, u8 revision = 0);
     virtual ~PciDevice() = default;
@@ -63,6 +64,7 @@ protected:
 };
 
 class PciBus : public IoDevice {
+    friend class StateCodec;
 public:
     PciBus();
     void add_device(PciDevice* dev, int dev_num, int fn = 0);

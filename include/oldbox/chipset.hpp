@@ -6,6 +6,7 @@
 namespace oldbox {
 
 class I440BX : public PciDevice {
+    friend class StateCodec;
 public:
     I440BX(Bus& bus, u32 memory_mb);
     void set_memory_size(u32 mb) { memory_mb_ = mb; }

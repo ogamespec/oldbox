@@ -6,6 +6,7 @@
 namespace oldbox {
 
 class Rtc : public IoDevice {
+    friend class StateCodec;
 public:
     using IrqFn = std::function<void(bool)>;
     explicit Rtc(Bus& bus, IrqFn irq8 = {});
