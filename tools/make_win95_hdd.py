@@ -169,6 +169,15 @@ def main() -> int:
     volume = Fat16Volume(image, base)
     volume.clear_root()
     volume.flush_fat()
+    # The source image was partitioned with a 255-head CHS translation while
+    # the Award BIOS uses LBA with its own geometry.  Setup/ScanDisk then
+    # reports a suspect partition and refuses to continue.  Mark it LBA
+    # (type 0x0E); CHS fields are advisory for LBA partitions.
+    for i in range(4):
+        entry = 446 + i * 16
+        if u32(image, entry + 8) == base // SECTOR and u32(image, entry + 12):
+            image[entry + 4] = 0x0E
+            break
     args.out.write_bytes(image)
 
     print(f"wrote {args.out} ({len(image)} bytes)")
