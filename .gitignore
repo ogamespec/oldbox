@@ -17,3 +17,4 @@ compile_commands.json
 /temp
 *.pyc
 .vs
+/*.exe
