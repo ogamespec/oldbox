@@ -26,6 +26,8 @@ SDL3-фронтендом. Проект написан с нуля по перв
 Windows-сборка (Visual Studio 2026, MSVC, без `as`/`ld`) описана в
 [docs/windows.md](docs/windows.md):
 `build-windows.bat` или `cmake --preset windows-vs2026` + `cmake --build --preset windows-vs2026-release`.
+После настройки откройте готовое решение [`oldbox.slnx`](oldbox.slnx) в
+корне (VS2026).
 Готовый бинарник Windows — `build\vs2026\Release\oldbox.exe`; быстрый запуск
 оригинального Award BIOS в окне — `run.bat` (меню: обычный запуск, автовход в
 Setup по Del, FreeDOS-дискета, headless-проверка). В эмуляторе: `F2` —

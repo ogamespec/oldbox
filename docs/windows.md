@@ -62,10 +62,31 @@ cmake --build --preset windows-vs2026-debug
 ctest --preset windows-vs2026-debug --output-on-failure
 ```
 
-Открыть в Visual Studio: **File → Open → Folder…** и выбрать корень
-репозитория; VS подхватит `CMakePresets.json`. Либо
-`cmake --preset windows-vs2026` и открыть `build\vs2026\oldbox.slnx`
-(или сгенерированный `.sln`).
+## Решение `oldbox.slnx`
+
+В корне репозитория лежит `oldbox.slnx` — решение Visual Studio 2026,
+которое ссылается на проекты, сгенерированные CMake в `build\vs2026`.
+Перед первым открытием один раз настройте сборку:
+
+```bat
+cmake --preset windows-vs2026
+```
+
+или `build-windows.bat`. После этого откройте `oldbox.slnx` в VS2026:
+доступны конфигурации Debug/Release (x64), стартовый проект — `oldbox`.
+CMake также создаёт собственное решение `build\vs2026\oldbox.slnx`; корневой
+файл — удобная точка входа к сгенерированным проектам.
+
+Решение рассчитано на штатный preset `windows-vs2026`, в котором SDL3
+скачивается в `build\vs2026\_deps`. Если SDL3 уже установлен в системе,
+CMake не создаёт `_deps`-проекты — в этом случае открывайте
+сгенерированный `build\vs2026\oldbox.slnx`.
+
+## Открыть в Visual Studio
+
+**File → Open → Folder…** и выбрать корень репозитория; VS подхватит
+`CMakePresets.json`. Либо `cmake --preset windows-vs2026` и открыть
+`build\vs2026\oldbox.slnx` (или сгенерированный `.sln`).
 
 ### Ручной запуск CMake из VS2026
 

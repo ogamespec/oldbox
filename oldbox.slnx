@@ -1,0 +1,32 @@
+<!-- Visual Studio 2026 (18.x) solution for the CMake-generated VS2026
+     projects. Run the windows-vs2026 CMake preset (or build-windows.bat)
+     once before opening this file. -->
+<Solution>
+  <Configurations>
+    <BuildType Name="Debug" />
+    <BuildType Name="Release" />
+    <BuildType Name="MinSizeRel" />
+    <BuildType Name="RelWithDebInfo" />
+    <Platform Name="x64" />
+  </Configurations>
+  <Project Path="build/vs2026/oldbox.vcxproj" DefaultStartup="true" Id="4730f139-23f7-3e45-8f81-5bfb221a946a">
+    <BuildDependency Project="build/vs2026/oldbox_core.vcxproj" />
+    <BuildDependency Project="build/vs2026/ZERO_CHECK.vcxproj" />
+    <BuildDependency Project="build/vs2026/_deps/sdl3-build/SDL3-static.vcxproj" />
+  </Project>
+  <Project Path="build/vs2026/oldbox_core.vcxproj" Id="1767143e-7907-3848-a042-84c4c18a095f">
+    <BuildDependency Project="build/vs2026/ZERO_CHECK.vcxproj" />
+  </Project>
+  <Project Path="build/vs2026/oldbox_tests.vcxproj" Id="3a8c0577-4099-3538-930e-793cfb16b0b5">
+    <BuildDependency Project="build/vs2026/oldbox_core.vcxproj" />
+    <BuildDependency Project="build/vs2026/ZERO_CHECK.vcxproj" />
+  </Project>
+  <Project Path="build/vs2026/ZERO_CHECK.vcxproj" Id="d073ec8c-e4bd-38a2-9b44-29fd44f81fdf" />
+  <Project Path="build/vs2026/_deps/sdl3-build/SDL3-static.vcxproj" Id="ebc9a169-517f-3152-a846-bc689cc9f96e">
+    <BuildDependency Project="build/vs2026/ZERO_CHECK.vcxproj" />
+    <BuildDependency Project="build/vs2026/_deps/sdl3-build/SDL_uclibc.vcxproj" />
+  </Project>
+  <Project Path="build/vs2026/_deps/sdl3-build/SDL_uclibc.vcxproj" Id="b263414b-2135-3408-9fc3-a44b42892a22">
+    <BuildDependency Project="build/vs2026/ZERO_CHECK.vcxproj" />
+  </Project>
+</Solution>
