@@ -16,11 +16,19 @@ namespace oldbox {
 class Piix4 : public PciDevice, public IoDevice {
     friend class StateCodec;
 public:
-    using ResetFn = std::function<void()>;
+    // INIT (soft reset) and CPURST/PCIRST (hard reset) are distinct on the
+    // PIIX4 (datasheet 4.2.7.4): port 92h bit 0 and the 8042 RCIN# pulse
+    // assert INIT only, while RC bit 2 with SRST=1 starts a hard reset.
+    // "hard" is false for INIT.
+    using ResetFn = std::function<void(bool hard)>;
     Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset = {});
     ~Piix4() override;
 
     void reset();
+    // PCIRST# part that Machine::hard_reset() needs without clearing the
+    // battery-backed CMOS: the RC register returns to its 00h default, so the
+    // next RCPU 0->1 edge is recognised again.
+    void reset_control_state() { prev_cf9_ = 0x00; }
     void tick(u64 cpu_cycles);
     [[nodiscard]] Pic& pic() { return pic_; }
     [[nodiscard]] const Pic& pic() const { return pic_; }

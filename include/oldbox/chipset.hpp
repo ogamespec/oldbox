@@ -14,7 +14,14 @@ public:
     u32 config_read32(u8 off) override;
     void config_write8(u8 off, u8 value) override;
     void config_write32(u8 off, u32 value) override;
-    void pci_reset() override { d_lck_ = false; }
+    void pci_reset() override {
+        // PCIRST# restores PAM[6:0] to 00h (datasheet 3.3.17): reads and
+        // writes go back to PCI until the firmware shadows the BIOS again.
+        // Without this a warm reset starts with the previous boot's shadow
+        // mapping still in place and the decompressor runs from stale DRAM.
+        d_lck_ = false;
+        for (int i = 0; i < 7; ++i) cfg_[0x59 + i] = 0x00;
+    }
     [[nodiscard]] std::string describe() const;
 private:
     Bus& bus_;

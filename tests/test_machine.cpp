@@ -76,6 +76,33 @@ TEST(freedos_boots_to_command_prompt_with_reference_bios) {
     CHECK(text.find("FreeDOS kernel") != std::string::npos);
 }
 
+TEST(machine_hard_reset_preserves_dram_and_cmos) {
+    // CF9h with SRST=1 (Award's Save & Exit) is a hard reset: CPURST/PCIRST
+    // restart the CPU and restore the chipset mapping, but DRAM and the
+    // battery-backed CMOS survive.  Clearing either one sends the warm-boot
+    // path into erased memory.
+    const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
+    if (bios.empty()) {
+        std::printf("[ SKIP ] hard reset integration: assets/bios/EP-ZXA.bin missing\n");
+        return;
+    }
+    SystemConfig cfg;
+    cfg.firmware.bios_path = bios;
+    cfg.headless = true;
+    cfg.no_sdl_audio = true;
+    cfg.audio.enabled = false;
+    cfg.video.voodoo_enabled = false;
+    Machine machine(cfg);
+    machine.reset();
+    machine.bus().write8(0x00200000, 0xa5);
+    machine.set_cmos(0x30, 0x5a);
+    machine.hard_reset();
+    CHECK_EQ(machine.cpu().state().seg[1].selector, 0xf000u);
+    CHECK_EQ(machine.cpu().state().eip, 0xfff0u);
+    CHECK_EQ(machine.bus().read8(0x00200000), 0xa5u);
+    CHECK_EQ(machine.cmos(0x30), 0x5au);
+}
+
 TEST(machine_key_event_maps_sdl_arrows_and_alt) {
     const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
     if (bios.empty()) {

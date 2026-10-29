@@ -42,7 +42,10 @@ Machine::Machine(SystemConfig cfg)
       cpu_(bus_, sched_mhz_, cfg_.cpu == CpuModel::pentium2_333),
       northbridge_(bus_, cfg_.memory.size_mb),
       agp_(bus_),
-      piix4_(bus_, sched_mhz_, cfg_.memory.size_mb, [this]() { pending_reset_ = true; }),
+      piix4_(bus_, sched_mhz_, cfg_.memory.size_mb, [this](bool hard) {
+          pending_reset_ = true;
+          pending_reset_hard_ = hard;
+      }),
       s3_(bus_, cfg_.video.s3_memory_mb, sched_mhz_),
       voodoo_(cfg_.video.voodoo_enabled ? std::make_unique<Voodoo>(bus_, cfg_.video.voodoo_memory_mb) : nullptr),
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
@@ -253,6 +256,10 @@ void Machine::setup_pci() {
     s3_.config_write32(0x04, 0x00000002);
     s3_.config_write32(0x10, 0xe0000000);
     s3_.config_write32(0x14, 0xe1000000);
+    // The PIIX4 reset control register lives at 0CF9h, inside the
+    // mechanism #1 port block; the bus forwards byte accesses there to the
+    // PIIX4 instead of treating them as address-register byte 1.
+    pci_.set_reset_port(&piix4_);
     bus_.map_io(0xcf8, 8, &pci_, "PCI config mechanism #1");
     logf(LogLevel::debug, "pci", "devices:\n{}", pci_.config_dump());
 }
@@ -338,6 +345,7 @@ void Machine::reset() {
     port80_last_ = 0;
     post_text_.clear();
     bus_.reset();
+    pci_.reset();
     piix4_.reset();
     superio_.reset();
     // Award treats CMOS[0x12] high nibble 0xF as "auto-detect the primary
@@ -376,6 +384,45 @@ void Machine::reset() {
     log(LogLevel::info, "machine", "reset; CPU starts at F000:FFF0");
 }
 
+void Machine::hard_reset() {
+    running_ = true;
+    port80_last_ = 0;
+    post_text_.clear();
+    // PCIRST#: the host bridge returns PAM to its reset value, so the reset
+    // vector comes from the flash again until the firmware re-shadows it.
+    northbridge_.pci_reset();
+    piix4_.reset_control_state();
+    // Chipset devices reset, but the RTC/CMOS does not: it is battery-backed
+    // and holds both the user's settings and Award's warm-boot marker.
+    piix4_.pic().reset();
+    piix4_.pit().reset();
+    piix4_.dma().reset();
+    piix4_.keyboard().reset();
+    piix4_.smbus().reset();
+    s3_.reset();
+    s3_.set_text_mode();
+    if (voodoo_) voodoo_->reset();
+    ata_.reset();
+    floppy_.reset();
+    if (audio_) audio_->reset();
+    speaker_.reset();
+    if (apic_) apic_->reset();
+    cpu_.reset();
+    bus_.set_a20(true);
+    start_cycles_ = cpu_.state().cycles;
+    log(LogLevel::info, "machine", "hard reset; CPU starts at F000:FFF0 (DRAM and CMOS preserved)");
+}
+
+void Machine::init() {
+    // INIT is not a power-on reset: the PIIX4 asserts only INIT (datasheet
+    // 4.2.7.4), so DRAM, CMOS, PCI configuration, PAM and the device models
+    // keep their state.  The 8042 reset command (RCIN#) and port 92h
+    // FAST_INIT request exactly this; the CPU restarts at F000:FFF0.
+    cpu_.reset();
+    start_cycles_ = cpu_.state().cycles;
+    log(LogLevel::info, "machine", "INIT; CPU starts at F000:FFF0 (memory and CMOS preserved)");
+}
+
 u64 Machine::cycles_per_second() const { return u64(sched_mhz_) * 1'000'000ull; }
 u64 Machine::cycles_per_frame() const { return cycles_per_second() / 60ull; }
 
@@ -400,7 +447,12 @@ void Machine::run_instructions(u64 count) {
     const u64 end = cpu_.instruction_count() + count;
     while (running_ && cpu_.instruction_count() < end) {
         cpu_.step();
-        if (pending_reset_) { pending_reset_ = false; reset(); continue; }
+        if (pending_reset_) {
+            pending_reset_ = false;
+            if (pending_reset_hard_) hard_reset();
+            else init();
+            continue;
+        }
         if (cpu_.state().shutdown) break;
     }
 }
@@ -442,7 +494,8 @@ void Machine::run_to(u64 target_cycles) {
         cpu_.step();
         if (pending_reset_) {
             pending_reset_ = false;
-            reset();
+            if (pending_reset_hard_) hard_reset();
+            else init();
             last_tick = cpu_.state().cycles;
             continue;
         }

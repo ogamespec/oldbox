@@ -16,7 +16,11 @@ Piix4::Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset_cb)
       }),
       dma_(bus),
       keyboard_(bus, [this](int irq, bool level) { pic_.set_line(irq, level); },
-                [this](bool enabled) { a20(enabled); }),
+                [this](bool enabled) { a20(enabled); },
+                // 8042 command FEh / output-port bit 0 pulse RCIN#, which the
+                // PIIX4 turns into INIT (datasheet 4.2.7.4 and INIT pin
+                // description): the CPU restarts, RAM/CMOS/chipset state stay.
+                [this]() { if (reset_) reset_(false); }),
       smbus_(bus), reset_(std::move(reset_cb)) {
     set_name("82371EB PIIX4E ISA Bridge");
     cfg_[0x04] = 0x00; cfg_[0x05] = 0x00; // PCICMD reset 0000h
@@ -56,7 +60,6 @@ Piix4::Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset_cb)
     bus_.map_io(0x60, 1, &keyboard_, "8042 data");
     bus_.map_io(0x64, 1, &keyboard_, "8042 command");
     bus_.map_io(0x92, 1, this, "PIIX4 fast A20/reset");
-    bus_.map_io(0xcf9, 1, this, "PIIX4 reset control");
     smbus_.generate_spd(memory_mb, 1);
     smbus_.set_irq([this](bool level) { pic_.set_line(9, level); });
     a20(true);
@@ -158,7 +161,7 @@ void Piix4::io_write8(u16 port, u8 value) {
             std::fprintf(stderr, "PIIX4 92h <- %02x pc=%04x:%04x\n", value, bus_.watch_cs(), bus_.watch_pc());
         port92_ = value;
         a20((value & 0x02) != 0);
-        if (value & 0x01) { if (reset_) reset_(); } // FAST_INIT pulse
+        if (value & 0x01) { if (reset_) reset_(false); } // FAST_INIT: INIT, not a hard reset
     } else if (port == 0x91) {
         (void)value;
     } else if (port == 0xcf9) {
@@ -166,7 +169,8 @@ void Piix4::io_write8(u16 port, u8 value) {
             std::fprintf(stderr, "PIIX4 cf9h <- %02x pc=%04x:%04x\n", value, bus_.watch_cs(), bus_.watch_pc());
         // RC (PIIX4 datasheet 4.2.7.4): a 0->1 transition of RCPU (bit 2)
         // initiates a reset; SRST (bit 1) selects hard vs soft reset.
-        if ((value & 0x04) && !(prev_cf9_ & 0x04) && reset_) reset_();
+        if ((value & 0x04) && !(prev_cf9_ & 0x04) && reset_)
+            reset_((value & 0x02) != 0);
         prev_cf9_ = value;
     }
 }

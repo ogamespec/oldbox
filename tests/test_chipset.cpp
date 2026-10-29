@@ -1001,13 +1001,15 @@ TEST(piix4_config_reset_values) {
 TEST(piix4_port92_a20_and_fast_init) {
     Bus bus(2 * megabyte);
     int resets = 0;
-    Piix4 piix(bus, 32, 2, [&]() { ++resets; });
+    bool last_hard = true;
+    Piix4 piix(bus, 32, 2, [&](bool hard) { ++resets; last_hard = hard; });
     CHECK_EQ(piix.io_read8(0x92), 0x00u); // datasheet reset value
     piix.io_write8(0x92, 0x02);
     CHECK(bus.a20());
     CHECK_EQ(resets, 0);
-    piix.io_write8(0x92, 0x03); // FAST_INIT bit: pulse
+    piix.io_write8(0x92, 0x03); // FAST_INIT bit: INIT pulse, not a hard reset
     CHECK_EQ(resets, 1);
+    CHECK(!last_hard);
     CHECK(bus.a20());
     piix.io_write8(0x92, 0x00);
     CHECK(!bus.a20());
@@ -1017,18 +1019,77 @@ TEST(piix4_port92_a20_and_fast_init) {
 TEST(piix4_port_cf9_reset_control) {
     Bus bus(2 * megabyte);
     int resets = 0;
-    Piix4 piix(bus, 32, 2, [&]() { ++resets; });
+    bool last_hard = false;
+    Piix4 piix(bus, 32, 2, [&](bool hard) { ++resets; last_hard = hard; });
     CHECK_EQ(piix.io_read8(0xcf9), 0x00u);
     piix.io_write8(0xcf9, 0x02); // SRST alone: no reset
     CHECK_EQ(resets, 0);
-    piix.io_write8(0xcf9, 0x06); // RCPU 0->1: reset
+    piix.io_write8(0xcf9, 0x06); // RCPU 0->1 with SRST=1: hard reset
     CHECK_EQ(resets, 1);
+    CHECK(last_hard);
     piix.io_write8(0xcf9, 0x06); // level: no new edge
     CHECK_EQ(resets, 1);
     piix.io_write8(0xcf9, 0x02);
     CHECK_EQ(resets, 1);
-    piix.io_write8(0xcf9, 0x06); // fresh edge
+    piix.io_write8(0xcf9, 0x04); // RCPU 0->1 with SRST=0: INIT
     CHECK_EQ(resets, 2);
+    CHECK(!last_hard);
+    // PCIRST# clears RC; a later Save & Exit writes 06h again from reset
+    // state and must produce a fresh edge instead of being treated as level.
+    piix.reset_control_state();
+    CHECK_EQ(piix.io_read8(0xcf9), 0x00u);
+    piix.io_write8(0xcf9, 0x06);
+    CHECK_EQ(resets, 3);
+    CHECK(last_hard);
+}
+
+TEST(piix4_8042_reset_line_runs_init) {
+    // The 8042 RCIN# pulse is the path Award's "Save & Exit Setup" takes:
+    // mov al,0FEh / out 64h,al then cli/hlt.  It must reach the PIIX4 INIT
+    // callback, and it must be INIT (not a hard reset) so the newly saved
+    // CMOS bytes survive.
+    Bus bus(1 * megabyte);
+    int resets = 0;
+    bool hard = true;
+    Piix4 piix(bus, 32, 1, [&](bool h) { ++resets; hard = h; });
+    bus.io_write8(0x64, 0xfe); // controller command: pulse output port bit 0
+    CHECK_EQ(resets, 1);
+    CHECK(!hard);
+    bus.io_write8(0x64, 0xd1); // write output port: bit 0 low pulses it too
+    bus.io_write8(0x60, 0x02);
+    CHECK_EQ(resets, 2);
+    CHECK(!hard);
+    bus.io_write8(0x64, 0xd1); // bit 0 high: no pulse
+    bus.io_write8(0x60, 0x03);
+    CHECK_EQ(resets, 2);
+}
+
+TEST(piix4_cf9_is_reachable_next_to_pci_config_block) {
+    // 0CF9h is PIIX4 RC, not byte 1 of the PCI configuration address
+    // register.  A byte write there must reset, while a dword config cycle
+    // at 0CF8h must still reach the PCI bus and must not reset anything.
+    Bus bus(1 * megabyte);
+    int resets = 0;
+    bool hard = false;
+    Piix4 piix(bus, 32, 1, [&](bool h) { ++resets; hard = h; });
+    PciBus pci;
+    pci.set_reset_port(&piix);
+    bus.map_io(0xcf8, 8, &pci, "PCI config mechanism #1");
+
+    bus.io_write32(0xcf8, 0x80000000u);
+    CHECK_EQ(resets, 0);
+    CHECK_EQ(pci.config_address(), 0x80000000u);
+    CHECK_EQ(bus.io_read8(0xcf9), 0x00u);
+
+    bus.io_write8(0xcf9, 0x06); // RCPU 0->1, SRST=1: hard reset
+    CHECK_EQ(resets, 1);
+    CHECK(hard);
+    CHECK_EQ(pci.config_address(), 0x80000000u); // address register untouched
+    bus.io_write8(0xcf9, 0x02); // RCPU back to 0 without a reset
+    CHECK_EQ(resets, 1);
+    bus.io_write8(0xcf9, 0x04); // RCPU 0->1, SRST=0: INIT
+    CHECK_EQ(resets, 2);
+    CHECK(!hard);
 }
 
 TEST(piix4_pm_base_on_function3_and_window) {

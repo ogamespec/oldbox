@@ -30,6 +30,17 @@ public:
     Machine& operator=(const Machine&) = delete;
 
     void reset();
+    // Hard reset (PIIX4 CF9h with SRST=1, PCI reset): the CPU restarts and
+    // the chipset returns to its power-on mapping, but the DRAM contents and
+    // the battery-backed CMOS are preserved.  Award's Save & Exit uses this
+    // path and jumps back into the decompressed POST code that is still in
+    // RAM, so clearing DRAM here would send it into erased memory.
+    void hard_reset();
+    // INIT: the CPU restarts at F000:FFF0 while RAM, CMOS and the chipset
+    // (PAM, PCI, memory controller) keep their state.  This is what the 8042
+    // reset pulse (RCIN#) and port 92h FAST_INIT request; Award's Save &
+    // Exit path ends in an 8042 FEh command and waits for exactly this.
+    void init();
     void run_slice(double seconds);
     void run_instructions(u64 count);
     void run_frame();
@@ -124,6 +135,7 @@ private:
     // Set by the chipset (port 92h FAST_INIT, port CF9h RCPU, 8042 reset
     // pulse); the run loops perform the actual reset at a safe point.
     bool pending_reset_ = false;
+    bool pending_reset_hard_ = true; // false = INIT (software reset)
     // Queued text for type_text(): delivered one character at a time from
     // run_slice() so the guest sees individual make/break pairs.
     std::deque<u8> type_codes_;

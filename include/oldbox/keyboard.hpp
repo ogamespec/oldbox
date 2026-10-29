@@ -53,10 +53,18 @@ private:
     // reads port 0x60 again.
     u8 output_latch_ = 0xff;
 
+    // A command response held back until the controller has finished
+    // processing it.  A dedicated struct (rather than std::pair) keeps the
+    // element trivially copyable, which is what the save-state codec needs.
+    struct PendingOutput {
+        OutputByte byte;
+        u64 at = 0;
+    };
+
     std::deque<OutputByte> output_;    // device data waiting for the output buffer
     std::deque<OutputByte> responses_; // controller command responses (served first)
-    std::deque<std::pair<OutputByte, u64>> pending_; // responses waiting out the
-                                                     // controller processing delay
+    std::deque<PendingOutput> pending_; // responses waiting out the
+                                        // controller processing delay
     u64 now_ = 0;            // CPU cycles elapsed since reset
     u64 delay_cycles_ = 8192;// 8042 host command processing latency (~35us)
     std::deque<u8> keyboard_queue_;    // scan codes received from the keyboard

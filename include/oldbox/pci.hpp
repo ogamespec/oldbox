@@ -73,6 +73,13 @@ public:
     [[nodiscard]] std::vector<PciDevice*> devices() const;
     [[nodiscard]] u32 config_address() const { return address_; }
     void set_config_address(u32 v) { address_ = v; }
+    // Byte accesses to 0CF9h belong to the PIIX4 reset control register, not
+    // to byte 1 of the 32-bit configuration address register (the address
+    // register only responds to 32-bit cycles).  The PIIX4 is the device
+    // behind 0CF9h on this chipset, so the bus forwards those byte accesses
+    // to it while keeping the 0CF8h-0CFFh block under one owner (multi-byte
+    // config cycles must not be split at 0CF9h).
+    void set_reset_port(IoDevice* dev) { reset_port_ = dev; }
     void reset();
 
     u8 io_read8(u16 port) override;
@@ -92,6 +99,7 @@ private:
     u32 address_ = 0;
     bool mechanism2_ = false;
     u8 cse_ = 0;
+    IoDevice* reset_port_ = nullptr;
 };
 
 } // namespace oldbox

@@ -147,6 +147,7 @@ void PciBus::reset() {
 }
 
 u8 PciBus::io_read8(u16 port) {
+    if (port == 0xcf9 && reset_port_) return reset_port_->io_read8(port);
     if (port == 0xcf8 || port == 0xcf9) return u8(address_ >> ((port & 3) * 8));
     if (port >= 0xcfc && port <= 0xcff) {
         if (!enabled()) return 0xff;
@@ -157,6 +158,10 @@ u8 PciBus::io_read8(u16 port) {
     return 0xff;
 }
 void PciBus::io_write8(u16 port, u8 value) {
+    if (port == 0xcf9 && reset_port_) {
+        reset_port_->io_write8(port, value);
+        return;
+    }
     if (port == 0xcf8 || port == 0xcf9) {
         const unsigned shift = (port & 3) * 8;
         address_ = (address_ & ~(0xffu << shift)) | (u32(value) << shift);

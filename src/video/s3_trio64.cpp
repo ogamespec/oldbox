@@ -222,7 +222,13 @@ void S3Trio64::config_write32(u8 off, u32 value) {
             rom_mapped_ = false;
             rom_map_base_ = rom_map_size_ = 0;
         }
-        if (rom_bar_ && !rom_.empty()) {
+        // Bit 0 of the expansion ROM BAR is the decode enable.  Firmware
+        // writes the size mask with the enable bit clear while probing (for
+        // this 32 KiB ROM that is FFFF8000h) and only maps the option ROM
+        // after assigning a real address with bit 0 set.  Mapping the probe
+        // value would place the ROM at the top of the 4 GiB space and hide
+        // the system BIOS reset vector at FFFFFFF0h.
+        if (rom_bar_ && rom_enable_ && !rom_.empty()) {
             bus_.map_rom(rom_bar_, u32(rom_.size()), rom_.data(), "S3 option ROM");
             rom_mapped_ = true;
             rom_map_base_ = rom_bar_;
@@ -238,7 +244,7 @@ void S3Trio64::load_option_rom(std::span<const u8> rom) {
         bus_.unmap(rom_map_base_, rom_map_size_);
         rom_mapped_ = false;
     }
-    if (rom_bar_ && !rom_.empty()) {
+    if (rom_bar_ && rom_enable_ && !rom_.empty()) {
         bus_.map_rom(rom_bar_, u32(rom_.size()), rom_.data(), "S3 option ROM");
         rom_mapped_ = true;
         rom_map_base_ = rom_bar_;

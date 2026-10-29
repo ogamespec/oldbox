@@ -475,8 +475,8 @@ void Keyboard::io_write8(u16 port, u8 value) {
 void Keyboard::tick(u64 cycles) {
     now_ += cycles;
     const bool had = current_head() != nullptr;
-    while (!pending_.empty() && pending_.front().second <= now_) {
-        responses_.push_back(pending_.front().first);
+    while (!pending_.empty() && pending_.front().at <= now_) {
+        responses_.push_back(pending_.front().byte);
         pending_.pop_front();
     }
     update_status();

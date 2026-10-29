@@ -152,10 +152,34 @@ TEST(s3_option_rom) {
     CHECK_EQ(f.s3.option_rom().size(), 0x8000u);
     CHECK_EQ(f.s3.option_rom()[0], 0x00);
     CHECK_EQ(f.s3.option_rom()[255], 0xFF);
+    // Bit 0 is the decode enable: an address alone must not map the ROM.
     f.s3.config_write32(0x30, 0xD0000000u);
+    CHECK_EQ(f.bus.read8(0xD0000000), 0xFF);
+    f.s3.config_write32(0x30, 0xD0000001u);
     CHECK_EQ(f.s3.config_read32(0x30) & 0xFFFFF800u, 0xD0000000u);
+    CHECK_EQ(f.s3.config_read32(0x30) & 1u, 1u);
     CHECK_EQ(f.bus.read8(0xD0000000), 0x00);
     CHECK_EQ(f.bus.read8(0xD00000FF), 0xFF);
+}
+
+TEST(s3_option_rom_probe_value_does_not_hide_system_bios) {
+    // Award probes the 32 KiB expansion ROM BAR by writing its size mask
+    // (FFFF8000h, decode disabled).  That must not place the option ROM over
+    // the system BIOS at FFFC0000-FFFFFFFF: doing so removed the reset
+    // vector at FFFFFFF0h and the machine could not reboot after Save & Exit.
+    Fix f;
+    std::vector<u8> bios(0x40000, 0x90);
+    bios[0x3FFF0] = 0xEA;
+    bios[0x3FFF1] = 0x5B;
+    bios[0x3FFF2] = 0xE0;
+    f.bus.map_rom(0xFFFC0000, u32(bios.size()), bios.data(), "System BIOS");
+    std::vector<u8> rom(0x8000, 0x90);
+    f.s3.load_option_rom(rom);
+    f.s3.config_write32(0x30, 0xFFFF8000u); // probe mask, bit 0 clear
+    CHECK_EQ(f.bus.read8(0xFFFFFFF0), 0xEAu);
+    CHECK_EQ(f.bus.read8(0xFFFFFFF1), 0x5Bu);
+    f.s3.config_write32(0x30, 0x00000000u); // probe cleanup
+    CHECK_EQ(f.bus.read8(0xFFFFFFF0), 0xEAu);
 }
 
 TEST(s3_bars_linear_window_and_mmio) {

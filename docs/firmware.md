@@ -234,3 +234,51 @@ python3 tools/make_memtest_wrapper.py
 `Setup.S`. Дальше сам MEMTEST 5.00RC1 уходит в real-mode BIOS/сбой
 инициализации — это отдельное ограничение CPU/BIOS-эмуляции, не загрузки
 обёртки.
+
+## Сброс: INIT, hard reset и «Save & Exit Setup»
+
+На PIIX4 это три разных события (даташит `82371AB.PDF`, 4.2.7.4):
+
+- **INIT (soft reset).** Ассертится по записи `1` в бит 0 порта `92h`
+  (`FAST_INIT`) и по линии `RCIN#` от 8042 (команда `FEh` в порт `64h` или
+  бит 0 выходного порта, записанный нулём). Процессор начинает с
+  `F000:FFF0`, но DRAM, CMOS, PAM и конфигурация PCI сохраняются.
+- **Hard reset.** Запись в `CF9h` значения с битом 2 (`RCPU`), переходящим
+  из 0 в 1, при `SRST` (бит 1) = 1: PIIX4 ассертит `CPURST`, `PCIRST#` и
+  `RSTDRV`. Сбрасываются CPU, PAM (в `00h`) и устройства, но **не** DRAM и
+  **не** battery-backed CMOS.
+- **Power-on.** `Machine::reset()`: обнуляет DRAM и инициализирует CMOS по
+  умолчанию; вызывается конструктором и командой консоли `reset`.
+
+`Machine::hard_reset()` и `Machine::init()` реализуют первые два случая;
+`pending_reset_` в `Machine` хранит, какой именно сброс запросило
+устройство. Порт `CF9h` лежит внутри блока mechanism #1
+(`CF8h–CFFh`), поэтому `PciBus` владеет всем блоком, а байтовые доступы к
+`CF9h` переадресует PIIX4 (`PciBus::set_reset_port`): 32-битные циклы
+конфигурации не должны расщепляться на `CF9h`.
+
+### Почему Save & Exit не перезагружался
+
+Award Setup сохраняет CMOS и выполняет `mov dx,0CF9h / mov al,06h /
+out dx,al` (жёсткий сброс). После сброса BIOS идёт по «тёплому» пути: он
+ожидает, что RAM с распакованным POST-кодом и CMOS с только что
+сохранёнными настройками живы, а reset vector читается по `FFFFFFF0h`.
+В эмуляторе было две ошибки:
+
+- обработчик `CF9h` был недоступен: `PciBus` отображал на себя
+  `CF8h–CFFh` и перекрывал порт PIIX4. Байт `06h` попадал в регистр адреса
+  конфигурации, сброса не происходило;
+- S3 Trio64 отображал свой 32-килобайтный option ROM по значению
+  `FFFF8000h` — это маска размера, записываемая Award при зондировании
+  ROM BAR, с **нулевым** битом 0 (decode enable). Отображение снимало
+  системный BIOS `FFFC0000–FFFFFFFF` вместе с reset vector; после сброса
+  CPU читал по `FFFFFFF0h` байт `FFh`, получал `#UD` и уходил в мусор.
+
+Теперь `S3Trio64` отображает option ROM только при `rom_enable_`
+(бит 0 ROM BAR), а жёсткий сброс сохраняет DRAM/CMOS. Проверка: войти в
+Setup по `Del`, нажать `F10`, затем `Y` и `Enter` (Award использует
+Y/N-поле, `Y` лишь меняет ответ, подтверждает `Enter`) — машина заново
+проходит POST. Регрессии: `piix4_8042_reset_line_runs_init`,
+`piix4_cf9_is_reachable_next_to_pci_config_block`,
+`s3_option_rom_probe_value_does_not_hide_system_bios`,
+`machine_hard_reset_preserves_dram_and_cmos`.

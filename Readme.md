@@ -170,6 +170,9 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 
 ## Что уже работает
 
+- **Award Setup: `F10` → `Y` → `Enter` перезагружает машину** (PIIX4
+  CF9h = 06h, жёсткий сброс с сохранением CMOS и DRAM); см.
+  [docs/firmware.md](docs/firmware.md#сброс-init-hard-reset-и-save--exit-setup).
 - **FreeDOS 1.2 загружается с дискеты до промпта `A:\>`** на реальном
   `EP-ZXA.bin` (Award BootBlock проверяет контрольную сумму, читает дискету,
   FreeDOS распаковывает `KERNEL.SYS` UPX-декомпрессором и запускает FreeCom).
@@ -188,7 +191,9 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   machine check, performance counters, APIC, FPU (x87), MMX, строковые
   операции, REP/REPZ/REPNE.
 - i440BX/PIIX4: PCI config mechanism #1, BAR-ы, PIC, PIT, RTC/CMOS, DMA,
-  8042, SMBus + SPD EEPROM, PM-блок, порт 0x92 (A20/reset), ELCR.
+  8042, SMBus + SPD EEPROM, PM-блок, порт 0x92 (A20/INIT), CF9h (RCPU,
+  SRST: INIT или hard reset), ELCR. Hard reset сохраняет DRAM и CMOS, чтобы
+  Award мог пройти тёплый POST после «Save & Exit Setup».
 - S3 Trio64: VGA-плоскости, text 720×400, mode 13h/12h, linear modes,
   palette/DAC, S3 unlock, packed MMIO 2D engine (fill/blit/line).
 - Voodoo SST-1: PCI 121a:0001, 16 MiB BAR, регистровый файл, triangle setup,
