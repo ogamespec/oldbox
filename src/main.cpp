@@ -63,6 +63,10 @@ int main(int argc, char** argv) {
             std::fprintf(stderr, "oldbox: loaded state %s at %.3f s\n",
                          cli.config.load_state_path.c_str(), machine.emulated_seconds());
         }
+        // An old NVRAM image (or a pre-fix Save & Exit) may contain an empty
+        // primary-master entry: repair it from the attached drive so C:
+        // does not disappear just because the image predates the fix.
+        machine.ensure_primary_master_cmos();
         if (cli.config.demo == "voodoo") {
             auto* v = machine.voodoo();
             if (!v) { std::fprintf(stderr, "oldbox: Voodoo is disabled\n"); return 1; }

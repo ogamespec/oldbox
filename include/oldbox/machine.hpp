@@ -36,6 +36,10 @@ public:
     // path and jumps back into the decompressed POST code that is still in
     // RAM, so clearing DRAM here would send it into erased memory.
     void hard_reset();
+    // Re-applies the Award primary-master CMOS block from the attached HDD
+    // when a loaded NVRAM image has an empty geometry (old image or a
+    // pre-fix "None" saved by Setup).  Non-empty user geometry is kept.
+    void ensure_primary_master_cmos();
     // INIT: the CPU restarts at F000:FFF0 while RAM, CMOS and the chipset
     // (PAM, PCI, memory controller) keep their state.  This is what the 8042
     // reset pulse (RCIN#) and port 92h FAST_INIT request; Award's Save &
@@ -134,6 +138,7 @@ private:
     bool running_ = true;
     // Set by the chipset (port 92h FAST_INIT, port CF9h RCPU, 8042 reset
     // pulse); the run loops perform the actual reset at a safe point.
+    void configure_primary_master_cmos(bool force);
     bool pending_reset_ = false;
     bool pending_reset_hard_ = true; // false = INIT (software reset)
     // Queued text for type_text(): delivered one character at a time from

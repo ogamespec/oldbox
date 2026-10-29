@@ -348,11 +348,13 @@ void Machine::reset() {
     pci_.reset();
     piix4_.reset();
     superio_.reset();
-    // Award treats CMOS[0x12] high nibble 0xF as "auto-detect the primary
-    // master"; without a configured drive the POST halts with
-    // "Hard disk(s) Diagnosis fail", so mirror the real drive configuration
-    // and refresh the checksum afterwards.
-    piix4_.rtc().set_cmos(0x12, ata_.hdd_present() ? 0xF0 : 0x00);
+    // Award 4.51PG keeps the primary-master geometry in CMOS[26h-2Dh]:
+    // cylinders (word), heads, write precomp (word, FFFFh = none), landing
+    // zone (word) and sectors/track.  CMOS[19h] = 2Eh marks the entry as a
+    // user/auto type and CMOS[79h]/[7Eh] bit 4 selects LBA translation.
+    // Without this block Setup shows "Primary Master: None" and Save & Exit
+    // stores type 0, so C: disappears even though the drive is attached.
+    configure_primary_master_cmos(true);
     piix4_.rtc().refresh_checksum();
     s3_.reset();
     s3_.set_text_mode();
@@ -382,6 +384,42 @@ void Machine::reset() {
     bus_.set_a20(true);
     start_cycles_ = cpu_.state().cycles;
     log(LogLevel::info, "machine", "reset; CPU starts at F000:FFF0");
+}
+
+void Machine::configure_primary_master_cmos(bool force) {
+    auto& rtc = piix4_.rtc();
+    if (!ata_.hdd_present() || ata_.hdd_cylinders() == 0) {
+        if (force) rtc.set_cmos(0x12, 0x00);
+        return;
+    }
+    if (!force) {
+        // Only fill an empty entry created by an older NVRAM image or by a
+        // pre-fix Save & Exit; a user-selected geometry (or "None") stays.
+        bool blank = rtc.cmos(0x19) == 0x00;
+        for (u8 i = 0x26; i <= 0x2d && blank; ++i)
+            if (rtc.cmos(i) != 0x00) blank = false;
+        if (!blank) return;
+    }
+    const u32 cyl = std::min<u32>(ata_.hdd_cylinders(), 0xffffu);
+    const u32 heads = std::min<u32>(ata_.hdd_heads(), 0xffu);
+    const u32 spt = std::min<u32>(ata_.hdd_spt(), 0xffu);
+    rtc.set_cmos(0x12, 0xf0); // primary master present, slave none
+    rtc.set_cmos(0x19, 0x2e); // user/auto type entry
+    rtc.set_cmos(0x26, u8(cyl));
+    rtc.set_cmos(0x27, u8(cyl >> 8));
+    rtc.set_cmos(0x28, u8(heads));
+    rtc.set_cmos(0x29, 0xff); // write precomp: none
+    rtc.set_cmos(0x2a, 0xff);
+    rtc.set_cmos(0x2b, u8((cyl - 1) & 0xff));
+    rtc.set_cmos(0x2c, u8((cyl - 1) >> 8));
+    rtc.set_cmos(0x2d, u8(spt));
+    rtc.set_cmos(0x79, u8(rtc.cmos(0x79) | 0x10));
+    rtc.set_cmos(0x7e, u8(rtc.cmos(0x7e) | 0x10));
+}
+
+void Machine::ensure_primary_master_cmos() {
+    configure_primary_master_cmos(false);
+    piix4_.rtc().refresh_checksum();
 }
 
 void Machine::hard_reset() {

@@ -719,6 +719,9 @@ TEST(piix4_rtccfg_controls_extended_bank) {
     bus.io_write8(0x72, 0x10);
     bus.io_write8(0x73, 0x5a);
     CHECK_EQ(bus.io_read8(0x73), 0x5au);
+    piix.config_write8(0xcb, 0x35); // lock upper-bank 38h-3Fh
+    piix.config_write8(0xcb, 0x25); // software cannot clear the lock
+    CHECK_EQ(piix.config_read8(0xcb) & 0x10, 0x10u);
     piix.reset();
     CHECK_EQ(piix.config_read8(0xcb), 0x21u);
     CHECK_EQ(bus.io_read8(0x73), 0xffu); // bank disabled again

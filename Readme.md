@@ -42,7 +42,8 @@ extended bank). Образ читается после начального сб
 хранение. Формат и спецификация — в [docs/cmos.md](docs/cmos.md).
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
-Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
+Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`; параметры primary
+master пишутся в CMOS при сбросе, поэтому C: переживает `Save & Exit Setup`).
 Текущее состояние исследования установки Windows 95 (что проверено и где
 именно остаётся блокер) описано в [docs/win95-blocker.md](docs/win95-blocker.md).
 Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
@@ -247,7 +248,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 380 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 407 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -264,7 +265,8 @@ PC set 1, E0-расширенные стрелки/модификаторы), PI
 (униполярный динамик, 70 Гц огибающая, таймлайн порта 61h), S3 atomic palette
 table, ATA/ATAPI/FDC, консоль команд (смена дискет и CD на ходу,
 `TEST UNIT READY` → `NOT READY/3Ah`, дополнение путей, `key`/`pause`/`step`),
-SB16/EMU8000/OPL3, счётчики производительности (арифметика узлов,
+SB16/EMU8000/OPL3, CMOS/NVRAM (оба банка PIIX4, RTCCFG/lock, сохранение
+образа), счётчики производительности (арифметика узлов,
 вычитание вложенной работы, кольцо истории и отчёт) и сквозная
 загрузка FreeDOS до `A:\>`
 (`freedos_boots_to_command_prompt_with_reference_bios`).

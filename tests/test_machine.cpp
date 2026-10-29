@@ -103,6 +103,53 @@ TEST(machine_hard_reset_preserves_dram_and_cmos) {
     CHECK_EQ(machine.cmos(0x30), 0x5au);
 }
 
+TEST(machine_populates_award_primary_master_cmos) {
+    // Award 4.51PG reads the primary-master geometry from CMOS[26h-2Dh] and
+    // the translation flags at 79h/7Eh.  If only CMOS[12h]=F0 is set, Setup
+    // displays "Primary Master: None" and Save & Exit writes type 0, so the
+    // attached C: disappears.  Machine::reset() must mirror the drive.
+    const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
+    const std::string hdd = find_asset("assets/hdd/oldbox-hdd-500mb.img");
+    if (bios.empty() || hdd.empty()) {
+        std::printf("[ SKIP ] HDD CMOS integration: BIOS or HDD image missing\n");
+        return;
+    }
+    SystemConfig cfg;
+    cfg.firmware.bios_path = bios;
+    cfg.storage.hdd_path = hdd;
+    cfg.headless = true;
+    cfg.no_sdl_audio = true;
+    cfg.audio.enabled = false;
+    cfg.video.voodoo_enabled = false;
+    Machine machine(cfg);
+    CHECK(machine.ata().hdd_present());
+    CHECK_EQ(machine.cmos(0x12), 0xf0u);
+    CHECK_EQ(machine.cmos(0x19), 0x2eu);
+    const u32 cyl = u32(machine.cmos(0x26)) | (u32(machine.cmos(0x27)) << 8);
+    const u32 land = u32(machine.cmos(0x2b)) | (u32(machine.cmos(0x2c)) << 8);
+    CHECK_EQ(cyl, machine.ata().hdd_cylinders());
+    CHECK_EQ(land, cyl - 1);
+    CHECK_EQ(machine.cmos(0x28), machine.ata().hdd_heads());
+    CHECK_EQ(machine.cmos(0x2d), machine.ata().hdd_spt());
+    CHECK_EQ(machine.cmos(0x79) & 0x10, 0x10u);
+    CHECK_EQ(machine.cmos(0x7e) & 0x10, 0x10u);
+    u16 sum = 0;
+    for (int i = 0x10; i <= 0x2d; ++i) sum = u16(sum + machine.cmos(u8(i)));
+    CHECK_EQ(machine.cmos(0x2e), u8(sum >> 8));
+    CHECK_EQ(machine.cmos(0x2f), u8(sum));
+
+    // An NVRAM image written by the pre-fix Save & Exit has type 0 and an
+    // empty geometry block.  ensure_primary_master_cmos() repairs it from
+    // the attached drive instead of leaving C: disabled.
+    machine.set_cmos(0x12, 0x00);
+    machine.set_cmos(0x19, 0x00);
+    for (u8 i = 0x26; i <= 0x2d; ++i) machine.set_cmos(i, 0x00);
+    machine.ensure_primary_master_cmos();
+    CHECK_EQ(machine.cmos(0x12), 0xf0u);
+    CHECK_EQ(machine.cmos(0x19), 0x2eu);
+    CHECK_EQ(machine.cmos(0x2d), machine.ata().hdd_spt());
+}
+
 TEST(machine_key_event_maps_sdl_arrows_and_alt) {
     const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
     if (bios.empty()) {

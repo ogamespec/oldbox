@@ -1,6 +1,12 @@
 <!-- Visual Studio 2026 (18.x) solution for the CMake-generated VS2026
      projects. Run the windows-vs2026 CMake preset (or build-windows.bat)
-     once before opening this file. -->
+     once before opening this file.
+
+     This file lists generated PROJECTS, not individual sources.  A new
+     .cpp/.h module is added to CMakeLists.txt (oldbox_core/oldbox_tests)
+     and appears in the generated vcxproj after the next CMake configure.
+     Add a <Project> entry here only when CMakeLists.txt gains a NEW target;
+     keep the Id GUIDs stable. -->
 <Solution>
   <Configurations>
     <BuildType Name="Debug" />

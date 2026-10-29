@@ -139,8 +139,8 @@ u32 Piix4::config_read32(u8 off) {
 }
 void Piix4::config_write8(u8 off, u8 value) {
     if (off == 0xcb) {
-        cfg_[0xcb] = value;
         rtc_.set_rtc_config(value); // bank enables / write-once lock bits
+        cfg_[0xcb] = rtc_.rtc_config();
         return;
     }
     cfg_[off] = value;

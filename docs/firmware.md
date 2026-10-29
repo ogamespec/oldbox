@@ -275,7 +275,10 @@ out dx,al` (жёсткий сброс). После сброса BIOS идёт п
   CPU читал по `FFFFFFF0h` байт `FFh`, получал `#UD` и уходил в мусор.
 
 Теперь `S3Trio64` отображает option ROM только при `rom_enable_`
-(бит 0 ROM BAR), а жёсткий сброс сохраняет DRAM/CMOS. Проверка: войти в
+(бит 0 ROM BAR), а жёсткий сброс сохраняет DRAM/CMOS. Параметры primary
+master Award держит в CMOS `26h–2Dh`; `Machine::reset()` заполняет их из
+подключённого HDD, поэтому Setup видит C:, и после `Save & Exit` диск не
+пропадает (подробнее — в [cmos.md](cmos.md#диск-c-и-save--exit-setup)). Проверка: войти в
 Setup по `Del`, нажать `F10`, затем `Y` и `Enter` (Award использует
 Y/N-поле, `Y` лишь меняет ответ, подтверждает `Enter`) — машина заново
 проходит POST. Регрессии: `piix4_8042_reset_line_runs_init`,
