@@ -533,7 +533,12 @@ void Machine::debug_report(const char* reason, const CpuState& s) {
                  s.gdtr_base, s.gdtr_limit, s.idtr_base, s.idtr_limit, s.ldtr,
                  cpu_.ldt_base(), cpu_.ldt_limit(), s.tr, cpu_.tr_base(), cpu_.tr_limit(), int(cpu_.tr_32bit()));
     std::fprintf(stderr, "pic irr=%04x isr=%04x imr=%04x\n",
-                 piix4_.pic().irr(), piix4_.pic().isr(), piix4_.pic().imr());
+                  piix4_.pic().irr(), piix4_.pic().isr(), piix4_.pic().imr());
+    const Segment& ss = s.seg[unsigned(SegReg::ss)];
+    const u32 sp = (ss.flags & 0x40) ? s.gpr[4] : u16(s.gpr[4]);
+    std::fprintf(stderr, "stack ss:sp=%04x:%08x bytes:", ss.selector, sp);
+    for (u32 i = 0; i < 16; ++i) std::fprintf(stderr, " %02x", bus_.read8(ss.base + sp + i));
+    std::fprintf(stderr, "\n");
     std::fprintf(stderr, "pc ring (oldest -> newest):\n");
     const auto ring = cpu_.recent_pcs();
     const u32 pos = cpu_.recent_pc_pos();

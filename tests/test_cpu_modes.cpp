@@ -130,6 +130,39 @@ TEST(mode_protected_segment_limit_gp) {
     CHECK_EQ(h.cpu.last_exception_error() & 0xffffu, 0x10u);
 }
 
+TEST(mode_protected_16bit_cs_32bit_near_target_fetch) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().seg[1].flags = 0;
+    h.state().seg[1].limit = 0x1ffff;
+    h.set_eip(0x1000);
+    h.bytes({0x66, 0xe9}); // 32-bit relative JMP from 16-bit code
+    h.emit32(0x10000 - 0x1006);
+    h.bus.write8(0x10000, 0x66);
+    h.bus.write8(0x10001, 0xb8); // mov eax, 0x12345678
+    h.bus.write32(0x10002, 0x12345678);
+    h.bus.write8(0x10006, 0xf4);
+    h.cpu.step();
+    CHECK_EQ(h.eip(), 0x10000u);
+    h.cpu.step();
+    CHECK_EQ(h.r(0), 0x12345678u);
+    CHECK_EQ(h.eip(), 0x10006u);
+}
+
+TEST(mode_protected_16bit_cs_32bit_near_target_limit) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().seg[1].flags = 0;
+    h.state().seg[1].limit = 0xffff;
+    h.set_eip(0x1000);
+    h.bytes({0x66, 0xe9});
+    h.emit32(0x10000 - 0x1006);
+    h.cpu.step();
+    CHECK_EQ(h.eip(), 0x10000u);
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 13);
+}
+
 TEST(mode_ldt_load) {
     CpuHarness h;
     h.enter_flat_protected();
@@ -290,6 +323,50 @@ TEST(mode_paging_4k_user_protection_and_wp) {
     CHECK_EQ(h.cpu.last_exception_vector(), 14);
     CHECK_EQ(h.cpu.state().cr2, 0x1000u);
     CHECK(h.cpu.last_exception_error() & 2u);
+}
+
+TEST(mode_paging_access_crosses_noncontiguous_pages) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.state().cr3 = 0x10000;
+    h.bus.write32(0x10000, 0x11007);
+    h.bus.write32(0x11004, 0x12007); // virtual 0x1000 -> physical 0x12000
+    h.bus.write32(0x11008, 0x14007); // virtual 0x2000 -> physical 0x14000
+    h.bus.write8(0x12fff, 0x78);
+    h.bus.write8(0x14000, 0x56);
+    h.bus.write8(0x14001, 0x34);
+    h.bus.write8(0x14002, 0x12);
+    h.state().cr0 |= 0x80000000u;
+    CHECK_EQ(h.cpu.read_linear32(0x1fff), 0x12345678u);
+    h.cpu.write_linear32(0x1fff, 0xaabbccddu);
+    CHECK_EQ(h.bus.read8(0x12fff), 0xddu);
+    CHECK_EQ(h.bus.read8(0x14000), 0xccu);
+    CHECK_EQ(h.bus.read8(0x14001), 0xbbu);
+    CHECK_EQ(h.bus.read8(0x14002), 0xaau);
+}
+
+TEST(mode_paging_pde_permissions_restrict_pte) {
+    CpuHarness h;
+    h.enter_flat_protected(true);
+    h.state().cr3 = 0x10000;
+    h.bus.write32(0x10000, 0x11003); // supervisor-only PDE
+    h.bus.write32(0x11004, 0x12007); // user-accessible PTE
+    h.state().cr0 |= 0x80010000u;
+    bool fault = false;
+    try { (void)h.cpu.read_linear32(0x1000); }
+    catch (const CpuException& ex) { fault = ex.vector == 14 && ex.error == 5; }
+    CHECK(fault);
+    CHECK_EQ(h.state().cr2, 0x1000u);
+    h.enter_flat_protected(); // read at CPL0 caches supervisor permissions
+    h.state().cr3 = 0x10000;
+    h.state().cr0 |= 0x80010000u;
+    (void)h.cpu.read_linear32(0x1000);
+    h.state().seg[1].selector = 0x1b;
+    h.state().seg[1].access = 0xfa;
+    fault = false;
+    try { (void)h.cpu.read_linear32(0x1000); }
+    catch (const CpuException& ex) { fault = ex.vector == 14 && ex.error == 5; }
+    CHECK(fault);
 }
 
 TEST(mode_paging_pse_4mb) {
@@ -476,7 +553,7 @@ TEST(mode_v86_paging_uses_cpl3_and_reports_user_fault) {
     h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
     gate(h, 14, 0x08, 0x3000);
     h.bus.write8(0x3000, 0xf4);
-    h.bus.write32(0x10000, 0x11003); // PDE: user, rw, present
+    h.bus.write32(0x10000, 0x11007); // PDE: user, rw, present
     for (u32 i = 0; i < 0xa0; ++i) h.bus.write32(0x11000 + i * 4, i * 0x1000u | 7u);
     // TSS, ring-0 stack and the guarded page are supervisor pages, so the
     // monitor must be reached and its frame written with supervisor rights.
@@ -493,7 +570,7 @@ TEST(mode_v86_paging_uses_cpl3_and_reports_user_fault) {
     CHECK_EQ(h.cpu.last_exception_vector(), 14);
     CHECK_EQ(h.state().cr2, 0x00052000u);
     CHECK_EQ(h.r(4), 0x9000u - 10u * 4u); // V86 frame + error code
-    CHECK_EQ(h.bus.read32(h.r(4)), 6u);   // U/S=1, W/R=1
+    CHECK_EQ(h.bus.read32(h.r(4)), 7u);   // present protection fault, U/S=1, W/R=1
     CHECK_EQ(h.bus.read32(h.r(4) + 4), 0x1000u); // faulting EIP
 
 }
@@ -984,8 +1061,8 @@ TEST(mode_call_gate_switches_stack_copies_params_and_returns) {
     CHECK_EQ(h.r(4), 0x9000u - 24u);
     CHECK_EQ(h.bus.read32(h.r(4) + 0), 0x1007u);      // return EIP
     CHECK_EQ(h.bus.read32(h.r(4) + 4), 0x001bu);      // return CS
-    CHECK_EQ(h.bus.read32(h.r(4) + 8), 0x22222222u);  // copied parameters (reverse push order)
-    CHECK_EQ(h.bus.read32(h.r(4) + 12), 0x11111111u);
+    CHECK_EQ(h.bus.read32(h.r(4) + 8), 0x11111111u);
+    CHECK_EQ(h.bus.read32(h.r(4) + 12), 0x22222222u);
     CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x7000u);     // caller ESP
     CHECK_EQ(h.bus.read32(h.r(4) + 20), 0x0023u);     // caller SS
     h.cpu.step(); // retf 8
@@ -994,6 +1071,49 @@ TEST(mode_call_gate_switches_stack_copies_params_and_returns) {
     CHECK_EQ(h.cpu.cpl(), 3);
     CHECK_EQ(h.r(4), 0x7000u);
     CHECK_EQ(s.eip, 0x1007u);
+}
+
+TEST(mode_indirect_far_call_uses_call_gate) {
+    CpuHarness h;
+    h.make_flat_gdt();
+    install_tss(h);
+    h.state().gdtr_limit = 0x37;
+    gate_desc(h, 0x530, 0x08, 0x3000, 0xec);
+    auto& s = h.state();
+    s.seg[1].selector = 0x1b; s.seg[1].access = 0xfa;
+    s.seg[2].selector = 0x23; s.seg[2].access = 0xf2;
+    s.seg[0] = s.seg[3] = s.seg[4] = s.seg[5] = s.seg[2];
+    s.eip = 0x1000; h.code = 0x1000; s.gpr[4] = 0x7000;
+    h.emit(0xff); h.emit(0x1d); h.emit32(0x4000); // call far [0x4000]
+    h.bus.write32(0x4000, 0);
+    h.bus.write16(0x4004, 0x30);
+    h.cpu.step();
+    CHECK_EQ(s.seg[1].selector, 0x08u);
+    CHECK_EQ(s.eip, 0x3000u);
+    CHECK_EQ(h.bus.read32(s.gpr[4]), 0x1006u);
+}
+
+TEST(mode_faulting_retf_preserves_stack_pointer) {
+    CpuHarness h;
+    h.make_flat_gdt();
+    install_tss(h);
+    h.state().seg[1].selector = 0x1b;
+    h.state().seg[1].access = 0xfa;
+    h.state().seg[2].selector = 0x23;
+    h.state().seg[2].access = 0xf2;
+    h.state().idtr_base = 0x600;
+    h.state().idtr_limit = 0x7ff;
+    gate(h, 13, 0x08, 0x3000);
+    h.bus.write8(0x3000, 0xf4);
+    h.state().gpr[4] = 0x7000;
+    h.bus.write32(0x7000, 0x1234);
+    h.bus.write32(0x7004, 0x08); // ring-0 selector cannot be returned to from CPL 3
+    h.emit(0xcb);
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 13);
+    // The #GP frame has the original SP on the old privilege stack.
+    CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x7000u);
+    CHECK_EQ(h.state().eip, 0x3000u);
 }
 
 TEST(mode_jmp_gate_does_not_change_stack_and_rejects_escalation) {
@@ -1125,8 +1245,8 @@ TEST(mode_16bit_call_gate_pushes_word_frame) {
     CHECK_EQ(h.r(4), 0x9000u - 12u);
     CHECK_EQ(h.bus.read16(h.r(4) + 0), u16(0x1007));
     CHECK_EQ(h.bus.read16(h.r(4) + 2), 0x001bu);
-    CHECK_EQ(h.bus.read16(h.r(4) + 4), 0x2222u);
-    CHECK_EQ(h.bus.read16(h.r(4) + 6), 0x1111u);
+    CHECK_EQ(h.bus.read16(h.r(4) + 4), 0x1111u);
+    CHECK_EQ(h.bus.read16(h.r(4) + 6), 0x2222u);
     CHECK_EQ(h.bus.read16(h.r(4) + 8), 0x7000u);
     CHECK_EQ(h.bus.read16(h.r(4) + 10), 0x0023u);
     h.cpu.step();

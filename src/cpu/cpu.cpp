@@ -122,8 +122,8 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         const u64 pde = bus_.read32(u32(pde_addr)) | (u64(bus_.read32(u32(pde_addr + 4))) << 32);
         if (!(pde & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
         if (pde & 0x80) { // 2 MiB page
-            if (user && !(pde & 4)) { state_.cr2 = linear; throw CpuException{14, u32(4 | (write ? 2 : 0)), true}; }
-            if (write && !(pde & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(2 | (user ? 4 : 0)), true}; }
+            if (user && !(pde & 4)) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
+            if (write && !(pde & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
             const u32 phys = u32(pde & 0x000fffffffe00000ull) | (linear & 0x1fffffu);
             tlb_tag_[page] = tag; tlb_phys_[page] = phys & ~0xfffu;
             tlb_flags_[page] = 1 | ((pde & 2) ? 2 : 0) | ((pde & 4) ? 4 : 0) | ((pde & 0x100) ? 8 : 0);
@@ -132,11 +132,11 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         const u64 pte_addr = (pde & 0x000ffffffffff000ull) + (((linear >> 12) & 0x1ff) * 8);
         const u64 pte = bus_.read32(u32(pte_addr)) | (u64(bus_.read32(u32(pte_addr + 4))) << 32);
         if (!(pte & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
-        if (user && !(pte & 4)) { state_.cr2 = linear; throw CpuException{14, u32(4 | (write ? 2 : 0)), true}; }
-        if (write && !(pte & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(2 | (user ? 4 : 0)), true}; }
+        if (user && (!(pde & 4) || !(pte & 4))) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
+        if (write && (!(pde & 2) || !(pte & 2)) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
         const u32 phys = u32(pte & 0x000ffffffffff000ull) | (linear & 0xfffu);
         tlb_tag_[page] = tag; tlb_phys_[page] = phys & ~0xfffu;
-        tlb_flags_[page] = 1 | ((pte & 2) ? 2 : 0) | ((pte & 4) ? 4 : 0) | ((pte & 0x100) ? 8 : 0);
+        tlb_flags_[page] = 1 | (((pde & pte) & 2) ? 2 : 0) | (((pde & pte) & 4) ? 4 : 0) | ((pte & 0x100) ? 8 : 0);
         return phys;
     }
     u32 pde = bus_.read32(pd + ((linear >> 22) * 4));
@@ -146,19 +146,19 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
     bool is_4m = (pde & 0x80) && (state_.cr4 & 0x10u);
     u32 pte = 0;
     if (is_4m) {
-        if (user && !(pde & 4)) { state_.cr2 = linear; throw CpuException{14, u32(4 | (write ? 2 : 0)), true}; }
-        if (write && !(pde & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(2 | (user ? 4 : 0)), true}; }
+        if (user && !(pde & 4)) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
+        if (write && !(pde & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
         phys = (pde & 0xffc00000u) | (linear & 0x3fffffu);
         is_user = (pde & 4) != 0;
         writable = (pde & 2) != 0;
     } else {
         pte = bus_.read32((pde & 0xfffff000u) + (((linear >> 12) & 0x3ff) * 4));
         if (!(pte & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
-        if (user && !(pte & 4)) { state_.cr2 = linear; throw CpuException{14, u32(4 | (write ? 2 : 0)), true}; }
-        if (write && !(pte & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(2 | (user ? 4 : 0)), true}; }
+        if (user && (!(pde & 4) || !(pte & 4))) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
+        if (write && (!(pde & 2) || !(pte & 2)) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
         phys = (pte & 0xfffff000u) | (linear & 0xfffu);
-        is_user = (pte & 4) != 0;
-        writable = (pte & 2) != 0;
+        is_user = ((pde & pte) & 4) != 0;
+        writable = ((pde & pte) & 2) != 0;
     }
     tlb_tag_[page] = tag;
     tlb_phys_[page] = phys & ~0xfffu;
@@ -168,23 +168,67 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
 }
 
 u8 Cpu::read_linear8(u32 addr) { return bus_.read8(translate(addr, false)); }
-u16 Cpu::read_linear16(u32 addr) { return bus_.read16(translate(addr, false)); }
-u32 Cpu::read_linear32(u32 addr) { return bus_.read32(translate(addr, false)); }
+u16 Cpu::read_linear16(u32 addr) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) == 0xfffu)
+        return u16(read_linear8(addr) | (u16(read_linear8(addr + 1)) << 8));
+    return bus_.read16(translate(addr, false));
+}
+u32 Cpu::read_linear32(u32 addr) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) > 0xffcu) {
+        u32 result = 0;
+        for (u32 i = 0; i < 4; ++i) result |= u32(read_linear8(addr + i)) << (i * 8);
+        return result;
+    }
+    return bus_.read32(translate(addr, false));
+}
 void Cpu::write_linear8(u32 addr, u8 v) { bus_.write8(translate(addr, true), v); }
 void Cpu::write_linear16(u32 addr, u16 v) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) == 0xfffu) {
+        write_linear8(addr, u8(v)); write_linear8(addr + 1, u8(v >> 8));
+        return;
+    }
     bus_.write16(translate(addr, true), v);
 }
-void Cpu::write_linear32(u32 addr, u32 v) { bus_.write32(translate(addr, true), v); }
+void Cpu::write_linear32(u32 addr, u32 v) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) > 0xffcu) {
+        for (u32 i = 0; i < 4; ++i) write_linear8(addr + i, u8(v >> (i * 8)));
+        return;
+    }
+    bus_.write32(translate(addr, true), v);
+}
 
 // Descriptor tables, the TSS and paging structures are accessed with
 // supervisor privilege even while the current CPL is 3 (for example when a
 // V86 monitor's TSS lives in a supervisor page).
 u8 Cpu::read_linear8_super(u32 addr) { return bus_.read8(translate(addr, false, true)); }
-u16 Cpu::read_linear16_super(u32 addr) { return bus_.read16(translate(addr, false, true)); }
-u32 Cpu::read_linear32_super(u32 addr) { return bus_.read32(translate(addr, false, true)); }
+u16 Cpu::read_linear16_super(u32 addr) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) == 0xfffu)
+        return u16(read_linear8_super(addr) | (u16(read_linear8_super(addr + 1)) << 8));
+    return bus_.read16(translate(addr, false, true));
+}
+u32 Cpu::read_linear32_super(u32 addr) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) > 0xffcu) {
+        u32 result = 0;
+        for (u32 i = 0; i < 4; ++i) result |= u32(read_linear8_super(addr + i)) << (i * 8);
+        return result;
+    }
+    return bus_.read32(translate(addr, false, true));
+}
 void Cpu::write_linear8_super(u32 addr, u8 v) { bus_.write8(translate(addr, true, true), v); }
-void Cpu::write_linear16_super(u32 addr, u16 v) { bus_.write16(translate(addr, true, true), v); }
-void Cpu::write_linear32_super(u32 addr, u32 v) { bus_.write32(translate(addr, true, true), v); }
+void Cpu::write_linear16_super(u32 addr, u16 v) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) == 0xfffu) {
+        write_linear8_super(addr, u8(v)); write_linear8_super(addr + 1, u8(v >> 8));
+        return;
+    }
+    bus_.write16(translate(addr, true, true), v);
+}
+void Cpu::write_linear32_super(u32 addr, u32 v) {
+    if ((state_.cr0 & 0x80000000u) && (addr & 0xfffu) > 0xffcu) {
+        for (u32 i = 0; i < 4; ++i) write_linear8_super(addr + i, u8(v >> (i * 8)));
+        return;
+    }
+    bus_.write32(translate(addr, true, true), v);
+}
 
 u32 Cpu::offset_mask(int address_size) const { return address_size == 2 ? 0xffffu : 0xffffffffu; }
 
@@ -322,8 +366,9 @@ u8 Cpu::fetch8() {
     const auto& cs = state_.seg[unsigned(SegReg::cs)];
     // Real-address and virtual-8086 mode are native 16-bit environments; the
     // D bit of a cached CS descriptor is irrelevant there.
-    const bool wide = state_.mode == CpuMode::protected_mode && (cs.flags & 0x40) != 0;
-    const u32 mask = wide ? 0xffffffffu : 0xffffu;
+    // CS.D selects default operand/address sizes, not the width of EIP.
+    // A 32-bit near branch in a 16-bit protected segment retains its full EIP.
+    const u32 mask = state_.mode == CpuMode::protected_mode ? 0xffffffffu : 0xffffu;
     const u32 off = state_.eip & mask;
     if (state_.mode == CpuMode::protected_mode && off > cs.limit) { exception_gp(0); }
     const u32 lin = cs.base + off;
@@ -890,7 +935,7 @@ void Cpu::do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bo
         cpl_override_ = target_dpl;
         push_value(old_ss, push_size);
         push_value(old_sp, push_size);
-        for (u32 i = 0; i < nparams; ++i) push_value(params[i], push_size);
+        for (u32 i = nparams; i > 0; --i) push_value(params[i - 1], push_size);
         push_value(state_.seg[unsigned(SegReg::cs)].selector, push_size);
         push_value(state_.eip, push_size);
         load_cs_far_raw(target_sel, target_off, target_dpl);
@@ -904,14 +949,17 @@ void Cpu::do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bo
     }
 }
 void Cpu::do_far_return(int size, u16 extra) {
-    const u32 off = pop_value(size);
-    const u16 sel = u16(pop_value(size));
+    const u32 initial_sp = stack_pointer();
+    const u32 off = read_mem(initial_sp, size, SegReg::ss);
+    const u16 sel = u16(read_mem((initial_sp + u32(size)) & offset_mask(stack32() ? 4 : 2), size, SegReg::ss));
+    if (state_.mode == CpuMode::protected_mode && (sel & 3) < cpl()) exception_gp(sel & ~3u);
+    pop_value(size);
+    pop_value(size);
     int old_cpl = -1;
     bool outer = false;
     if (state_.mode == CpuMode::protected_mode) {
         old_cpl = cpl();
         const int new_cpl = sel & 3;
-        if (new_cpl < old_cpl) exception_gp(sel & ~3u);
         outer = new_cpl > old_cpl;
         if (outer) {
             // For an interlevel return the RET immediate discards parameters
@@ -2182,9 +2230,7 @@ void Cpu::execute_grp5(u8 opcode) {
         const u32 off = read_mem(m.offset, size, m.segment);
         const u16 sel = u16(read_mem(m.offset + u32(size), 2, m.segment));
         trace_control("CALLF", off, stack_pointer());
-        push_value(state_.seg[1].selector, size);
-        push_value(state_.eip, size);
-        load_cs_far(sel, off);
+        do_far_call(sel, off, size);
         break;
     }
     case 4: { // JMP near r/m16/32

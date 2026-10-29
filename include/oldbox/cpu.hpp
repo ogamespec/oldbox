@@ -198,11 +198,11 @@ public:
         if (flags && tlb_tag_[page] == tag) [[likely]] {
             if (write && !(flags & 2) && (user || (state_.cr0 & 0x10000u))) {
                 state_.cr2 = linear;
-                throw CpuException{14, u32(2 | (user ? 4 : 0)), true};
+                throw CpuException{14, u32(3 | (user ? 4 : 0)), true};
             }
             if (user && !(flags & 4)) {
                 state_.cr2 = linear;
-                throw CpuException{14, u32(4 | (write ? 2 : 0)), true};
+                throw CpuException{14, u32(5 | (write ? 2 : 0)), true};
             }
             return tlb_phys_[page] | (linear & 0xfffu);
         }

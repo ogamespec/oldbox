@@ -162,7 +162,7 @@ void Cpu::execute_0f() {
             const bool conforming = !is_system && (type & 0x18) == 0x18 && (type & 0x04) != 0;
             const int dpl = (d.access >> 5) & 3;
             const bool visible = conforming || (cpl() <= dpl && int(sel & 3) <= dpl);
-            if ((d.access & 0x80) && valid_type && visible) {
+            if (valid_type && visible) {
                 ok = true;
                 if (op == 0x02) {
                     // LAR r16 returns the access-rights byte in AH; the
@@ -942,10 +942,7 @@ void Cpu::execute_0f() {
         break;
     }
     default:
-        logf(LogLevel::warn, "cpu", "unimplemented 0F opcode {:02x} at {:04x}:{:08x}", op,
-             state_.seg[unsigned(SegReg::cs)].selector, opcode_ip_);
-        cycles_ += 20;
-        break;
+        raise_exception(6); // Unsupported or reserved opcode: #UD, never silently skip it.
     }
 }
 

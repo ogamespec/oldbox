@@ -82,6 +82,29 @@ TEST(audit_mov_from_segment_zero_extends_32bit_register) {
     CHECK_EQ(g.r(3), 0xdead0010u); // 16-bit operand size preserves the upper half
 }
 
+TEST(audit_lar_reports_nonpresent_descriptor) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    segment_desc(h, 0x528, 0x12000, 0x1fff, 0x12); // valid data, P=0
+    h.state().gdtr_limit = 0x2f;
+    h.set_r(0, 0x28);
+    h.emit(0x0f); h.emit(0x02); h.emit(0xc0); // lar eax, eax
+    h.cpu.step();
+    CHECK(h.flag(ZF));
+    CHECK_EQ(h.r(0), 0x1200u);
+}
+
+TEST(audit_ud0_raises_invalid_opcode) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    install_idt(h, {6});
+    h.bytes({0x0f, 0xff});
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 6);
+    CHECK_EQ(h.state().eip, 0x3000u);
+    CHECK_EQ(h.bus.read32(h.r(4)), 0x1000u);
+}
+
 TEST(audit_mov_from_segment_rejects_register_fields_6_and_7) {
     for (u8 modrm : {u8(0xf0), u8(0xf8)}) { // /6 and /7
         CpuHarness h;
