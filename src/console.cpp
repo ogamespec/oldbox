@@ -737,7 +737,7 @@ void CommandConsole::cmos_command(const std::vector<std::string>& args) {
 void CommandConsole::boot_reset() {
     machine_.floppy().flush();
     machine_.ata().flush_all();
-    machine_.reset();
+    machine_.hard_reset();
     emit("machine reset; the BIOS POST restarts");
 }
 
