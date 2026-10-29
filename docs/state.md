@@ -46,7 +46,8 @@ oldbox.exe ... --load-state temp\setup-prompt.state ^
 - CPU: полный `CpuState`, LDT/TR, TSS, MSR/APIC-очередь, FPU/MMX, счётчики
   инструкций и циклов;
 - RAM, A20, flash и счётчики POST;
-- PIIX4: PIC, PIT, RTC/CMOS, DMA, 8042/клавиатура, SMBus, PM;
+- PIIX4: PIC, PIT, RTC/CMOS (standard и extended bank, RTCCFG), DMA,
+  8042/клавиатура, SMBus, PM;
 - PCI-конфигурация и I440BX/PAM;
 - ATA/ATAPI: регистры каналов и приводов, буферы команд, CD-таблица;
 - floppy: оба диска и состояние 82077AA;

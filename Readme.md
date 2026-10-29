@@ -35,6 +35,11 @@ Setup по Del, FreeDOS-дискета, headless-проверка). В эмул�
 полный экран, `F12` — скриншот в `oldbox-screenshot.bmp`. Горячей клавиши
 выхода нет:
 окно закрывается только крестиком, а `Esc` и остальные клавиши уходят гостю.
+Настройки BIOS/CMOS сохраняются между запусками в
+`assets\cmos\cmos.bin` (256 байт battery-backed NVRAM PIIX4: standard +
+extended bank). Образ читается после начального сброса и пишется при выходе;
+`--cmos-image FILE` задаёт другой файл, `--no-cmos-image` отключает
+хранение. Формат и спецификация — в [docs/cmos.md](docs/cmos.md).
 Жёсткий диск: `assets\hdd\oldbox-hdd-500mb.img` — 500 МБ raw-образ
 (таблица разделов MBR, раздел FAT16), подключается опцией `--hdd FILE` как
 Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`).
@@ -279,6 +284,8 @@ SB16/EMU8000/OPL3, счётчики производительности (ари
 - [docs/cpu-audit.md](docs/cpu-audit.md) — методика аудита инструкций, найденные
   ошибки, покрытие по группам и остаточные пробелы.
 - [docs/firmware.md](docs/firmware.md) — BIOS 256 KiB, shadow RAM, banking, POST.
+- [docs/cmos.md](docs/cmos.md) — CMOS/NVRAM PIIX4: два банка по 128 байт,
+  RTCCFG, `assets/cmos/cmos.bin` и сохранение настроек между запусками.
 - [assets/floppy/MEMTEST_WRAPPER.IMG](assets/floppy/MEMTEST_WRAPPER.IMG) —
   FAT12-обёртка для `MEMTEST.IMG` (собирается
   `tools/make_memtest_wrapper.py`).

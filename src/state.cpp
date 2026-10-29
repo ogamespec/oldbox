@@ -344,14 +344,18 @@ private:
 
     static void save_rtc(const Rtc& p, StateWriter& w) {
         w.pod(p.cpu_mhz_); w.pod(p.tick_acc_); w.pod(p.second_acc_); w.pod(p.now_);
-        w.array(p.cmos_); w.pod(p.index_); w.pod(p.update_in_progress_); w.pod(p.irq_pending_);
-        w.pod(p.bank_); w.pod(p.reg_a_); w.pod(p.reg_b_); w.pod(p.reg_c_);
+        w.array(p.cmos_); w.array(p.cmos_ext_);
+        w.pod(p.index_); w.pod(p.ext_index_); w.pod(p.rtc_cfg_);
+        w.pod(p.update_in_progress_); w.pod(p.irq_pending_);
+        w.pod(p.reg_a_); w.pod(p.reg_b_); w.pod(p.reg_c_);
         w.pod(p.periodic_divider_); w.pod(p.periodic_acc_);
     }
     static void load_rtc(Rtc& p, StateReader& r) {
         r.pod(p.cpu_mhz_); r.pod(p.tick_acc_); r.pod(p.second_acc_); r.pod(p.now_);
-        r.array(p.cmos_); r.pod(p.index_); r.pod(p.update_in_progress_); r.pod(p.irq_pending_);
-        r.pod(p.bank_); r.pod(p.reg_a_); r.pod(p.reg_b_); r.pod(p.reg_c_);
+        r.array(p.cmos_); r.array(p.cmos_ext_);
+        r.pod(p.index_); r.pod(p.ext_index_); r.pod(p.rtc_cfg_);
+        r.pod(p.update_in_progress_); r.pod(p.irq_pending_);
+        r.pod(p.reg_a_); r.pod(p.reg_b_); r.pod(p.reg_c_);
         r.pod(p.periodic_divider_); r.pod(p.periodic_acc_);
     }
 

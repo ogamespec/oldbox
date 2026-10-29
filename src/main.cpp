@@ -1,3 +1,4 @@
+#include "oldbox/cmos_image.hpp"
 #include "oldbox/config.hpp"
 #include "oldbox/machine.hpp"
 #include "oldbox/perf.hpp"
@@ -7,8 +8,23 @@
 #include <cstdio>
 #include <fstream>
 #include <cmath>
+#include <optional>
 
 using namespace oldbox;
+
+namespace {
+// Saves the battery-backed PIIX4 NVRAM when the emulator exits.  The image
+// is loaded only after the initial reset, so Machine::reset() cannot wipe
+// settings that came from the previous session.
+struct CmosImageSession {
+    CmosImageSession(Machine& m, std::string p) : machine(m), path(std::move(p)) {}
+    CmosImageSession(const CmosImageSession&) = delete;
+    CmosImageSession& operator=(const CmosImageSession&) = delete;
+    Machine& machine;
+    std::string path;
+    ~CmosImageSession() { save_cmos_image(path, machine.piix4().rtc()); }
+};
+} // namespace
 
 int main(int argc, char** argv) {
     try {
@@ -36,7 +52,12 @@ int main(int argc, char** argv) {
                 if (!in) break;
                 machine.set_cmos(u8(i), u8(b));
             }
+        } else if (cli.config.cmos_image_enabled && !cli.config.cmos_image_path.empty()) {
+            load_cmos_image(cli.config.cmos_image_path, machine.piix4().rtc());
         }
+        [[maybe_unused]] std::optional<CmosImageSession> cmos_session;
+        if (cli.config.cmos_image_enabled && !cli.config.cmos_image_path.empty())
+            cmos_session.emplace(machine, cli.config.cmos_image_path);
         if (!cli.config.load_state_path.empty()) {
             machine.load_state(cli.config.load_state_path);
             std::fprintf(stderr, "oldbox: loaded state %s at %.3f s\n",

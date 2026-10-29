@@ -28,7 +28,11 @@ public:
     // PCIRST# part that Machine::hard_reset() needs without clearing the
     // battery-backed CMOS: the RC register returns to its 00h default, so the
     // next RCPU 0->1 edge is recognised again.
-    void reset_control_state() { prev_cf9_ = 0x00; }
+    void reset_control_state() {
+        prev_cf9_ = 0x00;
+        cfg_[0xcb] = 0x21; // RTCCFG returns to its reset value on PCIRST#
+        rtc_.reset_rtc_config();
+    }
     void tick(u64 cpu_cycles);
     [[nodiscard]] Pic& pic() { return pic_; }
     [[nodiscard]] const Pic& pic() const { return pic_; }

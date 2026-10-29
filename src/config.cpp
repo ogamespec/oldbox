@@ -101,6 +101,8 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--stop-mkdir") { c.stop_mkdir = true; c.dump_control = true; }
         else if (a == "--dump-cmos") c.dump_cmos = true;
         else if (a == "--cmos") c.cmos_path = need(a);
+        else if (a == "--cmos-image") c.cmos_image_path = need(a);
+        else if (a == "--no-cmos-image") c.cmos_image_enabled = false;
         else if (a == "--instr-log") c.instr_log_path = need(a);
         else if (a == "--boot-menu") c.boot_menu = true;
         else if (a == "--screenshot") c.screenshot_path = need(a);
@@ -204,6 +206,9 @@ void print_usage(const char* argv0) {
         "  --stop-mkdir            stop at the first INT 21 AH=39 and print the path\n"
         "  --dump-cmos             print the 128-byte CMOS on exit\n"
         "  --cmos FILE             load 128 CMOS bytes before the BIOS POST\n"
+        "  --cmos-image FILE       persistent 256-byte NVRAM image (default\n"
+        "                          assets/cmos/cmos.bin), saved on exit\n"
+        "  --no-cmos-image         do not load/save the persistent NVRAM image\n"
         "  --dump-phys LO:HI:FILE dump physical memory when a breakpoint fires\n"
         "  --trace                log CPU execution (very verbose)\n"
         "  --log level            trace|debug|info|warn|error\n"

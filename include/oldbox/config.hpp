@@ -96,6 +96,11 @@ struct SystemConfig {
     bool stop_mkdir = false;
     bool dump_cmos = false;
     std::string cmos_path; // load 128 CMOS bytes before POST
+    // Battery-backed PIIX4 NVRAM (256 bytes: standard + extended bank).  The
+    // image is loaded after the initial reset and saved when the emulator
+    // exits, so BIOS Setup settings survive between runs.
+    std::string cmos_image_path = "assets/cmos/cmos.bin";
+    bool cmos_image_enabled = true;
     std::string instr_log_path;
     std::string screenshot_path;
     bool dump_text = false;

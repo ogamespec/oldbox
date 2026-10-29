@@ -34,6 +34,7 @@ add_library(oldbox_core STATIC
     src/cpu/cpu_x87.cpp
     src/cpu/cpu_system.cpp
     src/machine.cpp
+    src/cmos_image.cpp
     src/state.cpp
     src/console.cpp
     src/perf.cpp

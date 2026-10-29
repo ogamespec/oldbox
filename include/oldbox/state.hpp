@@ -12,7 +12,7 @@ class Machine;
 // little-endian host order.  Payloads only contain trivially copyable values
 // and explicit container element streams, so a state is independent of host
 // pointer values and std::function callbacks.
-constexpr u32 state_version = 2;
+constexpr u32 state_version = 3;
 constexpr char state_magic[8] = {'O', 'L', 'D', 'B', 'O', 'X', 'S', 'T'};
 
 struct StateHeader {

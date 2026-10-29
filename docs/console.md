@@ -76,7 +76,7 @@ insert C:\Isos\Windows95OSR2.iso
 | `type TEXT` | набрать текст в гостя (Enter добавляется автоматически) |
 | `screenshot [FILE]` | сохранить текущий кадр в PPM (по умолчанию `oldbox-console.ppm`) |
 | `text [FILE]` | вывести текстовый экран VGA (в консоль или в файл) |
-| `cmos dump\|get IDX\|set IDX VAL` | чтение/запись CMOS; `set` пересчитывает контрольную сумму Award |
+| `cmos dump\|get IDX\|set IDX VAL` | чтение/запись CMOS; `set` пересчитывает контрольную сумму Award; изменения попадут в `assets/cmos/cmos.bin` при выходе (см. [cmos.md](cmos.md)) |
 | `save [FILE]` | записать save state (по умолчанию `oldbox-quicksave.state`) |
 | `load [FILE]` | восстановить save state (по умолчанию `oldbox-quicksave.state`) |
 | `quicksave` | сохранить в `oldbox-quicksave.state` |

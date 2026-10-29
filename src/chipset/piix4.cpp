@@ -53,6 +53,7 @@ Piix4::Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset_cb)
     bus_.map_io(0x40, 4, &pit_, "PIT");
     bus_.map_io(0x61, 1, &pit_, "PIT speaker");
     bus_.map_io(0x70, 2, &rtc_, "CMOS RTC");
+    bus_.map_io(0x72, 2, &rtc_, "RTC extended RAM");
     bus_.map_io(0x00, 0x10, &dma_, "DMA master");
     bus_.map_io(0x10, 0x10, &dma_, "DMA master alias");
     bus_.map_io(0xc0, 0x30, &dma_, "DMA slave/extended");
@@ -69,6 +70,7 @@ Piix4::Piix4(Bus& bus, u32 cpu_mhz, u32 memory_mb, ResetFn reset_cb)
 Piix4::~Piix4() = default;
 
 void Piix4::reset() {
+    cfg_[0xcb] = 0x21; // RTCCFG reset value (datasheet 4.1.20)
     pic_.reset();
     pit_.reset();
     rtc_.reset();
@@ -136,6 +138,11 @@ u32 Piix4::config_read32(u8 off) {
     return PciDevice::config_read32(off);
 }
 void Piix4::config_write8(u8 off, u8 value) {
+    if (off == 0xcb) {
+        cfg_[0xcb] = value;
+        rtc_.set_rtc_config(value); // bank enables / write-once lock bits
+        return;
+    }
     cfg_[off] = value;
 }
 void Piix4::config_write32(u8 off, u32 value) {

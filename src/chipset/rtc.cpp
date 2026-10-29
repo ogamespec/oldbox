@@ -8,10 +8,13 @@ Rtc::Rtc(Bus& bus, IrqFn irq8) : bus_(bus), irq8_(std::move(irq8)) { reset(); }
 
 void Rtc::reset() {
     cmos_.fill(0);
+    cmos_ext_.fill(0);
     reg_a_ = 0x26;
     reg_b_ = 0x02;
     reg_c_ = 0;
     index_ = 0;
+    ext_index_ = 0;
+    rtc_cfg_ = 0x21; // RTCCFG reset value: standard bank on, extended off
     update_in_progress_ = false;
     irq_pending_ = false;
     now_ = std::tm{};
@@ -225,10 +228,104 @@ void Rtc::set_cmos(u8 index, u8 value) {
     cmos_[index & 0x7f] = value;
 }
 
+
+void Rtc::set_cmos_ext(u8 index, u8 value) { cmos_ext_[index & 0x7f] = value; }
+
+void Rtc::set_rtc_config(u8 value) {
+    // RTCCFG bits 3/4 are write-once until a hardware reset (datasheet
+    // 4.1.20): software cannot unlock 38h-3Fh once locked.
+    const u8 locked = u8((rtc_cfg_ | value) & 0x18u);
+    rtc_cfg_ = u8((value & ~0x18u) | locked);
+}
+
+std::array<u8, Rtc::kNvramBytes> Rtc::nvram() const {
+    std::array<u8, kNvramBytes> out{};
+    for (std::size_t i = 0; i < kBankBytes; ++i) out[i] = cmos_[i];
+    // Registers A/B are control state; C is a read-only flag register and
+    // contains no battery-backed data.  Store the clean values so a restored
+    // image does not start with UIP or stale interrupt flags.
+    out[0x0a] = reg_a_;
+    out[0x0b] = reg_b_;
+    out[0x0c] = 0;
+    for (std::size_t i = 0; i < kBankBytes; ++i) out[kBankBytes + i] = cmos_ext_[i];
+    return out;
+}
+
+bool Rtc::load_nvram(std::span<const u8> bytes) {
+    if (bytes.size() != kNvramBytes) return false;
+    const u8* d = bytes.data();
+
+    const auto bcd_in_range = [](u8 v, int lo, int hi) {
+        const int units = v & 0x0f, tens = v >> 4;
+        if (units > 9 || tens > 9) return false;
+        const int n = tens * 10 + units;
+        return n >= lo && n <= hi;
+    };
+    const u8 reg_b = d[0x0b];
+    // The model stores time as BCD in 24-hour format, which is the BIOS
+    // default (REGB = 02h).  A guest that switched to binary/12-hour mode
+    // still gets its configuration bytes restored, but the clock keeps the
+    // reset value instead of being misread as BCD.
+    const bool time_ok = (reg_b & 0x02) != 0 && (reg_b & 0x04) == 0 &&
+                         bcd_in_range(d[0x00], 0, 59) && // seconds
+                         bcd_in_range(d[0x02], 0, 59) && // minutes
+                         bcd_in_range(d[0x04], 0, 23) && // hours
+                         bcd_in_range(d[0x06], 1, 7) &&   // day of week
+                         bcd_in_range(d[0x07], 1, 31) &&  // date
+                         bcd_in_range(d[0x08], 1, 12) &&  // month
+                         bcd_in_range(d[0x09], 0, 99);    // year
+
+    std::tm restored{};
+    if (time_ok) {
+        int century = ((now_.tm_year + 1900) / 100) * 100;
+        const u8 century_bcd = d[0x32];
+        if (century_bcd != 0xff && bcd_in_range(century_bcd, 19, 99))
+            century = from_bcd(century_bcd) * 100;
+        restored.tm_sec = from_bcd(d[0x00]);
+        restored.tm_min = from_bcd(d[0x02]);
+        restored.tm_hour = from_bcd(d[0x04]);
+        restored.tm_wday = from_bcd(d[0x06]) - 1;
+        restored.tm_mday = from_bcd(d[0x07]);
+        restored.tm_mon = from_bcd(d[0x08]) - 1;
+        restored.tm_year = century + from_bcd(d[0x09]) - 1900;
+        restored.tm_isdst = -1;
+        now_ = restored;
+    }
+
+    if (time_ok) {
+        for (std::size_t i = 0; i < kBankBytes; ++i) cmos_[i] = d[i];
+    } else {
+        // A blank/corrupt image must not install an invalid date.  Keep the
+        // reset time but still restore the general-purpose configuration.
+        for (std::size_t i = 0x0e; i < kBankBytes; ++i) cmos_[i] = d[i];
+    }
+    reg_c_ = 0;
+    cmos_[0x0c] = 0;
+    if (time_ok) {
+        reg_a_ = u8(d[0x0a] & 0x7f);
+        reg_b_ = u8(d[0x0b]);
+        periodic_divider_ = reg_a_ & 0x0f;
+        cmos_[0x0a] = reg_a_;
+        cmos_[0x0b] = reg_b_;
+        update_from_time();
+    }
+
+    for (std::size_t i = 0; i < kBankBytes; ++i) cmos_ext_[i] = d[kBankBytes + i];
+    second_acc_ = 0;
+    tick_acc_ = 0;
+    periodic_acc_ = 0;
+    update_in_progress_ = false;
+    irq_pending_ = false;
+    lower_irq8();
+    return true;
+}
+
 u8 Rtc::io_read8(u16 port) {
     if (port == 0x70) return index_;
     if (port == 0x71) {
+        if ((rtc_cfg_ & 0x01) == 0) return 0xff; // bank disabled -> ISA bus
         const u8 idx = index_ & 0x7f;
+        if ((rtc_cfg_ & 0x08) && idx >= 0x38 && idx <= 0x3f) return 0xff; // locked
         if (std::getenv("OLDBOX_CMOS_TRACE")) std::fprintf(stderr, "CMOS rd %02x\n", idx);
         switch (idx) {
         case 0x0a: return status_a();
@@ -238,14 +335,39 @@ u8 Rtc::io_read8(u16 port) {
         default: return cmos_[idx];
         }
     }
+    if (port == 0x72) {
+        if ((rtc_cfg_ & 0x04) == 0) return 0xff;
+        return ext_index_;
+    }
+    if (port == 0x73) {
+        if ((rtc_cfg_ & 0x04) == 0) return 0xff;
+        const u8 idx = ext_index_ & 0x7f;
+        if ((rtc_cfg_ & 0x10) && idx >= 0x38 && idx <= 0x3f) return 0xff;
+        return cmos_ext_[idx];
+    }
     return 0xff;
 }
 
 void Rtc::io_write8(u16 port, u8 value) {
     if (port == 0x70) { index_ = value; return; }
     if (port == 0x71) {
-        if (std::getenv("OLDBOX_CMOS_TRACE")) std::fprintf(stderr, "CMOS wr %02x = %02x\n", index_ & 0x7f, value);
-        set_cmos(index_ & 0x7f, value);
+        if ((rtc_cfg_ & 0x01) == 0) return;
+        const u8 idx = index_ & 0x7f;
+        if ((rtc_cfg_ & 0x08) && idx >= 0x38 && idx <= 0x3f) return;
+        if (std::getenv("OLDBOX_CMOS_TRACE")) std::fprintf(stderr, "CMOS wr %02x = %02x\n", idx, value);
+        set_cmos(idx, value);
+        return;
+    }
+    if (port == 0x72) {
+        if ((rtc_cfg_ & 0x04) == 0) return;
+        ext_index_ = u8(value & 0x7f);
+        return;
+    }
+    if (port == 0x73) {
+        if ((rtc_cfg_ & 0x04) == 0) return;
+        const u8 idx = ext_index_ & 0x7f;
+        if ((rtc_cfg_ & 0x10) && idx >= 0x38 && idx <= 0x3f) return;
+        set_cmos_ext(idx, value);
     }
 }
 

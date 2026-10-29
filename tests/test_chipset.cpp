@@ -4,6 +4,11 @@
 #include "oldbox/lm78.hpp"
 #include "oldbox/flash.hpp"
 #include "oldbox/bus.hpp"
+#include "oldbox/cmos_image.hpp"
+
+#include <algorithm>
+#include <filesystem>
+#include <fstream>
 
 using namespace oldbox;
 
@@ -595,6 +600,128 @@ TEST(rtc_set_bit_and_uip_window) {
     r.rtc.tick(2'244);
     CHECK_EQ(r.cmos_read(0x0a) & 0x80, 0x00u);
     CHECK_EQ(r.rtc.time().tm_sec, 1);
+}
+
+
+TEST(rtc_extended_bank_and_rtccfg_locks) {
+    RtcRig r;
+    // RTCCFG reset value 21h: standard bank on, extended bank off.
+    CHECK_EQ(r.rtc.rtc_config(), 0x21u);
+    r.rtc.io_write8(0x72, 0x10);
+    r.rtc.io_write8(0x73, 0x5a);
+    CHECK_EQ(r.rtc.io_read8(0x73), 0xffu); // upper bank disabled
+    r.rtc.set_rtc_config(0x25);            // enable upper bank (bit 2)
+    r.rtc.io_write8(0x72, 0x10);
+    r.rtc.io_write8(0x73, 0x5a);
+    CHECK_EQ(r.rtc.io_read8(0x73), 0x5au);
+    CHECK_EQ(r.rtc.cmos_ext(0x10), 0x5au);
+
+    // Bit 4 locks upper-bank bytes 38h-3Fh until PCIRST.
+    r.rtc.set_rtc_config(0x35);            // bit 4 + bit 2 + bit 0
+    r.rtc.io_write8(0x72, 0x38);
+    r.rtc.io_write8(0x73, 0x99);
+    CHECK_EQ(r.rtc.io_read8(0x73), 0xffu);
+    CHECK_EQ(r.rtc.cmos_ext(0x38), 0x00u);
+    // Lock bits are write-once: clearing them in software has no effect.
+    r.rtc.set_rtc_config(0x25);
+    CHECK_EQ(r.rtc.rtc_config() & 0x10, 0x10u);
+    r.rtc.reset_rtc_config();
+    CHECK_EQ(r.rtc.rtc_config(), 0x21u);
+
+    // Bit 3 locks standard-bank bytes 38h-3Fh.
+    r.rtc.set_rtc_config(0x29);
+    r.cmos_write(0x38, 0xaa);
+    CHECK_EQ(r.rtc.cmos(0x38), 0x00u);
+    CHECK_EQ(r.cmos_read(0x38), 0xffu);
+    r.cmos_write(0x37, 0xaa);              // outside the locked range
+    CHECK_EQ(r.rtc.cmos(0x37), 0xaau);
+}
+
+TEST(rtc_nvram_round_trip_restores_settings_time_and_extended_bank) {
+    RtcRig r;
+    r.rtc.set_time(std::tm{0, 0, 13, 17, 5, 99, 0, 0, -1}); // 1999-06-17 13:00:00
+    r.cmos_write(0x10, 0x43);
+    r.cmos_write(0x12, 0xf0);
+    r.cmos_write(0x40, 0x11);
+    r.rtc.set_rtc_config(0x25);
+    r.rtc.io_write8(0x72, 0x20);
+    r.rtc.io_write8(0x73, 0x77);
+    const auto image = r.rtc.nvram();
+    CHECK_EQ(image.size(), Rtc::kNvramBytes);
+    CHECK_EQ(image[0x10], 0x43u);
+    CHECK_EQ(image[Rtc::kBankBytes + 0x20], 0x77u);
+
+    RtcRig restored;
+    CHECK(restored.rtc.load_nvram(image));
+    CHECK_EQ(restored.rtc.cmos(0x10), 0x43u);
+    CHECK_EQ(restored.rtc.cmos(0x12), 0xf0u);
+    CHECK_EQ(restored.rtc.cmos(0x40), 0x11u);
+    CHECK_EQ(restored.rtc.cmos_ext(0x20), 0x77u);
+    CHECK_EQ(restored.rtc.time().tm_year, 99);
+    CHECK_EQ(restored.rtc.time().tm_mon, 5);   // June
+    CHECK_EQ(restored.rtc.time().tm_mday, 17);
+    CHECK_EQ(restored.rtc.time().tm_hour, 13);
+    CHECK_EQ(restored.rtc.cmos(0x2e), image[0x2e]); // Award checksum preserved
+
+    // A blank image must not install 0xFF into the clock, but the
+    // general-purpose settings are still restored.
+    auto blank = image;
+    std::fill(blank.begin(), blank.begin() + 0x0e, 0xff);
+    RtcRig fallback;
+    const auto before = fallback.rtc.time();
+    CHECK(fallback.rtc.load_nvram(blank));
+    CHECK_EQ(fallback.rtc.time().tm_year, before.tm_year);
+    CHECK_EQ(fallback.rtc.time().tm_mday, before.tm_mday);
+    CHECK_EQ(fallback.rtc.cmos(0x40), 0x11u);
+}
+
+TEST(cmos_image_file_round_trip) {
+    const auto path = std::filesystem::temp_directory_path() / "oldbox-test-cmos.bin";
+    std::filesystem::remove(path);
+    RtcRig r;
+    r.cmos_write(0x10, 0x43);
+    r.cmos_write(0x12, 0xf0);
+    r.cmos_write(0x40, 0x5a);
+    r.rtc.set_rtc_config(0x25);
+    r.rtc.io_write8(0x72, 0x21);
+    r.rtc.io_write8(0x73, 0xc3);
+    CHECK(save_cmos_image(path.string(), r.rtc));
+    CHECK(std::filesystem::file_size(path) == Rtc::kNvramBytes);
+
+    RtcRig restored;
+    CHECK(load_cmos_image(path.string(), restored.rtc));
+    CHECK_EQ(restored.rtc.cmos(0x40), 0x5au);
+    CHECK_EQ(restored.rtc.cmos_ext(0x21), 0xc3u);
+
+    // A legacy 128-byte dump loads the standard bank and erases the rest.
+    std::vector<u8> legacy(Rtc::kBankBytes, 0);
+    legacy[0x10] = 0x43;
+    legacy[0x40] = 0x66;
+    {
+        std::ofstream out(path, std::ios::binary | std::ios::trunc);
+        out.write(reinterpret_cast<const char*>(legacy.data()), std::streamsize(legacy.size()));
+    }
+    RtcRig legacy_rtc;
+    CHECK(load_cmos_image(path.string(), legacy_rtc.rtc));
+    CHECK_EQ(legacy_rtc.rtc.cmos(0x40), 0x66u);
+    CHECK_EQ(legacy_rtc.rtc.cmos_ext(0x21), 0xffu);
+    std::filesystem::remove(path);
+}
+
+TEST(piix4_rtccfg_controls_extended_bank) {
+    Bus bus(1 * megabyte);
+    Piix4 piix(bus, 32, 1);
+    CHECK_EQ(piix.config_read8(0xcb), 0x21u);
+    bus.io_write8(0x72, 0x10);
+    bus.io_write8(0x73, 0x5a);
+    CHECK_EQ(bus.io_read8(0x73), 0xffu); // RTCCFG bit 2 clear
+    piix.config_write8(0xcb, 0x25);
+    bus.io_write8(0x72, 0x10);
+    bus.io_write8(0x73, 0x5a);
+    CHECK_EQ(bus.io_read8(0x73), 0x5au);
+    piix.reset();
+    CHECK_EQ(piix.config_read8(0xcb), 0x21u);
+    CHECK_EQ(bus.io_read8(0x73), 0xffu); // bank disabled again
 }
 
 TEST(rtc_update_ended_flag_and_time_writes_blocked_during_update) {
