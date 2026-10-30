@@ -1073,6 +1073,31 @@ TEST(mode_call_gate_switches_stack_copies_params_and_returns) {
     CHECK_EQ(s.eip, 0x1007u);
 }
 
+TEST(mode_call_gate_ignores_target_selector_rpl) {
+    // A call gate may name a ring-0 code segment with the ring-3 selector
+    // alias (RPL=3), as Windows 95 does for its VxD entry points.  The gate
+    // defines the new CPL from the target descriptor DPL; the target
+    // selector's RPL must not be compared with it.
+    CpuHarness h;
+    h.make_flat_gdt();
+    install_tss(h);
+    h.state().gdtr_limit = 0x37;
+    gate_desc(h, 0x530, 0x0b, 0x3000, 0xec, 0); // target 08|RPL3, DPL3 gate
+    h.bus.write8(0x3000, 0xf4);
+    auto& s = h.state();
+    s.seg[1].selector = 0x1b; s.seg[1].base = 0; s.seg[1].limit = 0xffffffff;
+    s.seg[1].flags = 0xc0; s.seg[1].access = 0xfa;
+    s.seg[2] = s.seg[1]; s.seg[2].selector = 0x23; s.seg[2].access = 0xf2;
+    s.seg[0] = s.seg[3] = s.seg[4] = s.seg[5] = s.seg[2];
+    s.eflags = 2u;
+    s.eip = 0x1000; h.code = 0x1000; s.gpr[4] = 0x7000;
+    h.emit(0x9a); h.emit32(0); h.emit16(0x0030); // call far 30h:0 through gate
+    h.cpu.step();
+    CHECK_EQ(h.cpu.cpl(), 0);
+    CHECK_EQ(s.seg[1].selector, 0x08u);
+    CHECK_EQ(s.eip, 0x3000u);
+}
+
 TEST(mode_indirect_far_call_uses_call_gate) {
     CpuHarness h;
     h.make_flat_gdt();

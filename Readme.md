@@ -48,8 +48,13 @@ master пишутся в CMOS при сбросе, поэтому C: переж�
 именно остаётся блокер) описано в [docs/win95-blocker.md](docs/win95-blocker.md).
 Ошибка `SUWIN caused a General Protection Fault in module SETUPX.DLL` на 19%
 исправлена: `RETF` на not-present LDT-селектор теперь оставляет кадр возврата
-для #NP-обработчика, и Setup доходит до диалога лицензии; разбор — в
-[docs/dosx-investigation.md](docs/dosx-investigation.md).
+для #NP-обработчика, и Setup доходит до диалога лицензии. Следующий GPF
+(`SYSDETMG.DLL` при анализе конфигурации и `WINSETUP` на 0147:00CA) — это
+call gate на ring-0 цель с RPL=3: RPL цели gate больше не сравнивается с
+новым CPL. Разбор — в [docs/dosx-investigation.md](docs/dosx-investigation.md).
+На запросе «Вставка диска» (создание системного диска Windows 95) выбирайте
+**Отмена**: установка продолжится без загрузочной дискеты. «OK» пытается
+форматировать A:, где лежит загрузочная дискета MS-DOS.
 `assets\hdd\win95-hdd.img` уже размечен и отформатирован как FAT16 и пуст:
 форматировать его из FreeDOS (`run.bat` 10) не нужно — FreeDOS `FORMAT C:`
 на этом 500-МиБ разделе создаёт FAT12 (FDISK так и показывает). Если образ

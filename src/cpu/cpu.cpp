@@ -895,6 +895,12 @@ void Cpu::do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bo
     if (!(gate.access & 0x80)) throw CpuException{11, u32(gate_selector & ~3u), true};
     const u16 target_sel = gate.selector;
     if ((target_sel & ~7u) == 0) exception_gp(0);
+    // The RPL bits of a call gate's target selector are not part of the
+    // privilege check: Windows 95 stores the ring-3 alias (for example
+    // 1D2F) in the gate and expects the gate to enter ring 0 at 1D2C.
+    // load_cs_far_raw() applies direct-far-transfer rules, so mask the RPL
+    // before handing it the gate target.
+    const u16 target_cs = u16(target_sel & ~3u);
     const Descriptor target = read_descriptor_checked(target_sel);
     const u8 ttype = target.access & 0x1f;
     const bool code = (target.access & 0x10) && (target.access & 0x08);
@@ -938,14 +944,14 @@ void Cpu::do_call_gate(u16 gate_selector, const Descriptor& gate, u32 offset, bo
         for (u32 i = nparams; i > 0; --i) push_value(params[i - 1], push_size);
         push_value(state_.seg[unsigned(SegReg::cs)].selector, push_size);
         push_value(state_.eip, push_size);
-        load_cs_far_raw(target_sel, target_off, target_dpl);
+        load_cs_far_raw(target_cs, target_off, target_dpl);
         cpl_override_ = -1;
     } else {
         if (call) {
             push_value(state_.seg[unsigned(SegReg::cs)].selector, push_size);
             push_value(state_.eip, push_size);
         }
-        load_cs_far_raw(target_sel, target_off, old_cpl);
+        load_cs_far_raw(target_cs, target_off, old_cpl);
     }
 }
 void Cpu::do_far_return(int size, u16 extra) {
