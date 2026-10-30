@@ -66,7 +66,13 @@ boot sector.
 (`CMOS[3Ch] & 80h`); если он включён, boot sector не запишется без
 подтверждения — см. [docs/cmos.md](docs/cmos.md#virus-warning-и-запись-boot-sector).
 
-Пункт 11 в `run.bat` — единственный вариант установки: MS-DOS 7.
+Для уже установленной Windows 95 используйте пункт **12**: BIOS не
+передаёт управление MBR IDE-диска напрямую (`DISK BOOT FAILURE`), поэтому
+загрузочная дискета `assets\floppy\hddboot.img` читает MBR через INT 13h и
+передаёт управление ему. Дискету собирает
+`python3 tools/make_hddboot_floppy.py`.
+
+Пункт 11 в `run.bat` — вариант установки: MS-DOS 7.
 Загрузочная дискета `assets\floppy\msdos7-win95.img` собирается
 `python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
 boot sector MSWIN4.1 из FORMAT.COM, HIMEM.SYS, QCDROM, MSCDEX). MS-DOS 7

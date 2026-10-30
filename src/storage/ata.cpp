@@ -365,6 +365,7 @@ AtaController::~AtaController() {
             if (d.dirty) flush_drive(d);
         }
     }
+    flush_host_files();
 }
 
 u8 AtaController::config_read8(u8 off) {
@@ -654,19 +655,32 @@ void AtaController::write_sector(IdeDrive& d, u64 lba, const u8* in) {
 }
 
 bool AtaController::persist_sectors(IdeDrive& d, u64 lba, const u8* data, u32 count) {
-    // Write the completed block back to the image in place.  A real drive
-    // commits sectors when the command completes; rewriting the whole image
-    // on FLUSH CACHE (the previous behaviour) was both slow and dangerous:
-    // an interrupted close could truncate the 500 MiB file and leave a
-    // filesystem that ScanDisk flags.  The in-memory copy remains
-    // authoritative; a failed host write falls back to flush_drive().
+    // Write the completed block back to the image in place.  Keep the host
+    // stream open for the lifetime of the controller: opening a 500 MiB
+    // image and flushing it for every 512-byte PIO block turns Windows 95's
+    // first boot into an I/O storm (the ATA profiler then shows ~100%).
+    // The in-memory copy remains authoritative; a failed host write falls
+    // back to flush_drive().
     if (d.atapi || d.path.empty() || count == 0) return false;
-    std::fstream io(d.path, std::ios::binary | std::ios::in | std::ios::out);
-    if (!io) return false;
+    auto& io = host_files_[d.path];
+    if (!io.is_open()) {
+        io.open(d.path, std::ios::binary | std::ios::in | std::ios::out);
+        if (!io) return false;
+    }
     io.seekp(std::streamoff(lba * 512ull));
     io.write(reinterpret_cast<const char*>(data), std::streamsize(count) * 512);
     io.flush();
     return bool(io);
+}
+
+void AtaController::flush_host_files() {
+    for (auto& [path, io] : host_files_) {
+        if (io.is_open()) {
+            io.flush();
+            io.close();
+        }
+    }
+    host_files_.clear();
 }
 
 void AtaController::flush_drive(IdeDrive& d) {
@@ -1122,6 +1136,7 @@ void AtaController::flush_all() {
             if (d.dirty) flush_drive(d);
         }
     }
+    flush_host_files();
 }
 
 // ---------------------------------------------------------------------------

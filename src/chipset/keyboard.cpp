@@ -104,11 +104,19 @@ void Keyboard::queue_keyboard_byte(u8 v) {
     update_status();
 }
 
-void Keyboard::queue_mouse_byte(u8 v) {
-    // The controller input for the auxiliary device has a small FIFO; drop
-    // the oldest movement when the guest stops reading.
-    if (mouse_queue_.size() >= 64) mouse_queue_.pop_front();
-    mouse_queue_.push_back(v);
+void Keyboard::queue_mouse_packet(u8 b0, u8 dx, u8 dy) {
+    // The controller input for the auxiliary device has a small FIFO.  Drop
+    // whole 3-byte packets, never individual bytes: dropping one byte in the
+    // middle leaves the guest's mouse driver permanently out of sync and its
+    // next "packet" is assembled from the wrong bytes.
+    while (mouse_queue_.size() >= 60) {
+        mouse_queue_.pop_front();
+        mouse_queue_.pop_front();
+        mouse_queue_.pop_front();
+    }
+    mouse_queue_.push_back(b0);
+    mouse_queue_.push_back(dx);
+    mouse_queue_.push_back(dy);
     pump();
     update_status();
 }
@@ -127,15 +135,14 @@ void Keyboard::mouse_event(int dx, int dy, u8 buttons) {
     dx = std::clamp(dx, -255, 255);
     dy = std::clamp(dy, -255, 255);
     if (mouse_scaling2_) {
-        // 2:1 scaling applies before the 8-bit wrap per the pointing device
-        // specification.
-        dx *= 2;
-        dy *= 2;
+        // 2:1 scaling applies before the sign/magnitude fields are encoded.
+        // Clamp again afterwards: 255 * 2 does not fit the 8-bit magnitude
+        // byte, and at window edges SDL can report a much larger delta.
+        dx = std::clamp(dx * 2, -255, 255);
+        dy = std::clamp(dy * 2, -255, 255);
     }
     const u8 b0 = u8(0x08 | (buttons & 0x07) | ((dx < 0) ? 0x10 : 0) | ((dy < 0) ? 0x20 : 0));
-    queue_mouse_byte(b0);
-    queue_mouse_byte(u8(dx & 0xff));
-    queue_mouse_byte(u8(dy & 0xff));
+    queue_mouse_packet(b0, u8(dx & 0xff), u8(dy & 0xff));
 }
 
 void Keyboard::keyboard_device_command(u8 cmd) {

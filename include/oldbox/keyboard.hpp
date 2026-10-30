@@ -90,7 +90,7 @@ private:
     void raise_irq_for_head();
     void queue_response(u8 value, bool aux = false);
     void queue_keyboard_byte(u8 v);
-    void queue_mouse_byte(u8 v);
+    void queue_mouse_packet(u8 b0, u8 dx, u8 dy);
     void keyboard_device_command(u8 cmd);
     void aux_device_command(u8 cmd);
     void handle_command(u8 cmd);

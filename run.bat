@@ -28,6 +28,7 @@ set "HDD=assets\hdd\oldbox-hdd-500mb.img"
 if not defined WIN95ISO set "WIN95ISO=C:\Isos\Windows95OSR2.iso"
 set "WIN95HDD=assets\hdd\win95-hdd.img"
 set "WIN95MSFLOPPY=assets\floppy\msdos7-win95.img"
+set "HDDBOOT=assets\floppy\hddboot.img"
 
 echo ==============================================================
 echo   OldBox - Award BIOS ^(EP-ZXA^) test launcher
@@ -44,8 +45,9 @@ echo   [7] Headless smoke test 40 s, print text screen to console
 echo   [8] Headless: auto-enter Setup and save setup.ppm
 echo   [9] Boot Dangerous Dave 2 (FreeDOS + DD2 on one floppy)
 echo   [11] Windows 95 OSR2 setup: MS-DOS 7 A: + MSCDEX, CD D:, HDD C:
+echo   [12] Boot installed Windows 95 from HDD (chainloader floppy)
 echo.
-set /p "CHOICE=Choice [1-9,11]: "
+set /p "CHOICE=Choice [1-9,11-12]: "
 
 if "%CHOICE%"=="1" goto :win
 if "%CHOICE%"=="2" goto :win_del
@@ -57,6 +59,7 @@ if "%CHOICE%"=="7" goto :headless
 if "%CHOICE%"=="8" goto :headless_shot
 if "%CHOICE%"=="9" goto :win_dd2
 if "%CHOICE%"=="11" goto :win95ms
+if "%CHOICE%"=="12" goto :win95boot
 echo Unknown choice.
 pause
 exit /b 1
@@ -141,4 +144,24 @@ if not exist "%WIN95ISO%" (
     exit /b 1
 )
 "%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%WIN95MSFLOPPY%" --cdrom "%WIN95ISO%" --hdd "%WIN95HDD%"
+goto :eof
+
+:win95boot
+echo.
+echo   Boot order: A: = hddboot chainloader, C: = %WIN95HDD%
+echo   The chainloader reads the HDD MBR via INT 13h and jumps to it.
+echo.
+if not exist "%HDDBOOT%" (
+    echo [ERROR] %HDDBOOT% not found. Build it with:
+    echo         python tools\make_hddboot_floppy.py
+    pause
+    exit /b 1
+)
+if not exist "%WIN95HDD%" (
+    echo [ERROR] %WIN95HDD% not found. Build it with:
+    echo         py -3 tools\make_win95_hdd.py
+    pause
+    exit /b 1
+)
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%HDDBOOT%" --hdd "%WIN95HDD%"
 goto :eof

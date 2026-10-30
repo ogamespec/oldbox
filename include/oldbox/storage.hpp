@@ -2,6 +2,8 @@
 #include "oldbox/bus.hpp"
 #include "oldbox/pci.hpp"
 #include <functional>
+#include <fstream>
+#include <map>
 
 namespace oldbox {
 
@@ -35,6 +37,8 @@ public:
     // Writes every dirty ATA image back to the host (hard disks only).
     void flush_all();
     [[nodiscard]] bool cdrom_attached() const { return channels_[1].drives[0].atapi; }
+    [[nodiscard]] bool irq_asserted(int ch) const { return channels_[ch].irq_asserted; }
+    [[nodiscard]] bool irq_pending(int ch) const { return channels_[ch].irq_pending; }
     [[nodiscard]] bool cdrom_media_present() const {
         const auto& d = channels_[1].drives[0];
         return d.atapi && d.sectors != 0;
@@ -229,6 +233,8 @@ private:
     u8 idetim_[2]{};
     u8 udma_ctl_ = 0;
     u64 tick_acc_ = 0;
+    std::map<std::string, std::fstream> host_files_;
+    void flush_host_files();
 
     [[nodiscard]] Channel* channel_for_port(u16 port, u16& reg, int& drive, bool& control);
     [[nodiscard]] static bool is_control_offset(u16 reg);
