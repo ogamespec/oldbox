@@ -66,6 +66,28 @@ hex-редактором; формат не содержит заголовка.
 машины, а не часть репозитория. Для чистого старта удалите
 `assets/cmos/cmos.bin` или запустите с `--no-cmos-image`.
 
+## Virus Warning и запись boot sector
+
+В Award BIOS 4.51PG опция **BIOS FEATURES SETUP → Virus Warning**
+хранится в CMOS по адресу `3Ch`, бит 7, и активна по низкому уровню:
+
+| CMOS[3Ch] | Состояние |
+|---|---|
+| `0x00` | Enabled — BIOS перехватывает INT 13h и требует подтверждения перед записью boot sector |
+| `0x80` | Disabled |
+
+При Enabled `FORMAT C:` и установщик Windows 95 получают запрос
+«Disk boot sector is to be modified. Type "Y" to accept…». Если подтверждение
+не проходит, boot sector остаётся старым/несогласованным, и FDISK может
+показывать неверный тип файловой системы.
+
+`Rtc::reset()` теперь инициализирует `CMOS[3Ch] = 0x80`, то есть **Virus
+Warning выключен по умолчанию**, как и в образе `assets/cmos/cmos.bin`.
+Если в конкретном образе опция включена, её можно выключить в Setup:
+`BIOS FEATURES SETUP` → `Virus Warning` → `Disabled` (клавиша `-`/`Num -`),
+затем `F10` → `Y`. Либо удалить `assets/cmos/cmos.bin`: при старте
+применятся defaults с уже выключенной защитой.
+
 ## Диск C: и «Save & Exit Setup»
 
 Параметры primary master Award 4.51PG хранит не в чипсете, а в CMOS:

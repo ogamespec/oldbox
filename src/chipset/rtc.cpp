@@ -30,6 +30,12 @@ void Rtc::reset() {
     cmos_[0x0d] = 0x80; // battery good, RTC valid
     cmos_[0x0e] = 0x00;
     cmos_[0x0f] = 0x00;
+    // Award BIOS Features Setup: CMOS 3Ch bit 7 is the active-low
+    // "Virus Warning" option (1 = Disabled).  The boot-sector protection
+    // otherwise intercepts every INT 13h write to the boot sector, which
+    // breaks FORMAT C: and Windows 95 Setup.  Default it to Disabled just
+    // like Award's "Load Setup Defaults" does on this board.
+    cmos_[0x3c] = 0x80;
     // Award stores drive A in the HIGH nibble of 0x10: 4 = 1.44M 3.5".
     // The boot block reads this to pick the FDC geometry; 0xC0 (B: = 0x0C)
     // is an invalid type there and makes the floppy boot fail with code 40.

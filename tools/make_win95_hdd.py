@@ -193,11 +193,17 @@ def main() -> int:
             image[entry + 5:entry + 8] = chs(start + sectors - 1)
             image[entry + 4] = 0x0E
             break
+    boot = bytes(image[base:base + SECTOR])
+    if boot[54:62].rstrip(b" \x00") != b"FAT16" or boot[13] == 0 or u16(boot, 22) == 0:
+        raise SystemExit("refusing to write an image whose boot sector is not FAT16 "
+                         f"(OEM {boot[3:11]!r}, type {boot[54:62]!r})")
+
     args.out.write_bytes(image)
 
     print(f"wrote {args.out} ({len(image)} bytes)")
     print(f"  FAT16 partition at LBA {base // SECTOR}, {size // (1024 * 1024)} MiB, root emptied")
     print(f"  CHS geometry rewritten for {volume.heads} heads / {volume.spt} sectors")
+    print(f"  boot sector: FAT16, {volume.spc} sectors/cluster, {volume.fat_size} FAT sectors")
     return 0
 
 

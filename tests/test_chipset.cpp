@@ -603,6 +603,15 @@ TEST(rtc_set_bit_and_uip_window) {
 }
 
 
+TEST(rtc_defaults_disable_award_virus_warning) {
+    // Award 4.51PG CMOS 3Ch bit 7 = 1 means "Virus Warning: Disabled".
+    // Keeping the default enabled makes the BIOS reject FORMAT C:'s boot
+    // sector write, so a fresh NVRAM without the user's image must not
+    // accidentally turn the protection on.
+    RtcRig rig;
+    CHECK_EQ(rig.rtc.cmos(0x3c) & 0x80, 0x80);
+}
+
 TEST(rtc_extended_bank_and_rtccfg_locks) {
     RtcRig r;
     // RTCCFG reset value 21h: standard bank on, extended bank off.

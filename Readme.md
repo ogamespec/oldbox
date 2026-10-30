@@ -50,6 +50,15 @@ master пишутся в CMOS при сбросе, поэтому C: переж�
 исправлена: `RETF` на not-present LDT-селектор теперь оставляет кадр возврата
 для #NP-обработчика, и Setup доходит до диалога лицензии; разбор — в
 [docs/dosx-investigation.md](docs/dosx-investigation.md).
+`assets\hdd\win95-hdd.img` уже размечен и отформатирован как FAT16 и пуст:
+форматировать его из FreeDOS (`run.bat` 10) не нужно — FreeDOS `FORMAT C:`
+на этом 500-МиБ разделе создаёт FAT12 (FDISK так и показывает). Если образ
+уже испорчен, восстановите его командой
+`python3 tools/make_win95_hdd.py`; скрипт проверяет FAT16 в boot sector.
+`Virus Warning` в BIOS Features Setup по умолчанию выключен
+(`CMOS[3Ch] & 80h`); если он включён, boot sector не запишется без
+подтверждения — см. [docs/cmos.md](docs/cmos.md#virus-warning-и-запись-boot-sector).
+
 Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
 дискета `assets\floppy\msdos7-win95.img` собирается
 `python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
