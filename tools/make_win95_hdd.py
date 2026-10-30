@@ -63,6 +63,8 @@ class Fat16Volume:
         self.root_entries = u16(bs, 17)
         self.total = u16(bs, 19) or u32(bs, 32)
         self.fat_size = u16(bs, 22) or u32(bs, 36)
+        self.spt = u16(bs, 24)
+        self.heads = u16(bs, 26)
         if self.bps != SECTOR or self.fats not in (1, 2):
             raise SystemExit("unsupported FAT16 BPB")
         self.root_start = base + (self.reserved + self.fats * self.fat_size) * self.bps
@@ -170,18 +172,32 @@ def main() -> int:
     volume.clear_root()
     volume.flush_fat()
     # The source image was partitioned with a 255-head CHS translation while
-    # the Award BIOS uses LBA with its own geometry.  Setup/ScanDisk then
-    # reports a suspect partition and refuses to continue.  Mark it LBA
-    # (type 0x0E); CHS fields are advisory for LBA partitions.
+    # the BPB (and the ATA IDENTIFY geometry) uses 16 heads / 63 sectors.
+    # Setup and ScanDisk validate the partition entry's CHS fields, so rewrite
+    # them for the real geometry as well as marking the partition LBA (0x0E).
+    def chs(lba: int) -> bytes:
+        per_cyl = volume.heads * volume.spt
+        cyl, rem = divmod(lba, per_cyl)
+        head, sec = divmod(rem, volume.spt)
+        sec += 1
+        if cyl > 1023:
+            cyl, head, sec = 1023, volume.heads - 1, volume.spt
+        return bytes([head & 0xFF, (sec & 0x3F) | ((cyl >> 2) & 0xC0), cyl & 0xFF])
+
     for i in range(4):
         entry = 446 + i * 16
         if u32(image, entry + 8) == base // SECTOR and u32(image, entry + 12):
+            start = base // SECTOR
+            sectors = u32(image, entry + 12)
+            image[entry + 1:entry + 4] = chs(start)
+            image[entry + 5:entry + 8] = chs(start + sectors - 1)
             image[entry + 4] = 0x0E
             break
     args.out.write_bytes(image)
 
     print(f"wrote {args.out} ({len(image)} bytes)")
     print(f"  FAT16 partition at LBA {base // SECTOR}, {size // (1024 * 1024)} MiB, root emptied")
+    print(f"  CHS geometry rewritten for {volume.heads} heads / {volume.spt} sectors")
     return 0
 
 

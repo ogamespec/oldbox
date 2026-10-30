@@ -83,9 +83,13 @@ public:
         return read_sector(channels_[0].drives[0], lba, out);
     }
     bool hdd_write_sector(u64 lba, const u8* in) {
+        auto& d = channels_[0].drives[0];
         if (!hdd_present() || lba >= hdd_total_sectors()) return false;
-        write_sector(channels_[0].drives[0], lba, in);
-        flush_drive(channels_[0].drives[0]);
+        write_sector(d, lba, in);
+        if (!persist_sectors(d, lba, in, 1)) {
+            d.dirty = true;
+            flush_drive(d);
+        }
         return true;
     }
 
@@ -252,6 +256,7 @@ private:
     void recompute_geometry(IdeDrive& d);
     [[nodiscard]] bool read_sector(const IdeDrive& d, u64 lba, u8* out) const;
     void write_sector(IdeDrive& d, u64 lba, const u8* in);
+    bool persist_sectors(IdeDrive& d, u64 lba, const u8* data, u32 count);
     void flush_drive(IdeDrive& d);
 
     void atapi_command(Channel& ch, int drv);

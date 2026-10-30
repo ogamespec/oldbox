@@ -220,6 +220,16 @@ TEST(ata_sector_roundtrip) {
     CHECK((write_done & 0x08) == 0);
     CHECK((write_done & 0x01) == 0);
 
+    // The completed block is committed to the host image immediately; a
+    // later FLUSH CACHE or a clean exit must not be the only thing keeping
+    // the data.  The file must also keep its full size (no truncate/rewrite).
+    {
+        const auto committed = read_file(path);
+        CHECK_EQ(committed.size(), 1024u * 1024u);
+        CHECK_EQ(int(committed[7 * 512]), int(0x00));
+        CHECK_EQ(int(committed[7 * 512 + 1]), int(0xA5));
+    }
+
     // Read it back.
     ata_set_lba(bus, 0x1F0, 7, 1);
     bus.io_write8(0x1F7, 0x20);

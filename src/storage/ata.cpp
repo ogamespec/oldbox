@@ -651,7 +651,22 @@ void AtaController::write_sector(IdeDrive& d, u64 lba, const u8* in) {
     const size_t off = size_t(lba) * 512u;
     if (d.data.size() < off + 512) d.data.resize(off + 512, 0);
     std::memcpy(d.data.data() + off, in, 512);
-    d.dirty = true;
+}
+
+bool AtaController::persist_sectors(IdeDrive& d, u64 lba, const u8* data, u32 count) {
+    // Write the completed block back to the image in place.  A real drive
+    // commits sectors when the command completes; rewriting the whole image
+    // on FLUSH CACHE (the previous behaviour) was both slow and dangerous:
+    // an interrupted close could truncate the 500 MiB file and leave a
+    // filesystem that ScanDisk flags.  The in-memory copy remains
+    // authoritative; a failed host write falls back to flush_drive().
+    if (d.atapi || d.path.empty() || count == 0) return false;
+    std::fstream io(d.path, std::ios::binary | std::ios::in | std::ios::out);
+    if (!io) return false;
+    io.seekp(std::streamoff(lba * 512ull));
+    io.write(reinterpret_cast<const char*>(data), std::streamsize(count) * 512);
+    io.flush();
+    return bool(io);
 }
 
 void AtaController::flush_drive(IdeDrive& d) {
@@ -1170,6 +1185,8 @@ void AtaController::finish_write_block(Channel& ch, int drv) {
     for (u32 i = 0; i < d.current_block; ++i) {
         write_sector(d, d.transfer_lba + i, d.buffer.data() + size_t(i) * 512);
     }
+    if (!persist_sectors(d, d.transfer_lba, d.buffer.data(), d.current_block))
+        d.dirty = true; // fall back to a full image flush on exit
     perf().add_event(PerfNode::Ata, d.current_block);
     d.transfer_lba += d.current_block;
     if (d.current_block > d.transfer_remaining) d.transfer_remaining = 0;
