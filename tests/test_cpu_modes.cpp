@@ -1116,6 +1116,52 @@ TEST(mode_faulting_retf_preserves_stack_pointer) {
     CHECK_EQ(h.state().eip, 0x3000u);
 }
 
+TEST(mode_retf_not_present_keeps_frame_for_lazy_loader) {
+    // Windows 95 demand-loads missing LDT segments from the #NP handler and
+    // retries the faulting RETF.  The #NP frame must therefore contain the
+    // stack pointer from the start of the instruction, not one frame later;
+    // otherwise the retry pops the next two words (often zero) and turns a
+    // successful lazy load into #GP(0) — the SUWIN GP fault.
+    CpuHarness h;
+    h.make_flat_gdt();
+    install_tss(h);
+    // GDT[3] = LDT at 0x800, limit 0x1f.
+    h.bus.write16(0x518, 0x001f); h.bus.write16(0x51a, 0x0800);
+    h.bus.write8(0x51c, 0x00); h.bus.write8(0x51d, 0x82);
+    h.bus.write8(0x51e, 0x00); h.bus.write8(0x51f, 0x00);
+    // LDT[1] (selector 0x0f): present bit clear, DPL3 code at 0x4000.
+    segment_desc(h, 0x808, 0x4000, 0xffff, 0x7b, 0x00);
+    h.state().idtr_base = 0x600;
+    h.state().idtr_limit = 0x7ff;
+    gate(h, 11, 0x08, 0x3000);
+    h.bus.write8(0x3000, 0xf4);
+    h.set_r(0, 0x18);
+    h.emit(0x0f); h.emit(0x00); h.emit(0xd0); // lldt ax
+    h.cpu.step();
+    auto& s = h.state();
+    s.mode = CpuMode::protected_mode;
+    s.cr0 = 0x60000001;
+    s.seg[1].selector = 0x1b; s.seg[1].base = 0; s.seg[1].limit = 0xffffffff;
+    s.seg[1].flags = 0xc0; s.seg[1].access = 0xfa;
+    s.seg[2].selector = 0x23; s.seg[2].base = 0; s.seg[2].limit = 0xffffffff;
+    s.seg[2].flags = 0xc0; s.seg[2].access = 0xf2;
+    s.seg[0] = s.seg[3] = s.seg[4] = s.seg[5] = s.seg[2];
+    s.eflags = 2u;
+    s.eip = 0x1000; h.code = 0x1000;
+    s.gpr[4] = 0x7000;
+    h.bus.write32(0x7000, 0x4000);
+    h.bus.write32(0x7004, 0x000f);
+    h.emit(0xcb); // retf
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 11);
+    CHECK_EQ(h.cpu.last_exception_error() & ~3u, 0x000cu);
+    // 32-bit #NP frame: error, EIP, CS, EFLAGS, ESP, SS.  The old ESP must
+    // still point at the return offset/selector.
+    CHECK_EQ(h.bus.read32(h.r(4) + 16), 0x7000u);
+    CHECK_EQ(h.bus.read32(0x7000), 0x4000u);
+    CHECK_EQ(h.bus.read32(0x7004), 0x000fu);
+}
+
 TEST(mode_jmp_gate_does_not_change_stack_and_rejects_escalation) {
     CpuHarness h;
     h.make_flat_gdt();

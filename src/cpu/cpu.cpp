@@ -953,28 +953,44 @@ void Cpu::do_far_return(int size, u16 extra) {
     const u32 off = read_mem(initial_sp, size, SegReg::ss);
     const u16 sel = u16(read_mem((initial_sp + u32(size)) & offset_mask(stack32() ? 4 : 2), size, SegReg::ss));
     if (state_.mode == CpuMode::protected_mode && (sel & 3) < cpl()) exception_gp(sel & ~3u);
-    pop_value(size);
-    pop_value(size);
-    int old_cpl = -1;
-    bool outer = false;
-    if (state_.mode == CpuMode::protected_mode) {
-        old_cpl = cpl();
-        const int new_cpl = sel & 3;
-        outer = new_cpl > old_cpl;
-        if (outer) {
-            // For an interlevel return the RET immediate discards parameters
-            // from the callee's stack before SS:ESP is popped (Intel SDM
-            // Vol. 2, RET: ESP <- ESP + SRC in RETURN-OUTER-PRIVILEGE-LEVEL).
-            if (extra) set_stack_pointer(stack_pointer() + extra);
-            const u32 esp = pop_value(size);
-            const u16 ss = u16(pop_value(size));
-            load_stack_segment(ss, new_cpl);
-            state_.gpr[4] = size == 2 ? (esp & 0xffffu) : esp;
-        }
+
+    if (state_.mode != CpuMode::protected_mode) {
+        // Real-address and V86 returns only use the 8086 selector rules.  Load
+        // CS before consuming the frame: if the target offset is outside the
+        // V86 limit the fault is restartable and SS:SP must stay untouched.
+        load_cs_far(sel, off, state_.mode == CpuMode::virtual86 ? int(sel & 3) : -1);
+        set_stack_pointer(initial_sp + u32(size) * 2);
+        if (extra) set_stack_pointer(stack_pointer() + extra);
+        return;
     }
-    load_cs_far(sel, off, state_.mode == CpuMode::protected_mode ? int(sel & 3) : -1);
-    if (extra && !outer) set_stack_pointer(stack_pointer() + extra);
-    if (old_cpl >= 0 && outer) clear_inaccessible_data_segments(sel & 3);
+
+    const int old_cpl = cpl();
+    const int new_cpl = sel & 3;
+    if (new_cpl <= old_cpl) {
+        // Same-level (or conforming) return.  A not-present code descriptor
+        // raises #NP and Windows 95's demand loader retries the RETF after
+        // marking the LDT entry present.  The frame must therefore not be
+        // popped before the descriptor is validated: the #NP frame records
+        // SS:SP at the start of the instruction, and the handler returns to
+        // the same RETF with the same stack.  Previously the pops happened
+        // first, the retry consumed the next two words (usually zero) and
+        // turned a successful lazy load into #GP(0) — the SUWIN GP fault.
+        load_cs_far(sel, off, new_cpl);
+        set_stack_pointer(initial_sp + u32(size) * 2);
+        if (extra) set_stack_pointer(stack_pointer() + extra);
+        return;
+    }
+
+    // Interlevel (outer-privilege) return: the frame also carries SS:ESP.
+    // RET imm16 discards the callee's parameters before SS:ESP is popped
+    // (Intel SDM Vol. 2, RET: ESP <- ESP + SRC in RETURN-OUTER-PRIVILEGE).
+    const u32 sp = initial_sp + u32(size) * 2 + extra;
+    const u32 esp = read_mem(sp, size, SegReg::ss);
+    const u16 ss = u16(read_mem(sp + u32(size), size, SegReg::ss));
+    load_stack_segment(ss, new_cpl);
+    state_.gpr[4] = size == 2 ? (esp & 0xffffu) : esp;
+    load_cs_far(sel, off, new_cpl);
+    clear_inaccessible_data_segments(sel & 3);
 }
 void Cpu::do_iret(int size) {
     if (state_.mode == CpuMode::real) {

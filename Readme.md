@@ -46,6 +46,10 @@ Primary Master (BIOS определяет его как `LBA, Mode 4, 524MB`; п
 master пишутся в CMOS при сбросе, поэтому C: переживает `Save & Exit Setup`).
 Текущее состояние исследования установки Windows 95 (что проверено и где
 именно остаётся блокер) описано в [docs/win95-blocker.md](docs/win95-blocker.md).
+Ошибка `SUWIN caused a General Protection Fault in module SETUPX.DLL` на 19%
+исправлена: `RETF` на not-present LDT-селектор теперь оставляет кадр возврата
+для #NP-обработчика, и Setup доходит до диалога лицензии; разбор — в
+[docs/dosx-investigation.md](docs/dosx-investigation.md).
 Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
 дискета `assets\floppy\msdos7-win95.img` собирается
 `python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
