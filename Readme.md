@@ -54,31 +54,24 @@ call gate на ring-0 цель с RPL=3: RPL цели gate больше не с�
 новым CPL. Разбор — в [docs/dosx-investigation.md](docs/dosx-investigation.md).
 На запросе «Вставка диска» (создание системного диска Windows 95) выбирайте
 **Отмена**: установка продолжится без загрузочной дискеты. «OK» пытается
-форматировать A:, где лежит загрузочная дискета MS-DOS.
+форматировать A:, где лежит загрузочная дискета MS-DOS, и затирает её.
+Если это уже случилось, дискета восстанавливается командой
+`python3 tools/make_msdos7_floppy.py`.
 `assets\hdd\win95-hdd.img` уже размечен и отформатирован как FAT16 и пуст:
-форматировать его из FreeDOS (`run.bat` 10) не нужно — FreeDOS `FORMAT C:`
-на этом 500-МиБ разделе создаёт FAT12 (FDISK так и показывает). Если образ
-уже испорчен, восстановите его командой
-`python3 tools/make_win95_hdd.py`; скрипт проверяет FAT16 в boot sector.
+форматировать его не нужно. FreeDOS `FORMAT C:` на этом 500-МиБ разделе
+создаёт FAT12 (FDISK так и показывает). Если образ испорчен, восстановите
+его командой `python3 tools/make_win95_hdd.py`; скрипт проверяет FAT16 в
+boot sector.
 `Virus Warning` в BIOS Features Setup по умолчанию выключен
 (`CMOS[3Ch] & 80h`); если он включён, boot sector не запишется без
 подтверждения — см. [docs/cmos.md](docs/cmos.md#virus-warning-и-запись-boot-sector).
 
-Пункт 11 в `run.bat` использует для установки MS-DOS 7: загрузочная
-дискета `assets\floppy\msdos7-win95.img` собирается
+Пункт 11 в `run.bat` — единственный вариант установки: MS-DOS 7.
+Загрузочная дискета `assets\floppy\msdos7-win95.img` собирается
 `python3 tools/make_msdos7_floppy.py` (IO.SYS/MSDOS.SYS/COMMAND.COM из ISO,
 boot sector MSWIN4.1 из FORMAT.COM, HIMEM.SYS, QCDROM, MSCDEX). MS-DOS 7
-загружается до `A:\>`, CD виден как D:, и GUI-фаза установки стартует;
-текущий блокер — real-mode виртуализация DOSX (см. `docs/debugging.md`).
-Пункт 10 в `run.bat` запускает установку Windows 95 OSR2: A: — FreeDOS с
-`HIMEM.SYS` (из установочного ISO), `QCDROM.SYS` и `MSCDEX.EXE`, C: — чистый
-500-МБ диск `assets\hdd\win95-hdd.img`, D: — `C:\Isos\Windows95OSR2.iso`.
-В `A:\>` нужно набрать `D:` и `SETUP`. Нужен именно `HIMEM.SYS`: с FreeDOS
-`HIMEMX.EXE` Setup останавливается с сообщением «Cannot start Windows in
-standard mode. Make sure you have installed HIMEM.SYS...».
-Дискету собирает `python3 tools/make_win95_cd_floppy.py` (берёт `HIMEM.SYS`
-из ISO, `qcdrom.sys` и `mscdex.exe` — из `DOS Drivers.zip`), целевой диск —
-`python3 tools/make_win95_hdd.py`.
+загружается до `A:\>`, CD виден как D:, Setup проходит лицензию и анализ
+конфигурации. При запросе «Вставка диска» выбирайте «Отмена».
 Отдельный `run-world9.bat` запускает игровую FreeDOS-дискету
 `assets\floppy\freedos-games-cd.img` (HIMEMX + `MOUSE.COM`/`MOUSE.INI` + QCDROM + MSCDEX)
 и диск `C:\Isos\WORLD9`: CD виден как D:, жёсткий диск — как C:.

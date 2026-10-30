@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Build the FreeDOS A: disk used by run.bat option [10].
+"""Build a FreeDOS A: disk for experiments (run.bat no longer uses it).
+
+This was the image for the removed run.bat option [10].  The FreeDOS variant
+is not suitable for installing Windows 95: its text-mode Setup writes
+zero-length MINI.CAB/EXTRACT.EXE and the GUI then reports a CAB read error.
+Use make_msdos7_floppy.py and run.bat option [11] instead.
+
 
 The disk boots FreeDOS 1.2, loads Microsoft HIMEM.SYS (taken from the
 Windows 95 OSR2 ISO), the QCDROM ATAPI driver and Microsoft MSCDEX, so the
