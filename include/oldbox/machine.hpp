@@ -69,6 +69,8 @@ public:
     [[nodiscard]] FloppyController& floppy() { return floppy_; }
     [[nodiscard]] Flash* flash() { return flash_.get(); }
     [[nodiscard]] Piix4& piix4() { return piix4_; }
+    [[nodiscard]] Lm78& lm78() { return lm78_; }
+    [[nodiscard]] const Lm78& lm78() const { return lm78_; }
 
     [[nodiscard]] VideoFrame display_frame() const;
     [[nodiscard]] VideoSource* active_video();

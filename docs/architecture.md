@@ -33,7 +33,7 @@
   - `cpu_0f.cpp` — двухбайтовые опкоды, CPUID, MSR-доступы, CMOV, MMX;
   - `cpu_system.cpp` — MSR, LDT/TR, TSS switch;
   - `cpu_x87.cpp` — x87 FPU;
-- `src/chipset/` — i440BX/PIIX4, PIC, PIT, RTC, DMA, 8042, SMBus.
+- `src/chipset/` — i440BX/PIIX4, PIC, PIT, RTC, DMA, 8042, SMBus, LM78.
 - `src/cpu/apic.cpp` — локальный APIC Pentium II (это блок процессора,
   не чипсета).
 - `src/video/` — S3 Trio64 (VGA + 2D engine) и Voodoo SST-1 (FBI/TMU).

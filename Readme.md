@@ -11,6 +11,7 @@ SDL3-фронтендом. Проект написан с нуля по перв
 |---|---|
 | CPU | Pentium II 233 MHz (Klamath) или 333 MHz (Deschutes), интерпретатор IA-32 |
 | Chipset | Intel 82443BX + 82371AB PIIX4 (PCI, ISA, IDE, PIC, PIT, RTC, DMA, SMBus, 8042) |
+| Hardware monitor | National LM78 (ISA 290h–297h и SMBus 2Dh; см. [docs/lm78.md](docs/lm78.md)) |
 | RAM | 32/64 MiB SDRAM (настраивается, 8–512 MiB), 3 slot |
 | Flash | W29C020-12 (2MBit) |
 | 2D video | S3 Trio64 (86C764), 4 MiB VRAM, VGA + S3 2D engine |
@@ -214,7 +215,9 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   machine check, performance counters, APIC, FPU (x87), MMX, строковые
   операции, REP/REPZ/REPNE.
 - i440BX/PIIX4: PCI config mechanism #1, BAR-ы, PIC, PIT, RTC/CMOS, DMA,
-  8042, SMBus + SPD EEPROM, PM-блок, порт 0x92 (A20/INIT), CF9h (RCPU,
+  8042, SMBus + SPD EEPROM, LM78 (ISA 290h и SMBus 2Dh: мониторинг
+  температуры/напряжений/вентиляторов, WATCHDOG, POST RAM, прерывания),
+  PM-блок, порт 0x92 (A20/INIT), CF9h (RCPU,
   SRST: INIT или hard reset), ELCR. Hard reset сохраняет DRAM и CMOS, чтобы
   Award мог пройти тёплый POST после «Save & Exit Setup».
 - S3 Trio64: VGA-плоскости, text 720×400, mode 13h/12h, linear modes,

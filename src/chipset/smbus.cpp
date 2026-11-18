@@ -142,15 +142,30 @@ void Smbus::start_transaction(u8 control) {
         if (irq_ && (control & 0x01)) irq_(true);
         return;
     }
-    if (addr7 == 0x2d && lm78_) { // LM78 hardware monitor
+    if (lm78_ && addr7 == lm78_->serial_bus_address()) { // LM78 hardware monitor
+        // The LM78 Serial Bus protocol is address byte + internal-address
+        // byte + data byte.  The PIIX4 "byte" protocol carries only one byte
+        // after the slave address, so a write programs the internal address
+        // register (Figure 7b) and a read returns the data register at the
+        // current internal address.  Auto-increment is not available over
+        // the Serial Bus.
+        lm78_->serial_bus_begin();
         const u8 cmd = host_command_;
         switch (protocol) {
         case 0x01: // byte
-        case 0x02:
+            if (read) {
+                host_data0_ = lm78_->reg_read(lm78_->internal_address());
+            } else {
+                lm78_->set_internal_address(host_data0_);
+            }
+            break;
+        case 0x02: // byte data: internal address followed by data
+            lm78_->set_internal_address(cmd);
             if (read) host_data0_ = lm78_->reg_read(cmd);
             else lm78_->reg_write(cmd, host_data0_);
             break;
-        case 0x03:
+        case 0x03: // word data: not a native LM78 transfer; keep two bytes
+            lm78_->set_internal_address(cmd);
             if (read) {
                 host_data0_ = lm78_->reg_read(cmd);
                 host_data1_ = lm78_->reg_read(u8(cmd + 1));
@@ -163,6 +178,7 @@ void Smbus::start_transaction(u8 control) {
             host_status_ = kStatusInter | kStatusDevErr;
             break;
         }
+        lm78_->serial_bus_end();
         if (host_status_ == 0) host_status_ = kStatusInter;
         if (irq_ && (control & 0x01)) irq_(true);
         return;

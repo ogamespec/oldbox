@@ -421,8 +421,66 @@ private:
         p.entry_ = W83877TF::Entry(entry);
     }
 
-    static void save_lm78(const Lm78& p, StateWriter& w) { w.array(p.regs_); }
-    static void load_lm78(Lm78& p, StateReader& r) { r.array(p.regs_); }
+    static void save_lm78(const Lm78& p, StateWriter& w) {
+        w.array(p.regs_);
+        w.array(p.voltage_code_);
+        w.array(p.fan_rpm_);
+        w.pod(p.temp_code_);
+        w.pod(p.vid_inputs_);
+        w.pod(p.address_);
+        w.pod(p.isa_busy_);
+        w.pod(p.serial_busy_);
+        w.pod(p.post_write_ptr_);
+        w.pod(p.post_write_full_);
+        w.pod(p.cpu_mhz_);
+        w.pod(p.tick_acc_);
+        w.pod(p.slot_);
+        w.pod(p.slot_elapsed_ns_);
+        w.pod(p.monitoring_);
+        w.pod(p.temp_armed_high_);
+        w.pod(p.temp_comparator_clear_);
+        w.pod(p.bti_);
+        w.pod(p.smi_in_);
+        w.pod(p.chassis_intrusion_);
+        w.pod(p.reset_pulse_ns_);
+        w.pod(p.chassis_clear_ns_);
+    }
+    static void load_lm78(Lm78& p, StateReader& r) {
+        r.array(p.regs_);
+        r.array(p.voltage_code_);
+        r.array(p.fan_rpm_);
+        r.pod(p.temp_code_);
+        r.pod(p.vid_inputs_);
+        r.pod(p.address_);
+        r.pod(p.isa_busy_);
+        r.pod(p.serial_busy_);
+        r.pod(p.post_write_ptr_);
+        r.pod(p.post_write_full_);
+        r.pod(p.cpu_mhz_);
+        r.pod(p.tick_acc_);
+        r.pod(p.slot_);
+        r.pod(p.slot_elapsed_ns_);
+        r.pod(p.monitoring_);
+        r.pod(p.temp_armed_high_);
+        r.pod(p.temp_comparator_clear_);
+        r.pod(p.bti_);
+        r.pod(p.smi_in_);
+        r.pod(p.chassis_intrusion_);
+        r.pod(p.reset_pulse_ns_);
+        r.pod(p.chassis_clear_ns_);
+        // Keep a damaged or hand-edited snapshot from indexing outside the
+        // POST-RAM array or dividing by zero.
+        if (p.post_write_ptr_ > 31) p.post_write_ptr_ = 31;
+        if (p.slot_ >= 11) p.slot_ = 0;
+        if (p.cpu_mhz_ == 0) p.cpu_mhz_ = 1;
+        if (p.tick_acc_ >= p.cpu_mhz_) p.tick_acc_ %= p.cpu_mhz_;
+        if (p.slot_elapsed_ns_ >= 1'000'000'000ull) p.slot_elapsed_ns_ = 0;
+        p.address_ = u8(p.address_ & 0x7f);
+        p.vid_inputs_ = u8(p.vid_inputs_ & 0x0f);
+        // The pin callbacks are owned by the machine and are not part of the
+        // snapshot; force them to the restored levels.
+        p.update_outputs(true);
+    }
 
     static void save_apic(const LocalApic& p, StateWriter& w) {
         w.pod(p.base_); w.pod(p.id_); w.pod(p.svr_); w.pod(p.tpr_); w.pod(p.ldr_); w.pod(p.dfr_);

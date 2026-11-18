@@ -53,7 +53,8 @@ oldbox.exe ... --load-state temp\setup-prompt.state ^
 - floppy: оба диска и состояние 82077AA;
 - S3 Trio64: VRAM, VGA/S3-регистры, 2D-движок;
 - Voodoo, если он включён;
-- Super I/O W83877TF, LM78, Local APIC, PC speaker;
+- Super I/O W83877TF, LM78 (регистры, POST/Value RAM, таймеры мониторинга,
+  маски прерываний и состояния выводов), Local APIC, PC speaker;
 - счётчики `Machine` (frames, cycles, очередь ввода).
 
 Формат: заголовок `OLDBOXST`, версия, хеш конфигурации, CRC32 и размер

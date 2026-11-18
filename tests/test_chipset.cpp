@@ -905,6 +905,441 @@ TEST(lm78_value_ram_mirror) {
     CHECK_EQ(lm.reg_read(0x2b), 0x7fu);
 }
 
+namespace {
+// The LM78's internal conversion timers are in nanoseconds.  With a 1 MHz
+// scheduler clock one tick cycle is 1 us, so milliseconds map directly.
+void lm78_advance(Lm78& lm, u64 milliseconds) {
+    lm.tick(milliseconds * 1000);
+}
+} // namespace
+
+TEST(lm78_isa_address_register_busy_and_auto_increment) {
+    Lm78 lm;
+    constexpr u16 base = Lm78::kIsaBase;
+    CHECK_EQ(lm.io_read8(base + 5), 0x00u); // address pointer, BUSY clear
+
+    // A write to Port x5h sets BUSY; the next x6h access clears it.
+    lm.io_write8(base + 5, 0x41);
+    CHECK_EQ(lm.io_read8(base + 5), 0xc1u); // BUSY | 41h
+    CHECK_EQ(lm.io_read8(base + 6), 0x00u); // ISR1
+    CHECK_EQ(lm.io_read8(base + 5), 0x42u); // auto-increment 41h -> 42h
+
+    // 60h-7Fh mirrors 20h-3Fh and auto-increments through its window.
+    lm.io_write8(base + 5, 0x60);
+    CHECK_EQ(lm.io_read8(base + 6), lm.voltage_code(0));
+    CHECK_EQ(lm.io_read8(base + 5), 0x61u);
+    lm.io_write8(base + 5, 0x7f);
+    lm.io_write8(base + 6, 0x5a);
+    CHECK_EQ(lm.io_read8(base + 5), 0x7fu); // stops at 7Fh
+    CHECK_EQ(lm.reg_read(0x3f), 0x5au);
+
+    // Mask-register pairs advance from the odd address to their partner.
+    lm.io_write8(base + 5, 0x43);
+    (void)lm.io_read8(base + 6);
+    CHECK_EQ(lm.io_read8(base + 5), 0x44u);
+    lm.io_write8(base + 5, 0x45);
+    lm.io_write8(base + 6, 0x00);
+    CHECK_EQ(lm.io_read8(base + 5), 0x46u);
+
+    // Writing through the mirror updates the low Value RAM location.
+    lm.reg_write(0x2b, 0x11);
+    lm.io_write8(base + 5, 0x6b);
+    CHECK_EQ(lm.io_read8(base + 6), 0x11u);
+    CHECK_EQ(lm.io_read8(base + 5), 0x6cu);
+}
+
+TEST(lm78_busy_bit_covers_serial_transactions) {
+    Lm78 lm;
+    constexpr u16 base = Lm78::kIsaBase;
+    CHECK_EQ(lm.io_read8(base + 5) & 0x80u, 0x00u);
+    lm.serial_bus_begin();
+    CHECK_EQ(lm.io_read8(base + 5) & 0x80u, 0x80u);
+    lm.serial_bus_end();
+    CHECK_EQ(lm.io_read8(base + 5) & 0x80u, 0x00u);
+}
+
+TEST(lm78_analog_input_scaling_and_negative_supplies) {
+    Lm78 lm;
+    lm.set_voltage(0, 2.5);
+    CHECK_EQ(lm.voltage_code(0), 0x9cu); // 2.5 V / 16 mV = 156.25 -> 156
+    lm.set_voltage_raw(1, 0xff);
+    CHECK_EQ(lm.voltage_code(1), 0xffu);
+
+    // Section 4.0: -12 V through 240k/60k and -5 V through 100k/60k both
+    // present 3.0 V to the ADC.
+    lm.set_negative_supply(5, -12.0, 240'000.0, 60'000.0);
+    CHECK_EQ(lm.voltage_code(5), 0xbcu); // 3.0 V / 16 mV = 187.5 -> 188
+    lm.set_negative_supply(6, -5.0, 100'000.0, 60'000.0);
+    CHECK_EQ(lm.voltage_code(6), 0xbcu);
+
+    // The helper only applies to the two inverting inputs.
+    lm.set_negative_supply(0, -12.0, 240'000.0, 60'000.0);
+    CHECK_EQ(lm.voltage_code(0), 0x9cu);
+}
+
+TEST(lm78_isa_post_ram_fifo_and_overflow) {
+    Lm78 lm;
+    constexpr u16 base = Lm78::kIsaBase;
+
+    // Ports x0h and x4h share the POST-RAM write pointer.  The 32nd byte fills
+    // the FIFO and raises the overflow status; the pointer then stays at 1Fh.
+    for (int i = 0; i < 31; ++i) lm.io_write8(base, u8(i));
+    CHECK_EQ(lm.reg_read(0x42) & 0x20u, 0x00u);
+    lm.io_write8(base + 4, 0x1f);
+    CHECK_EQ(lm.reg_read(0x42) & 0x20u, 0x20u);
+    CHECK_EQ(lm.reg_read(0x00), 0x00u);
+    CHECK_EQ(lm.reg_read(0x1e), 0x1eu);
+    CHECK_EQ(lm.reg_read(0x1f), 0x1fu);
+
+    // Reading the POST RAM through x5h/x6h uses a separate pointer, increments
+    // to 1Fh and never raises a FIFO overflow.
+    lm.io_write8(base + 5, 0x00);
+    for (int i = 0; i < 32; ++i) {
+        CHECK_EQ(lm.io_read8(base + 6), u8(i));
+        CHECK_EQ(lm.io_read8(base + 5), u8(std::min(i + 1, 31)));
+    }
+    CHECK_EQ(lm.reg_read(0x42) & 0x20u, 0x00u);
+
+    // Further POST writes overwrite 1Fh and re-assert the overflow flag.
+    lm.io_write8(base, 0xaa);
+    CHECK_EQ(lm.reg_read(0x1f), 0xaau);
+    CHECK_EQ(lm.reg_read(0x42) & 0x20u, 0x20u);
+}
+
+TEST(lm78_initialization_and_chip_reset) {
+    Lm78 lm;
+    lm.reg_write(0x48, 0x2e); // change the Serial Bus address
+    lm.reg_write(0x2b, 0x10); // IN0 high limit
+    lm.reg_write(0x00, 0xaa); // POST RAM
+    lm.set_bti_asserted(true);
+    CHECK_EQ(lm.reg_read(0x41), 0x20u);
+
+    // INITIALIZATION leaves the Serial Bus address, POST RAM and Value RAM
+    // alone but restores the control, status and mask registers.
+    lm.reg_write(0x40, 0x80);
+    CHECK_EQ(lm.reg_read(0x48), 0x2eu);
+    CHECK_EQ(lm.reg_read(0x2b), 0x10u);
+    CHECK_EQ(lm.reg_read(0x00), 0xaau);
+    CHECK_EQ(lm.reg_read(0x41), 0x00u);
+    CHECK_EQ(lm.reg_read(0x40), 0x08u);
+    CHECK_EQ(lm.reg_read(0x46), 0x40u);
+    CHECK_EQ(lm.reg_read(0x47), 0x51u);
+
+    // Chip Reset (49h bit 5) is an unconditional complete power-on reset.
+    lm.reg_write(0x49, 0x20);
+    CHECK_EQ(lm.reg_read(0x48), Lm78::kDefaultSerialAddress);
+    CHECK_EQ(lm.reg_read(0x2b), 0xffu);
+    CHECK_EQ(lm.reg_read(0x00), 0x00u);
+    CHECK_EQ(lm.reg_read(0x40), 0x08u);
+    CHECK_EQ(lm.reg_read(0x49), 0x40u);
+
+    // The same reset through the ISA window returns the internal address
+    // register to its power-on value zero; the post-write auto-increment must
+    // not move it to 01h.
+    lm.io_write8(Lm78::kIsaBase + 5, 0x49);
+    lm.io_write8(Lm78::kIsaBase + 6, 0x20);
+    CHECK_EQ(lm.io_read8(Lm78::kIsaBase + 5), 0x00u);
+}
+
+TEST(lm78_monitoring_loop_updates_value_ram_and_watchdogs) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_voltage_raw(0, 0x80); // IN0 above its high limit
+    lm.set_voltage_raw(1, 0x10);
+    lm.set_temperature_raw(50);
+    lm.set_fan_rpm(0, 4400); // count 153, exactly at its limit
+    lm.set_fan_rpm(1, 0);    // stopped: full-scale count 255
+    lm.set_fan_rpm(2, 4400);
+
+    lm.reg_write(0x2b, 0x7f); // IN0 high limit
+    lm.reg_write(0x2d, 0xff); // IN1 high limit
+    lm.reg_write(0x39, 0x7f); // T_OI
+    lm.reg_write(0x3a, 0x00); // T_HYST
+    lm.reg_write(0x3b, 0x99); // FAN1 limit = 153
+    lm.reg_write(0x3c, 0x99); // FAN2 limit = 153
+    lm.reg_write(0x3d, 0xff); // FAN3 limit
+    lm.reg_write(0x40, 0x01); // Start, INT_Clear low
+
+    // The round is 8 * 100 ms (temperature and voltages) + 3 * 20 ms (fans).
+    lm78_advance(lm, 900);
+
+    CHECK_EQ(lm.reg_read(0x20), 0x80u);
+    CHECK_EQ(lm.reg_read(0x21), 0x10u);
+    CHECK_EQ(lm.reg_read(0x27), 50u);
+    CHECK_EQ(lm.reg_read(0x28), 153u);
+    CHECK_EQ(lm.reg_read(0x29), 255u);
+    CHECK_EQ(lm.reg_read(0x2a), 153u);
+
+    const u8 isr1 = lm.reg_read(0x41);
+    CHECK_EQ(isr1 & 0x01u, 0x01u); // IN0 > high limit
+    CHECK_EQ(isr1 & 0x40u, 0x00u); // FAN1 count == limit is not an alarm
+    CHECK_EQ(isr1 & 0x80u, 0x80u); // FAN2 count 255 > limit
+    CHECK_EQ(lm.reg_read(0x42), 0x00u);
+}
+
+TEST(lm78_temperature_interrupt_mode_state_machine) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_temperature(100);
+    lm.reg_write(0x39, 80); // T_OI
+    lm.reg_write(0x3a, 60); // T_HYST
+    lm.reg_write(0x40, 0x01);
+    lm78_advance(lm, 100); // temperature conversion
+    CHECK_EQ(lm.reg_read(0x41), 0x10u);
+    CHECK_EQ(lm.reg_read(0x41), 0x00u); // read clears
+
+    // Still above T_OI after the read: no new event until the low threshold.
+    lm78_advance(lm, 860);
+    CHECK_EQ(lm.reg_read(0x41), 0x00u);
+
+    // Descending below T_HYST generates the next (low) event.
+    lm.set_temperature(50);
+    lm78_advance(lm, 860);
+    CHECK_EQ(lm.reg_read(0x41), 0x10u);
+    CHECK_EQ(lm.reg_read(0x41), 0x00u);
+
+    // Staying below T_HYST does not re-trigger; the machine is armed high.
+    lm78_advance(lm, 860);
+    CHECK_EQ(lm.reg_read(0x41), 0x00u);
+
+    // Crossing T_OI again generates a high event.
+    lm.set_temperature(100);
+    lm78_advance(lm, 860);
+    CHECK_EQ(lm.reg_read(0x41), 0x10u);
+}
+
+TEST(lm78_temperature_comparator_mode) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_temperature(100);
+    lm.reg_write(0x39, 80);   // T_OI
+    lm.reg_write(0x3a, 0x7f); // T_HYST = 127 C selects Comparator mode
+    lm.reg_write(0x40, 0x03); // Start + SMI# output enable
+
+    lm78_advance(lm, 100);
+    CHECK(lm.smi_asserted()); // thermostat on above T_OI
+
+    // Descending below T_OI clears the status after two conversions.
+    lm.set_temperature(70);
+    lm78_advance(lm, 860);
+    CHECK(lm.smi_asserted());
+    lm78_advance(lm, 860);
+    CHECK(!lm.smi_asserted());
+
+    // Above T_OI a read clears the status, which the next conversion sets again.
+    lm.set_temperature(100);
+    lm78_advance(lm, 860);
+    CHECK(lm.smi_asserted());
+    CHECK_EQ(lm.reg_read(0x41), 0x10u);
+    CHECK(!lm.smi_asserted());
+    lm78_advance(lm, 860);
+    CHECK(lm.smi_asserted());
+}
+
+TEST(lm78_interrupt_masks_and_output_pins) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_voltage_raw(0, 0x80);
+    lm.reg_write(0x2b, 0x7f);
+    lm.reg_write(0x40, 0x03); // Start + SMI# enable
+
+    lm78_advance(lm, 200); // temperature, then IN0
+    CHECK(lm.smi_asserted());
+    CHECK(!lm.nmi_irq_asserted());
+
+    lm.reg_write(0x43, 0x01); // mask IN0 from SMI#
+    CHECK(!lm.smi_asserted());
+    lm.reg_write(0x43, 0x00);
+    CHECK(lm.smi_asserted());
+
+    lm.reg_write(0x40, 0x07); // enable NMI/IRQ# as well
+    CHECK(lm.nmi_irq_asserted());
+    CHECK_EQ(lm.nmi_irq_pin_level(), false); // IRQ mode is active low
+
+    lm.reg_write(0x40, 0x27); // select NMI mode (active high)
+    CHECK_EQ(lm.nmi_irq_pin_level(), true);
+
+    lm.reg_write(0x40, 0x2f); // INT_Clear disables both outputs
+    CHECK(!lm.smi_asserted());
+    CHECK(!lm.nmi_irq_asserted());
+    CHECK_EQ(lm.reg_read(0x41) & 0x01u, 0x01u); // status is preserved
+}
+
+TEST(lm78_reset_pulse_and_power_switch_bypass) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.reg_write(0x44, 0x80); // RESET# enable in SMI Mask Register 2
+    lm.reg_write(0x40, 0x10); // request the pulse
+    CHECK(lm.reset_asserted());
+    CHECK_EQ(lm.reset_pin_level(), false);
+    CHECK_EQ(lm.reg_read(0x40) & 0x10u, 0x10u);
+
+    lm78_advance(lm, 19);
+    CHECK(lm.reset_asserted());
+    lm78_advance(lm, 2);
+    CHECK(!lm.reset_asserted());
+    CHECK_EQ(lm.reg_read(0x40) & 0x10u, 0x00u); // bit self-clears
+
+    lm.reg_write(0x40, 0x40); // Power Switch Bypass# active low
+    CHECK(lm.power_switch_bypass_asserted());
+    CHECK_EQ(lm.power_switch_bypass_pin_level(), false);
+    lm.reg_write(0x40, 0x00);
+    CHECK(!lm.power_switch_bypass_asserted());
+}
+
+TEST(lm78_chassis_intrusion_latch_and_clear) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_chassis_intrusion(true);
+
+    lm.reg_write(0x46, 0x80); // Chassis Clear: 20 ms low pulse
+    CHECK(lm.chassis_intrusion_driven_low());
+    CHECK_EQ(lm.reg_read(0x46) & 0x80u, 0x80u);
+    lm78_advance(lm, 19);
+    CHECK(lm.chassis_intrusion_driven_low());
+    lm78_advance(lm, 2);
+    CHECK(!lm.chassis_intrusion_driven_low());
+    CHECK_EQ(lm.reg_read(0x46) & 0x80u, 0x00u);
+    CHECK(!lm.chassis_intrusion()); // external latch was reset
+
+    // The intrusion status remains latched until Interrupt Status 2 is read.
+    CHECK_EQ(lm.reg_read(0x42), 0x10u);
+    CHECK_EQ(lm.reg_read(0x42), 0x00u);
+}
+
+TEST(lm78_bti_smi_in_masks_and_chaining) {
+    Lm78 lm;
+    lm.reg_write(0x40, 0x02); // SMI# output enable
+
+    lm.set_bti_asserted(true);
+    CHECK(lm.smi_asserted());
+    CHECK_EQ(lm.reg_read(0x41), 0x20u); // ISR1 bit 5
+    CHECK_EQ(lm.reg_read(0x41), 0x00u);
+
+    // A new falling edge on BTI# after clearing is a new event.
+    lm.set_bti_asserted(false);
+    lm.set_bti_asserted(true);
+    CHECK(lm.smi_asserted());
+    lm.reg_write(0x43, 0x20); // mask BTI# from SMI#
+    CHECK(!lm.smi_asserted());
+    CHECK_EQ(lm.reg_read(0x41), 0x20u); // status is still recorded
+    lm.reg_write(0x43, 0x00);
+    CHECK(!lm.smi_asserted());
+    lm.set_bti_asserted(false);
+
+    // SMI_IN# is chained directly to SMI#, gated by SMI Mask Register 2 bit 6.
+    lm.set_smi_in_asserted(true);
+    CHECK(lm.smi_asserted());
+    CHECK_EQ(lm.reg_read(0x42), 0x40u); // ISR2 bit 6
+    CHECK(lm.smi_asserted());            // the pin is still low
+    lm.reg_write(0x44, 0x40);
+    CHECK(!lm.smi_asserted());
+    lm.reg_write(0x44, 0x00);
+    CHECK(lm.smi_asserted());
+    lm.set_smi_in_asserted(false);
+    CHECK(!lm.smi_asserted());
+}
+
+TEST(lm78_nmi_mask_2_power_on_masks_smi_in) {
+    Lm78 lm;
+    lm.reg_write(0x40, 0x06); // NMI/IRQ# enable, monitoring stopped
+    lm.set_smi_in_asserted(true);
+    CHECK(!lm.nmi_irq_asserted()); // NMI Mask 2 bit 6 defaults to one
+    lm.reg_write(0x46, 0x00);      // unmask SMI_IN#
+    CHECK(lm.nmi_irq_asserted());
+    CHECK_EQ(lm.reg_read(0x42), 0x40u); // reading clears the status
+    CHECK(!lm.nmi_irq_asserted());
+}
+
+TEST(lm78_serial_bus_dynamic_address_and_protocol) {
+    Bus bus(1 * megabyte);
+    Smbus smb(bus);
+    Lm78 lm;
+    smb.set_lm78(&lm);
+    smb.set_base(0x4000);
+
+    // Default address 2Dh: read the configuration register.
+    smb.write8(0x04, u8(0x2d << 1 | 1));
+    smb.write8(0x03, 0x40);
+    smb.write8(0x02, 0x48); // byte-data protocol, START
+    CHECK_EQ(smb.read8(0x05), 0x08u);
+
+    // Byte protocol (no command byte) writes the internal-address register.
+    smb.write8(0x04, u8(0x2d << 1));
+    smb.write8(0x05, 0x40);
+    smb.write8(0x02, 0x44); // byte protocol, START
+    CHECK_EQ(lm.internal_address(), 0x40u);
+    smb.write8(0x04, u8(0x2d << 1 | 1));
+    smb.write8(0x02, 0x44);
+    CHECK_EQ(smb.read8(0x05), 0x08u); // configuration at the current address
+
+    // Change the Serial Bus address through register 48h.
+    smb.write8(0x04, u8(0x2d << 1));
+    smb.write8(0x03, 0x48);
+    smb.write8(0x05, 0x2e);
+    smb.write8(0x02, 0x48);
+    CHECK_EQ(lm.serial_bus_address(), 0x2eu);
+
+    // The old address no longer responds; the new one does.
+    smb.write8(0x04, u8(0x2d << 1 | 1));
+    smb.write8(0x03, 0x40);
+    smb.write8(0x02, 0x48);
+    CHECK_EQ(smb.read8(0x00) & 0x04u, 0x04u);
+    smb.write8(0x00, 0x1e); // clear W1C status bits
+    smb.write8(0x04, u8(0x2e << 1 | 1));
+    smb.write8(0x03, 0x40);
+    smb.write8(0x02, 0x48);
+    CHECK_EQ(smb.read8(0x05), 0x08u);
+
+    // A Serial Bus read of an Interrupt Status Register clears it.
+    lm.set_bti_asserted(true);
+    smb.write8(0x04, u8(0x2e << 1 | 1));
+    smb.write8(0x03, 0x41);
+    smb.write8(0x02, 0x48);
+    CHECK_EQ(smb.read8(0x05), 0x20u);
+    smb.write8(0x04, u8(0x2e << 1 | 1));
+    smb.write8(0x03, 0x41);
+    smb.write8(0x02, 0x48);
+    CHECK_EQ(smb.read8(0x05), 0x00u);
+}
+
+TEST(lm78_fan_divisor_and_vid_register) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    CHECK_EQ(lm.reg_read(0x28), 0x99u); // 4400 RPM, divide-by-2 -> 153
+
+    lm.set_fan_rpm(0, 8800);
+    lm.reg_write(0x40, 0x01); // Start
+    lm78_advance(lm, 820);    // FAN1 slot
+    CHECK_EQ(lm.reg_read(0x28), 0x4cu); // 1350000 / (8800 * 2) = 76
+
+    lm.reg_write(0x47, 0x40); // FAN1 divide-by-1, FAN2 divide-by-2
+    CHECK_EQ(lm.reg_read(0x47) & 0x0fu, 0x01u);
+    CHECK_EQ(lm.reg_read(0x47) & 0xf0u, 0x40u);
+    lm78_advance(lm, 860);
+    CHECK_EQ(lm.reg_read(0x28), 0x99u); // 1350000 / 8800 = 153
+
+    lm.set_vid(0x0a);
+    CHECK_EQ(lm.reg_read(0x47) & 0x0fu, 0x0au);
+    lm.reg_write(0x47, 0x3f); // divisor bits only; VID[3:0] is read-only
+    CHECK_EQ(lm.reg_read(0x47) & 0x0fu, 0x0au);
+    CHECK_EQ(lm.reg_read(0x47) & 0xf0u, 0x30u);
+}
+
+TEST(lm78_reading_a_result_restarts_the_conversion) {
+    Lm78 lm;
+    lm.set_cpu_mhz(1);
+    lm.set_temperature_raw(20); // the reset image still holds the old 40 C
+    lm.reg_write(0x40, 0x01);   // Start
+    lm78_advance(lm, 50);       // halfway through the temperature slot
+    CHECK_EQ(lm.reg_read(0x27), 0x28u); // 40 C; the read restarts the ADC
+    lm78_advance(lm, 60);       // 60 ms after the restart
+    CHECK_EQ(lm.reg_read(0x27), 0x28u); // still the old result
+    lm78_advance(lm, 100);      // the restarted conversion completes
+    CHECK_EQ(lm.reg_read(0x27), 0x14u); // 20 C
+}
+
+
 // ===========================================================================
 // 82443BX northbridge (Intel datasheet table 3-1)
 // ===========================================================================

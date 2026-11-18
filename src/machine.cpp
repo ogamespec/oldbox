@@ -159,6 +159,7 @@ if (cfg_.watch_phys) {
     setup_pci();
     map_devices();
     piix4_.smbus().set_lm78(&lm78_);
+    lm78_.set_cpu_mhz(sched_mhz_);
     attach_storage();
     map_bios();
     reset();
@@ -265,6 +266,11 @@ void Machine::setup_pci() {
 }
 
 void Machine::map_devices() {
+    // The reference board decodes the LM78's ISA window at 290h-297h: x0h/x4h
+    // are the POST-code ports, x5h the internal address register and x6h the
+    // data register.  The same chip is also reachable through the PIIX4
+    // SMBus at its serial address (2Dh at power on).
+    bus_.map_io(Lm78::kIsaBase, 8, &lm78_, "LM78 hardware monitor");
     bus_.map_io(0x3b0, 0x10, &s3_, "S3 MDA/VGA");
     bus_.map_io(0x3c0, 0x20, &s3_, "S3 VGA");
     bus_.map_io(0x1f0, 8, &ata_, "ATA primary");
@@ -348,6 +354,7 @@ void Machine::reset() {
     pci_.reset();
     piix4_.reset();
     superio_.reset();
+    lm78_.reset();
     // Award 4.51PG keeps the primary-master geometry in CMOS[26h-2Dh]:
     // cylinders (word), heads, write precomp (word, FFFFh = none), landing
     // zone (word) and sectors/track.  CMOS[19h] = 2Eh marks the entry as a
@@ -501,6 +508,11 @@ void Machine::tick_devices(u64 cycles) {
     // (S3Trio64::render_frame, Voodoo::update_output, ...), so no node is
     // counted twice.
     piix4_.tick(cycles);
+    {
+        // The LM78 has its own ~1 s monitoring loop, independent of SYSCLK;
+        // its timers advance from the same emulated time base as the RTC.
+        lm78_.tick(cycles);
+    }
     s3_.tick(cycles);
     if (voodoo_) voodoo_->tick(cycles);
     {
@@ -686,6 +698,7 @@ std::string Machine::status_text() const {
                      cpu_.state().seg[1].selector, cpu_.state().eip, cpu_.state().seg[1].base, cpu_.state().cr0, cpu_.state().eflags,
                      cpu_.state().gpr[4], cpu_.state().seg[2].selector, cpu_.state().seg[2].base);
     o << "Chipset " << piix4_.status() << "\n";
+    o << "Monitor " << lm78_.status() << "\n";
     o << std::format("PCI     {} devices\n", pci_.devices().size());
     if (!trace_history_.empty()) {
         o << "Trace tail:\n";
@@ -715,6 +728,7 @@ std::string Machine::device_list() const {
     o << "Audio: " << (audio_ ? audio_->status() : "disabled") << "\n";
     o << "Storage: " << ata_.status() << "\n";
     o << "Floppy: " << floppy_.status() << "\n";
+    o << "Hardware monitor: " << lm78_.status() << "\n";
     o << "PCI:\n" << pci_.config_dump();
     o << "Memory map:\n" << bus_.memory_map();
     return o.str();
