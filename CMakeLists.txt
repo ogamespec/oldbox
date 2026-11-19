@@ -10,8 +10,8 @@ option(OLDBOX_WITH_SDL "Build the SDL3 frontend" ON)
 option(OLDBOX_BUILD_TESTS "Build unit and integration tests" ON)
 option(OLDBOX_FETCH_SDL "Fetch SDL3 when no system package is found" ON)
 
-# No built-in or fallback firmware: OldBox runs a REAL Award BIOS dump
-# (assets/bios/EP-ZXA.bin) provided via --bios / assets.
+# OldBox runs a REAL Award BIOS dump (assets/bios/EP-ZXA.bin) provided
+# via --bios / assets.
 function(oldbox_warnings target)
     if(MSVC)
         target_compile_options(${target} PRIVATE /W4 /permissive- /utf-8 /Zc:__cplusplus /bigobj)

@@ -51,8 +51,7 @@ CommandLine parse_command_line(int argc, char** argv) {
             c.sched_mhz = mhz;
         }
         else if (a == "--bios") {
-            // The path must point at a real Award BIOS dump (no built-in
-            // or fallback firmware exists).
+            // The path must point at a real Award BIOS dump.
             c.firmware.bios_path = need(a);
         }
         else if (a == "--vga-bios") c.firmware.vga_bios_path = need(a);
@@ -167,8 +166,7 @@ void print_usage(const char* argv0) {
         "  --sched MHz            CPU scheduler clock (default 48 for 233, 64 for 333;\n"
         "                         the nominal 233/333 MHz is CPUID-only; 32/48 are\n"
         "                         the conservative values for slower hosts)\n"
-        "  --bios FILE            load a 256 KiB system BIOS image (or 'builtin')\n"
-        "  --firmware builtin     force the built-in POST ROM\n"
+        "  --bios FILE            load a real Award BIOS dump (256 KiB)\n"
         "  --vga-bios FILE        load an S3 Trio64 option ROM\n"
         "  --flash FILE           writable W29C020 flash image (programmed by AWDFLASH)\n"
         "  --hdd FILE             attach raw hard-disk image\n"

@@ -56,19 +56,6 @@ mode процессор видит только 64 KiB окно `F000:0000–FFF
 Сообщение `BIOS ROM checksum error` — следствие текущей модели
 банков/shadow, а не сбой DRAM. Образ BIOS полный.
 
-## Встроенный POST ROM
-
-`src/bios/fallback_bios.S` — настоящий 16-битный x86 ROM (64 KiB):
-
-- устанавливает IVT для INT 10h/11h/12h/13h/15h/16h/19h;
-- рисует текст напрямую в VGA text buffer;
-- печатает баннер, CPUID vendor, объём памяти из CMOS, список PCI-устройств;
-- ищет ATA primary master, читает LBA0 через PIO и передаёт управление
-  boot-сектору; при ошибке печатает сообщение и уходит в HLT.
-
-Он собирается `as --32` и линкуется `ld --oformat binary`; CMake генерирует
-`fallback_bios.inc`, который встраивается в `oldbox_core`.
-
 ## Загрузка образов
 
 `tools/prepare_assets.py` извлекает:
@@ -78,9 +65,9 @@ mode процессор видит только 64 KiB окно `F000:0000–FFF
 - `assets/vga/S3Trio64_1_14-04.bin` из `specs/`;
 - пустую дискету `assets/floppy/blank1440.img`.
 
-Порядок поиска: `--bios`, затем `assets/bios/bios.bin`, `BXC09716.BIN`,
-`EP-ZXA.bin`, иначе встроенный ROM. S3 ROM: `--vga-bios`, `assets/vga/...`,
-`specs/S3Trio64_1_14-04.bin`.
+`--bios` задаёт конкретный файл; без него ищутся `assets/bios/bios.bin`,
+`BXC09716.BIN`, `EP-ZXA.bin`. Если дампа нет, эмулятор не стартует.
+S3 ROM: `--vga-bios`, `assets/vga/...`, `specs/S3Trio64_1_14-04.bin`.
 
 ## POST-коды
 

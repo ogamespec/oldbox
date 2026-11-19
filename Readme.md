@@ -19,11 +19,11 @@ SDL3-фронтендом. Проект написан с нуля по перв
 | Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, CD-вход (CD-DA), MPU-401, EMU8000, OPL3 (YMF262) FM в отдельном модуле (AWE64 CQM не моделируется) |
 | Storage | PIIX4 IDE (PIO), ATA/ATAPI CD-ROM (ISO и BIN/CUE с CD-DA), 82077AA FDC 1.44 MiB |
 | Input | PS/2 keyboard + PS/2 mouse через 8042 |
-| Firmware | Award BIOS из `specs/`, встроенный диагностический POST ROM, S3 Trio64 option ROM |
+| Firmware | Award BIOS из `specs/`, S3 Trio64 option ROM |
 
 ## Быстрый старт
 
-Требования: CMake ≥ 3.25, компилятор с C++20, Python 3, `as`/`ld` (binutils).
+Требования: CMake ≥ 3.25, компилятор с C++20, Python 3.
 Windows-сборка (Visual Studio 2026, MSVC, без `as`/`ld`) описана в
 [docs/windows.md](docs/windows.md):
 `build-windows.bat` или `cmake --preset windows-vs2026` + `cmake --build --preset windows-vs2026-release`.
@@ -126,8 +126,8 @@ ctest --test-dir build --output-on-failure
                --headless --seconds 2 --dump-text
 ```
 
-Без BIOS-файла используется встроенный 64 KiB POST ROM, который показывает
-конфигурацию, перечисляет PCI-устройства и пытается загрузиться с ATA-диска.
+Если дамп не найден, эмулятор завершается с ошибкой: файл задаётся `--bios`
+или автоматически ищется в `assets/bios/`.
 
 Полезные режимы:
 
@@ -250,10 +250,9 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 
 **Жёсткие правила прошивки (обязательны):**
 
-- Используется **только дамп настоящего Award BIOS** (`--bios`, по
-  умолчанию ищется `assets/bios/EP-ZXA.bin`). Встроенной/запасной
-  прошивки не существует: `src/bios` удалён, а без реального дампа
-  эмулятор отказывается стартовать.
+- Используется **только дамп настоящего Award BIOS** (`--bios`, иначе
+  автоматически ищутся `assets/bios/bios.bin`, `BXC09716.BIN`,
+  `EP-ZXA.bin`). Без реального дампа эмулятор отказывается стартовать.
 - **Никаких хуков BIOS-сервисов.** `oldbox` — low-level эмулятор: гость
   выполняет настоящий код Award BIOS, и каждое прерывание процессора
   обязано идти в этот код и в реальные модели устройств
@@ -326,7 +325,7 @@ SB16/EMU8000/OPL3, CMOS/NVRAM (оба банка PIIX4, RTCCFG/lock, сохра�
 - [docs/io-a20.md](docs/io-a20.md) — I/O-карта, привилегии, A20.
 - [docs/testing.md](docs/testing.md) — как устроены тесты и что они проверяют.
 - [docs/windows.md](docs/windows.md) — сборка под Windows (Visual Studio 2026,
-  CMake presets, статический SDL3, prebuilt fallback ROM).
+  CMake presets, статический SDL3).
 - [docs/debugging.md](docs/debugging.md) — отладочные опции: `--exc-trace`,
   `--break CS[:IP]`, `--trace-cs`, `--watch-phys`, `--dump-phys`.
 

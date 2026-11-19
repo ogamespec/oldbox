@@ -12,7 +12,6 @@
 *.raw
 *.bin
 *.rom
-!src/bios/*.inc
 compile_commands.json
 *.ppm
 /temp

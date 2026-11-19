@@ -19,8 +19,7 @@
       "cacheVariables": {
         "OLDBOX_WITH_SDL": "ON",
         "OLDBOX_BUILD_TESTS": "ON",
-        "OLDBOX_FETCH_SDL": "ON",
-        "OLDBOX_PREBUILT_FIRMWARE": "ON"
+        "OLDBOX_FETCH_SDL": "ON"
       }
     },
     {
@@ -36,8 +35,7 @@
       "cacheVariables": {
         "OLDBOX_WITH_SDL": "ON",
         "OLDBOX_BUILD_TESTS": "ON",
-        "OLDBOX_FETCH_SDL": "ON",
-        "OLDBOX_PREBUILT_FIRMWARE": "ON"
+        "OLDBOX_FETCH_SDL": "ON"
       }
     },
     {

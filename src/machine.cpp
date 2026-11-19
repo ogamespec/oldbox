@@ -178,9 +178,8 @@ void Machine::load_state(const std::string& path) { load_machine_state(*this, pa
 
 
 void Machine::load_firmware() {
-    // A REAL Award BIOS dump is required; there is deliberately no built-in
-    // or fallback firmware (src/bios was removed).  The reference board's
-    // image is assets/bios/EP-ZXA.bin (256 KiB EP-61BXA-M dump).
+    // A real Award BIOS dump is required.  The reference board's image is
+    // assets/bios/EP-ZXA.bin (256 KiB EP-61BXA-M dump).
     const std::vector<std::string> bios_candidates = {
         cfg_.firmware.bios_path,
         "assets/bios/bios.bin",

@@ -2,9 +2,7 @@
 
 `oldbox` собирается штатным MSVC-генератором CMake. SDL3 скачивается
 CMake-ом (3.2.30) и линкуется статически, поэтому рядом с `oldbox.exe` не
-нужен `SDL3.dll`. Встроенный fallback ROM берётся из заранее
-сгенерированного `src/bios/fallback_bios.inc`, так что GNU `as`/`ld` для
-сборки не требуются.
+нужен `SDL3.dll`.
 
 ## Требования
 
@@ -18,7 +16,7 @@ CMake-ом (3.2.30) и линкуется статически, поэтому �
   CMake ≥ 4.2; в VS2026 он уже такой. Если `cmake` в PATH — standalone
   версии ≥ 4.2, скрипт тоже подойдёт.
 - **Python 3** — только для подготовки ассетов (`tools/*.py`); сама сборка
-  без него работает, потому что firmware уже сгенерирован.
+  без него работает.
 - Для запуска тестов FreeDOS нужны `assets/bios/EP-ZXA.bin`,
   `assets/vga/S3Trio64_1_14-04.bin` и `assets/floppy/freedos1440.img`
   (они не входят в репозиторий).
@@ -165,10 +163,6 @@ build\vs2026\Release\oldbox.exe ^
   предупреждения не переводятся в ошибки.
 - `SDL_MAIN_HANDLED` определён для `oldbox`, поэтому используется обычный
   `main()` и не требуется `WinMain`.
-- `OLDBOX_PREBUILT_FIRMWARE=ON` по умолчанию на Windows: берётся
-  `src/bios/fallback_bios.inc`. Чтобы пересобрать ROM из
-  `src/bios/fallback_bios.S`, нужны GNU `as`/`ld` (например, MSYS2) и
-  `-DOLDBOX_PREBUILT_FIRMWARE=OFF`.
 - SDL3 можно не скачивать, если он уже установлен:
   `-DOLDBOX_FETCH_SDL=OFF -DCMAKE_PREFIX_PATH=C:\SDL3`.
   Для offline-сборки с FetchContent задайте
