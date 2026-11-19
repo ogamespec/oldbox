@@ -1,9 +1,9 @@
-#include "oldbox/cmos_image.hpp"
-#include "oldbox/config.hpp"
-#include "oldbox/machine.hpp"
-#include "oldbox/perf.hpp"
+#include "cmos_image.hpp"
+#include "config.hpp"
+#include "machine.hpp"
+#include "perf.hpp"
 #ifdef OLDBOX_WITH_SDL
-#include "oldbox/sdl_frontend.hpp"
+#include "sdl_frontend.hpp"
 #endif
 #include <cstdio>
 #include <fstream>

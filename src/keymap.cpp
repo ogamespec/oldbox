@@ -1,4 +1,4 @@
-#include "oldbox/keymap.hpp"
+#include "keymap.hpp"
 
 namespace oldbox {
 namespace {

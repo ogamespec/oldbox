@@ -1,7 +1,7 @@
 #include "tests/test.hpp"
-#include "oldbox/chipset.hpp"
-#include "oldbox/cpu_apic.hpp"
-#include "oldbox/bus.hpp"
+#include "chipset.hpp"
+#include "cpu_apic.hpp"
+#include "bus.hpp"
 
 using namespace oldbox;
 

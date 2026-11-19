@@ -1,7 +1,7 @@
 #include "tests/test.hpp"
-#include "oldbox/console.hpp"
-#include "oldbox/machine.hpp"
-#include "oldbox/state.hpp"
+#include "console.hpp"
+#include "machine.hpp"
+#include "state.hpp"
 
 #include <chrono>
 #include <filesystem>

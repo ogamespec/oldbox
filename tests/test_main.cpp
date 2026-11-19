@@ -1,5 +1,5 @@
 #include "tests/test.hpp"
-#include "oldbox/cpu_exception.hpp"
+#include "cpu_exception.hpp"
 
 namespace oldbox::test {
 int failures = 0;

@@ -138,10 +138,10 @@ wrote oldbox-console.ppm (640x480)
 
 ## Реализация
 
-- `include/oldbox/console.hpp`, `src/console.cpp` — разбор строки, таблица
+- `src/console.hpp`, `src/console.cpp` — разбор строки, таблица
   команд, вывод в журнал и stdout. Консоль не зависит от SDL и тестируется
   юнит-тестами (`tests/test_console.cpp`).
-- `src/frontend/sdl3.cpp` — панель F2 (рендер через `SDL_RenderDebugText`,
+- `src/sdl3.cpp` — панель F2 (рендер через `SDL_RenderDebugText`,
   ввод через `SDL_EVENT_TEXT_INPUT`), панель F3 ([docs/perf.md](perf.md)),
   необязательный поток чтения stdin.
   Команды выполняются в главном потоке между кадрами, поэтому обращение к

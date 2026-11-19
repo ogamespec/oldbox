@@ -47,7 +47,7 @@ CMOV, PAT, PSE36, MMX; SSE/SSE2/FXSR не выставляются.
 - **Local APIC**: MMIO `FEE00000`, ID/version/TPR/APR/PPR/EOI/LDR/DFR/SVR/
   ESR, ISR/TMR/IRR, ICR (fixed/lowest/NMI), LVT, timer one-shot/periodic,
   divide 2…128/1, приоритетная доставка и EOI.
-  Модуль лежит в `src/cpu/apic.cpp`, а не в чипсете.
+  Модуль лежит в `src/cpu_apic.cpp`, а не в чипсете.
 
 ## Инструкции
 

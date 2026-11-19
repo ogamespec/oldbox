@@ -1,4 +1,4 @@
-#include "oldbox/config.hpp"
+#include "config.hpp"
 #include <charconv>
 #include <cstdio>
 #include <cstdlib>

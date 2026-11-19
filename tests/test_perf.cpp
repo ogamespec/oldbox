@@ -1,9 +1,9 @@
 // Performance counters: node accounting, the CPU phase / nested-scope
 // subtraction, the frame history ring and the text report.
 #include "tests/test.hpp"
-#include "oldbox/console.hpp"
-#include "oldbox/machine.hpp"
-#include "oldbox/perf.hpp"
+#include "console.hpp"
+#include "machine.hpp"
+#include "perf.hpp"
 
 #include <filesystem>
 #include <string>

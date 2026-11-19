@@ -1,6 +1,6 @@
-#include "oldbox/common.hpp"
-#include "oldbox/bus.hpp"
-#include "oldbox/cpu.hpp"
+#include "common.hpp"
+#include "bus.hpp"
+#include "cpu.hpp"
 #include "tests/test.hpp"
 
 using namespace oldbox;

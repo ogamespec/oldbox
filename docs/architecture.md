@@ -25,27 +25,33 @@
 
 ## Слои
 
-- `src/core` (`bus.cpp`, `pci.cpp`, `common.cpp`) — адресное пространство,
+- `src/bus.cpp`, `src/pci.cpp`, `src/common.cpp` — адресное пространство,
   регионы RAM/ROM/MMIO, 64K I/O-карта, PCI-конфигурация и BAR.
-- `src/cpu/` — интерпретатор IA-32:
+- `src/cpu.cpp`, `src/cpu_0f.cpp`, `src/cpu_system.cpp`, `src/cpu_x87.cpp` —
+  интерпретатор IA-32:
   - `cpu.cpp` — декодер 1-байтовых опкодов, ModRM/SIB, сегментация,
     прерывания, строковые операции;
   - `cpu_0f.cpp` — двухбайтовые опкоды, CPUID, MSR-доступы, CMOV, MMX;
   - `cpu_system.cpp` — MSR, LDT/TR, TSS switch;
   - `cpu_x87.cpp` — x87 FPU;
-- `src/chipset/` — i440BX/PIIX4, PIC, PIT, RTC, DMA, 8042, SMBus, LM78.
-- `src/cpu/apic.cpp` — локальный APIC Pentium II (это блок процессора,
+- `src/i440bx.cpp`, `src/piix4.cpp`, `src/pic.cpp`, `src/pit.cpp`,
+  `src/rtc.cpp`, `src/dma.cpp`, `src/keyboard.cpp`, `src/smbus.cpp`,
+  `src/lm78.cpp`, `src/w83877tf.cpp` — i440BX/PIIX4, PIC, PIT, RTC, DMA,
+  8042, SMBus, LM78.
+- `src/cpu_apic.cpp` — локальный APIC Pentium II (это блок процессора,
   не чипсета).
-- `src/video/` — S3 Trio64 (VGA + 2D engine) и Voodoo SST-1 (FBI/TMU).
-- `src/audio/` — SB16 DSP, CT1745 mixer (включая CD-вход от привода),
-  MPU-401, EMU8000, YMF262/OPL3 FM (`opl3.cpp`).
-- `src/storage/` — PIIX4 IDE/ATA/ATAPI (ISO и BIN/CUE с CD-DA) и 82077AA FDC.
+- `src/s3_trio64.cpp`, `src/voodoo.cpp` — S3 Trio64 (VGA + 2D engine) и
+  Voodoo SST-1 (FBI/TMU).
+- `src/awe64.cpp`, `src/emu8000.cpp`, `src/opl3.cpp` — SB16 DSP, CT1745 mixer
+  (включая CD-вход от привода), MPU-401, EMU8000, YMF262/OPL3 FM.
+- `src/ata.cpp`, `src/floppy.cpp` — PIIX4 IDE/ATA/ATAPI (ISO и BIN/CUE с
+  CD-DA) и 82077AA FDC.
 - `src/machine.cpp` — сборка машины, карта памяти, запуск, reset, POST-коды.
 - `src/perf.cpp` — счётчики производительности: хостовое время по узлам,
   история кадров, отчёт для консоли и панели F3 ([docs/perf.md](perf.md)).
 - `src/console.cpp` — консоль команд (CLI): разбор строки, команды смены
   носителей, пауза/шаг, `key`/`type`, скриншоты. Панель F2 и необязательный
-  ввод из stdin живут в `src/frontend/sdl3.cpp`; команды выполняются в главном
+  ввод из stdin живут в `src/sdl3.cpp`; команды выполняются в главном
   потоке между кадрами.
 
 ## Поток одного кадра

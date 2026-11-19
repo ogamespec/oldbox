@@ -1,8 +1,8 @@
 // S3 Trio64 tests.
 #include "tests/test.hpp"
-#include "oldbox/bus.hpp"
-#include "oldbox/pci.hpp"
-#include "oldbox/s3_trio64.hpp"
+#include "bus.hpp"
+#include "pci.hpp"
+#include "s3_trio64.hpp"
 
 #include <vector>
 

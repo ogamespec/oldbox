@@ -1,10 +1,10 @@
 #include "tests/test.hpp"
-#include "oldbox/chipset.hpp"
-#include "oldbox/w83877tf.hpp"
-#include "oldbox/lm78.hpp"
-#include "oldbox/flash.hpp"
-#include "oldbox/bus.hpp"
-#include "oldbox/cmos_image.hpp"
+#include "chipset.hpp"
+#include "w83877tf.hpp"
+#include "lm78.hpp"
+#include "flash.hpp"
+#include "bus.hpp"
+#include "cmos_image.hpp"
 
 #include <algorithm>
 #include <filesystem>

@@ -37,11 +37,11 @@
 
 ## Реализация
 
-- [include/oldbox/speaker.hpp](../include/oldbox/speaker.hpp):
+- [src/speaker.hpp](../src/speaker.hpp):
   `SpeakerPoint {cycle, reload, gate}`, `mix_timeline()`; униполярный
   квадрат, DC-block, low-pass; reload 0 трактуется как 65536.
-- [include/oldbox/pit.hpp](../include/oldbox/pit.hpp),
-  [src/chipset/pit.cpp](../src/chipset/pit.cpp): `set_cycle_source()`,
+- [src/pit.hpp](../src/pit.hpp),
+  [src/pit.cpp](../src/pit.cpp): `set_cycle_source()`,
   `begin_speaker_frame()` / `take_speaker_frame()`, запись изменений при
   `out 61h`, control word канала 2 и записи reload.
 - [src/machine.cpp](../src/machine.cpp): `run_frame()` начинает кадр,

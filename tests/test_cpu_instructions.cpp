@@ -1,4 +1,4 @@
-#include "oldbox/cpu_exception.hpp"
+#include "cpu_exception.hpp"
 #include "tests/cpu_harness.hpp"
 
 using namespace oldbox;

@@ -1,6 +1,6 @@
 #include "tests/cpu_harness.hpp"
-#include "oldbox/chipset.hpp"
-#include "oldbox/keyboard.hpp"
+#include "chipset.hpp"
+#include "keyboard.hpp"
 
 using namespace oldbox;
 using namespace oldbox::test;

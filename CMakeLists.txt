@@ -29,36 +29,36 @@ add_library(oldbox_core STATIC
     src/bus.cpp
     src/flash.cpp
     src/pci.cpp
-    src/cpu/cpu.cpp
-    src/cpu/cpu_0f.cpp
-    src/cpu/cpu_x87.cpp
-    src/cpu/cpu_system.cpp
+    src/cpu.cpp
+    src/cpu_0f.cpp
+    src/cpu_x87.cpp
+    src/cpu_system.cpp
+    src/cpu_apic.cpp
     src/machine.cpp
     src/cmos_image.cpp
     src/state.cpp
     src/console.cpp
     src/perf.cpp
     src/keymap.cpp
-    src/chipset/i440bx.cpp
-    src/chipset/piix4.cpp
-    src/chipset/pic.cpp
-    src/chipset/pit.cpp
-    src/chipset/rtc.cpp
-    src/chipset/dma.cpp
-    src/chipset/keyboard.cpp
-    src/chipset/smbus.cpp
-    src/chipset/lm78.cpp
-    src/chipset/w83877tf.cpp
-    src/cpu/apic.cpp
-    src/video/s3_trio64.cpp
-    src/video/voodoo.cpp
-    src/audio/awe64.cpp
-    src/audio/opl3.cpp
-    src/audio/emu8000.cpp
-    src/storage/ata.cpp
-    src/storage/floppy.cpp
+    src/i440bx.cpp
+    src/piix4.cpp
+    src/pic.cpp
+    src/pit.cpp
+    src/rtc.cpp
+    src/dma.cpp
+    src/keyboard.cpp
+    src/smbus.cpp
+    src/lm78.cpp
+    src/w83877tf.cpp
+    src/s3_trio64.cpp
+    src/voodoo.cpp
+    src/awe64.cpp
+    src/opl3.cpp
+    src/emu8000.cpp
+    src/ata.cpp
+    src/floppy.cpp
 )
-target_include_directories(oldbox_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_include_directories(oldbox_core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(oldbox_core PUBLIC OLDBOX_VERSION="${PROJECT_VERSION}")
 oldbox_warnings(oldbox_core)
 
@@ -90,7 +90,7 @@ if(OLDBOX_WITH_SDL)
     else()
         find_package(SDL3 3.2 REQUIRED)
     endif()
-    add_executable(oldbox src/main.cpp src/frontend/sdl3.cpp)
+    add_executable(oldbox src/main.cpp src/sdl3.cpp)
     target_compile_definitions(oldbox PRIVATE OLDBOX_WITH_SDL)
     target_link_libraries(oldbox PRIVATE oldbox_core SDL3::SDL3)
     if(WIN32)
@@ -105,9 +105,9 @@ endif()
 if(WIN32)
     # Explorer/taskbar icon embedded in oldbox.exe.  The artwork is generated
     # by tools/make_icon.py; the window icon set at runtime lives in
-    # src/frontend/icon_rgba.inc.
+    # src/icon_rgba.inc.
     enable_language(RC)
-    target_sources(oldbox PRIVATE src/win32/oldbox.rc)
+    target_sources(oldbox PRIVATE src/oldbox.rc)
 endif()
 
 if(OLDBOX_BUILD_TESTS)

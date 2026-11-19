@@ -1,4 +1,4 @@
-#include "oldbox/pci.hpp"
+#include "pci.hpp"
 #include <sstream>
 
 namespace oldbox {

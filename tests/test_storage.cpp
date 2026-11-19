@@ -1,7 +1,7 @@
 // Storage tests: ATA PIO/IDENTIFY/sector round-trip, ATAPI ISO reads and the
 // 82077AA floppy controller with ISA DMA channel 2.
-#include "oldbox/storage.hpp"
-#include "oldbox/dma.hpp"
+#include "storage.hpp"
+#include "dma.hpp"
 #include "tests/test.hpp"
 #include <algorithm>
 #include <array>

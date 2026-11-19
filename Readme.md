@@ -227,7 +227,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   mip/bilinear, LFB и swapbuffer. Это именно растровый софтверный конвейер,
   без Glide/OpenGL и без перехвата вызовов.
 - AWE64: reset/version DSP, mixer, single/auto-init DMA, MPU-401 UART,
-  EMU8000 (32 голоса), OPL3 (YMF262) FM в `src/audio/opl3.cpp`: 18 каналов/36 операторов, 4-оп режим, 8 волн, стерео, таймеры/статус OPL2/OPL3
+  EMU8000 (32 голоса), OPL3 (YMF262) FM в `src/opl3.cpp`: 18 каналов/36 операторов, 4-оп режим, 8 волн, стерео, таймеры/статус OPL2/OPL3
   (YM3812: период (256−N)×80.8 мкс, RST/ST, флаги FT1/FT2/IRQ), SDL audio.
 - PC Speaker: канал 2 PIT (1193182/reload Гц) через порт 61h (gate/data),
   квадратная волна микшируется в тот же поток, что и звуковая карта, —

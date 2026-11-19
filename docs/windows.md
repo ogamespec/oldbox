@@ -76,7 +76,7 @@ CMake также создаёт собственное решение `build\vs2
 файл — удобная точка входа к сгенерированным проектам.
 
 `oldbox.slnx` перечисляет **проекты**, а не отдельные файлы. Новый модуль
-(`src/foo.cpp` + `include/oldbox/foo.hpp`) достаточно добавить в
+(`src/foo.cpp` + `src/foo.hpp`) достаточно добавить в
 `CMakeLists.txt` к `oldbox_core`/`oldbox_tests`: после следующего
 `cmake --preset windows-vs2026` он появится в сгенерированном `.vcxproj`.
 Новая запись `<Project ...>` в `oldbox.slnx` нужна только при добавлении

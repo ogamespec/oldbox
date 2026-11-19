@@ -4,9 +4,9 @@
 // reset/version, CT1745 mixer defaults, an audible EMU8000 wavetable note from
 // the generated ROM, and an audible OPL3 register sequence.
 
-#include "oldbox/audio.hpp"
-#include "oldbox/dma.hpp"
-#include "oldbox/speaker.hpp"
+#include "audio.hpp"
+#include "dma.hpp"
+#include "speaker.hpp"
 #include "tests/test.hpp"
 
 #include <algorithm>

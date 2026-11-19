@@ -9,7 +9,7 @@ and writes the three files the build consumes:
 
     artwork/oldbox-icon.png          512x512 master (RGBA, transparent)
     artwork/oldbox.ico               Windows icon, 16..256 px
-    src/frontend/icon_rgba.inc       48x48 BGRA pixels embedded in oldbox.exe
+    src/icon_rgba.inc       48x48 BGRA pixels embedded in oldbox.exe
                                      for SDL_SetWindowIcon (title bar, taskbar)
 
 Usage:
@@ -145,11 +145,11 @@ def main() -> int:
     master.save(ROOT / "artwork/oldbox-icon.png")
     premultiplied_resize(icon, 256).save(ROOT / "artwork/oldbox.ico",
                                          sizes=[(s, s) for s in ICO_SIZES])
-    write_inc(premultiplied_resize(icon, EMBED_PX), ROOT / "src/frontend/icon_rgba.inc")
+    write_inc(premultiplied_resize(icon, EMBED_PX), ROOT / "src/icon_rgba.inc")
 
     print(f"wrote artwork/oldbox-icon.png ({ICON_PX}x{ICON_PX})")
     print(f"wrote artwork/oldbox.ico ({', '.join(f'{s}x{s}' for s in ICO_SIZES)})")
-    print(f"wrote src/frontend/icon_rgba.inc ({EMBED_PX}x{EMBED_PX} ARGB8888)")
+    print(f"wrote src/icon_rgba.inc ({EMBED_PX}x{EMBED_PX} ARGB8888)")
     return 0
 
 

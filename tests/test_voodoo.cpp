@@ -1,6 +1,6 @@
 #include "tests/test.hpp"
 
-#include "oldbox/voodoo.hpp"
+#include "voodoo.hpp"
 
 #include <algorithm>
 #include <bit>

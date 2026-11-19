@@ -209,16 +209,16 @@ FreeDOS 1.2 до POST). Обратите внимание: на текстово
 
 ## Реализация
 
-- `include/oldbox/perf.hpp`, `src/perf.cpp` — счётчики, скоупы, история
+- `src/perf.hpp`, `src/perf.cpp` — счётчики, скоупы, история
   кадров, текстовый отчёт и строка для `status`.
 - `src/machine.cpp` — частота планировщика (`--sched`), фаза CPU и
   `tick_devices()`: каждый батч устройств
-  обёрнут в скоуп; `src/chipset/piix4.cpp` делит PIIX4 на PIT/RTC/DMA/8042,
-  `src/video/s3_trio64.cpp` и `src/video/voodoo.cpp` размечают кадр и
-  тяжёлые команды, `src/audio/awe64.cpp` считает сэмплы синтеза,
-  `src/storage/ata.cpp` и `src/storage/floppy.cpp` — блоки и сектора,
-  `src/chipset/pit.cpp` — IRQ0.
-- `src/frontend/sdl3.cpp` — панель F3, скоупы `Video up`/`Present`/
+  обёрнут в скоуп; `src/piix4.cpp` делит PIIX4 на PIT/RTC/DMA/8042,
+  `src/s3_trio64.cpp` и `src/voodoo.cpp` размечают кадр и
+  тяжёлые команды, `src/awe64.cpp` считает сэмплы синтеза,
+  `src/ata.cpp` и `src/floppy.cpp` — блоки и сектора,
+  `src/pit.cpp` — IRQ0.
+- `src/sdl3.cpp` — панель F3, скоупы `Video up`/`Present`/
   `Audio out`/`Idle/wait`, границы кадра профилировщика и детектор
   изменившегося кадра гостя (сетка 32×24 → `guest fps`).
 - `src/console.cpp` — команда `perf`; `src/config.cpp`, `src/main.cpp` —

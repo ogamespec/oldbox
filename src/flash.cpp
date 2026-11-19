@@ -1,5 +1,5 @@
-#include "oldbox/flash.hpp"
-#include "oldbox/common.hpp"
+#include "flash.hpp"
+#include "common.hpp"
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>

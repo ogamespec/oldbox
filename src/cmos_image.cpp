@@ -1,5 +1,5 @@
-#include "oldbox/cmos_image.hpp"
-#include "oldbox/rtc.hpp"
+#include "cmos_image.hpp"
+#include "rtc.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>

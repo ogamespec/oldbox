@@ -1,6 +1,6 @@
-#include "oldbox/console.hpp"
-#include "oldbox/machine.hpp"
-#include "oldbox/perf.hpp"
+#include "console.hpp"
+#include "machine.hpp"
+#include "perf.hpp"
 
 #include <algorithm>
 #include <charconv>

@@ -1,10 +1,10 @@
 // Command console tests: tokenizer, media insertion/ejection and the
 // command set (status, key injection, pause/step, error handling).
 #include "tests/test.hpp"
-#include "oldbox/console.hpp"
-#include "oldbox/dma.hpp"
-#include "oldbox/machine.hpp"
-#include "oldbox/storage.hpp"
+#include "console.hpp"
+#include "dma.hpp"
+#include "machine.hpp"
+#include "storage.hpp"
 
 #include <chrono>
 #include <cstring>

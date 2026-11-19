@@ -1,7 +1,7 @@
 #include "tests/test.hpp"
-#include "oldbox/keyboard.hpp"
-#include "oldbox/keymap.hpp"
-#include "oldbox/bus.hpp"
+#include "keyboard.hpp"
+#include "keymap.hpp"
+#include "bus.hpp"
 
 using namespace oldbox;
 

@@ -1,7 +1,7 @@
-#include "oldbox/machine.hpp"
-#include "oldbox/keymap.hpp"
-#include "oldbox/perf.hpp"
-#include "oldbox/state.hpp"
+#include "machine.hpp"
+#include "keymap.hpp"
+#include "perf.hpp"
+#include "state.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstring>
