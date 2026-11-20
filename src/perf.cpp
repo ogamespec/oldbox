@@ -40,7 +40,7 @@ constexpr PerfNodeDesc kNodeDesc[perf_node_count] = {
     {"PIIX4", nullptr, 0x94a3b8},
     {"S3 video", "pix/s", 0x5dd39e},
     {"Voodoo", "tri/s", 0xff6b6b},
-    {"AWE64", "smp/s", 0xffa94d},
+    {"AWE64", nullptr, 0xffa94d},
     {"Audio mix", "smp/s", 0xf6c177},
     {"ATA/IDE", "sec/s", 0x4cc9f0},
     {"FDC", "sec/s", 0x80ed99},

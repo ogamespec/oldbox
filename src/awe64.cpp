@@ -10,7 +10,6 @@
 
 #include "audio.hpp"
 #include "dma.hpp"
-#include "perf.hpp"
 
 #include <algorithm>
 #include <array>
@@ -143,6 +142,7 @@ void Awe64::reset_mixer() {
     mixer_[0x80] = irq_bits;
     mixer_[0x81] = u8(dma_bit(cfg_.dma8) | dma_bit(cfg_.dma16));
     mixer_[0x82] = 0;
+    refresh_mixer_gains();
 }
 
 void Awe64::reset() {
@@ -202,10 +202,14 @@ void Awe64::reset() {
     midi_count_ = 0;
     midi_sysex_ = false;
     opl3_.reset();
-    tick_acc_ = 0;
     mix_ring_.fill(0);
     mix_generated_ = 0;
     mix_pos_ = 0.0;
+    dac_ring_.fill(0);
+    dac_written_ = 0;
+    dac_read_ = 0;
+    tick_acc_ = 0;
+    dma_tick_clocked_ = false;
 }
 
 void Awe64::dsp_reset() {
@@ -787,79 +791,94 @@ void Awe64::mixer_write(u8 reg, u8 value) {
     switch (reg) {
     case 0x00:
         reset_mixer();
-        return;
+        break;
     case 0x80:
     case 0x81:
-        return; // AWE64 is a PnP board: IRQ/DMA setup is read-only
+        break; // AWE64 is a PnP board: IRQ/DMA setup is read-only
     case 0x82:
-        return; // interrupt status is read-only
+        break; // interrupt status is read-only
     case 0x04:
         mixer_[0x04] = value & 0xff;
         mixer_[0x32] = (value >> 4) & 0x0f;
         mixer_[0x33] = value & 0x0f;
         mixer_[0x32] = u8(mixer_[0x32] << 1);
         mixer_[0x33] = u8(mixer_[0x33] << 1);
-        return;
+        break;
     case 0x22:
         mixer_[0x22] = value & 0xff;
         mixer_[0x30] = u8(((value >> 4) & 0x0f) << 1);
         mixer_[0x31] = u8((value & 0x0f) << 1);
-        return;
+        break;
     case 0x26:
         mixer_[0x26] = value & 0xff;
         mixer_[0x34] = u8(((value >> 4) & 0x0f) << 1);
         mixer_[0x35] = u8((value & 0x0f) << 1);
-        return;
+        break;
     case 0x28:
         mixer_[0x28] = value & 0xff;
         mixer_[0x36] = u8(((value >> 4) & 0x0f) << 1);
         mixer_[0x37] = u8((value & 0x0f) << 1);
-        return;
+        break;
     case 0x2E:
         mixer_[0x2E] = value & 0xff;
         mixer_[0x38] = u8(((value >> 4) & 0x0f) << 1);
         mixer_[0x39] = u8((value & 0x0f) << 1);
-        return;
+        break;
     case 0x0A:
         mixer_[0x0A] = value & 0x07;
         mixer_[0x3A] = u8((u32(value & 0x07) * 31u + 3u) / 7u);
-        return;
+        break;
     case 0x30: case 0x31:
         mixer_[reg] = value & 0x1f;
         mixer_[0x22] = u8(((mixer_[0x30] >> 1) << 4) | (mixer_[0x31] >> 1));
-        return;
+        break;
     case 0x32: case 0x33:
         mixer_[reg] = value & 0x1f;
         mixer_[0x04] = u8(((mixer_[0x32] >> 1) << 4) | (mixer_[0x33] >> 1));
-        return;
+        break;
     case 0x34: case 0x35:
         mixer_[reg] = value & 0x1f;
         mixer_[0x26] = u8(((mixer_[0x34] >> 1) << 4) | (mixer_[0x35] >> 1));
-        return;
+        break;
     case 0x36: case 0x37:
         mixer_[reg] = value & 0x1f;
         mixer_[0x28] = u8(((mixer_[0x36] >> 1) << 4) | (mixer_[0x37] >> 1));
-        return;
+        break;
     case 0x38: case 0x39:
         mixer_[reg] = value & 0x1f;
         mixer_[0x2E] = u8(((mixer_[0x38] >> 1) << 4) | (mixer_[0x39] >> 1));
-        return;
+        break;
     case 0x3A:
         mixer_[0x3A] = value & 0x1f;
         mixer_[0x0A] = u8((u32(mixer_[0x3A]) * 7u + 15u) / 31u);
-        return;
-    case 0x3B: mixer_[reg] = value & 0x03; return;
-    case 0x3C: case 0x3D: case 0x3E: mixer_[reg] = value & 0x7f; return;
-    case 0x3F: case 0x40: case 0x41: case 0x42: mixer_[reg] = value & 0x03; return;
-    case 0x43: mixer_[reg] = value & 0x01; return;
-    case 0x44: case 0x45: case 0x46: case 0x47: mixer_[reg] = value & 0x0f; return;
-    default: mixer_[reg] = value; return;
+        break;
+    case 0x3B: mixer_[reg] = value & 0x03; break;
+    case 0x3C: case 0x3D: case 0x3E: mixer_[reg] = value & 0x7f; break;
+    case 0x3F: case 0x40: case 0x41: case 0x42: mixer_[reg] = value & 0x03; break;
+    case 0x43: mixer_[reg] = value & 0x01; break;
+    case 0x44: case 0x45: case 0x46: case 0x47: mixer_[reg] = value & 0x0f; break;
+    default: mixer_[reg] = value; break;
     }
+    refresh_mixer_gains();
 }
 
 float Awe64::mixer_gain(u8 value, u8 maximum) const {
     const float range = maximum == 31 ? 62.0f : (maximum == 15 ? 60.0f : 18.0f);
     return level_gain(value, maximum, range);
+}
+
+void Awe64::refresh_mixer_gains() {
+    // The CT1745 paths are static between mixer writes.  Caching them keeps
+    // the per-sample mixer to one multiply/add per source instead of six
+    // pow() calls, which is what made the audio thread miss its deadline.
+    master_l_ = mixer_gain(mixer_[0x30], 31);
+    master_r_ = mixer_gain(mixer_[0x31], 31);
+    voice_l_ = mixer_gain(mixer_[0x32], 31);
+    voice_r_ = mixer_gain(mixer_[0x33], 31);
+    music_l_ = mixer_gain(mixer_[0x34], 31);
+    music_r_ = mixer_gain(mixer_[0x35], 31);
+    out_gain_l_ = std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
+    out_gain_r_ = std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
 }
 
 void Awe64::midi_feed(u8 byte) {
@@ -929,71 +948,92 @@ void Awe64::midi_message(u8 status, u8 d1, u8 d2) {
     }
 }
 
-void Awe64::render_internal_frame(i16& out_l, i16& out_r) {
-    i16 emu_frame[2]{};
-    emu_.render(emu_frame, 1, 44100);
-    i16 fm_frame[2]{};
-    opl3_.render(fm_frame, 1);
-    i16 dac_l = 0, dac_r = 0;
-    read_dma_frame(dac_l, dac_r);
+void Awe64::advance_dma(u32 frames) {
+    while (frames--) {
+        i16 l = 0, r = 0;
+        read_dma_frame(l, r);
+        const u32 idx = u32(dac_written_ & (mix_ring_size - 1));
+        dac_ring_[size_t(idx) * 2] = l;
+        dac_ring_[size_t(idx) * 2 + 1] = r;
+        ++dac_written_;
+        // Headless runs never drain this queue; keep the newest samples and
+        // let the old ones go instead of growing without bound.  DMA position,
+        // block completion and IRQs still advance with emulated time.
+        if (dac_written_ - dac_read_ > mix_ring_size)
+            dac_read_ = dac_written_ - mix_ring_size;
+    }
+}
 
-    const float master_l = mixer_gain(mixer_[0x30], 31);
-    const float master_r = mixer_gain(mixer_[0x31], 31);
-    const float voice_l = mixer_gain(mixer_[0x32], 31);
-    const float voice_r = mixer_gain(mixer_[0x33], 31);
-    const float music_l = mixer_gain(mixer_[0x34], 31);
-    const float music_r = mixer_gain(mixer_[0x35], 31);
-    const float out_gain_l = std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
-    const float out_gain_r = std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
-
-    // The card's analog output stage.  The OPL3/EMU8000 levels are
-    // calibrated around this gain and the full-scale mixer defaults.
-    constexpr float output_gain = 3.0f;
-    float l = float(emu_frame[0]) * music_l + float(fm_frame[0]) * music_l +
-              float(dac_l) * voice_l;
-    float r = float(emu_frame[1]) * music_r + float(fm_frame[1]) * music_r +
-              float(dac_r) * voice_r;
-    l *= master_l * out_gain_l * output_gain;
-    r *= master_r * out_gain_r * output_gain;
-    l = std::tanh(l / 32768.0f) * 32767.0f;
-    r = std::tanh(r / 32768.0f) * 32767.0f;
-    out_l = clamp_i16(l);
-    out_r = clamp_i16(r);
+void Awe64::pop_dac(i16& l, i16& r) {
+    if (dac_read_ < dac_written_) {
+        const u32 idx = u32(dac_read_ & (mix_ring_size - 1));
+        l = dac_ring_[size_t(idx) * 2];
+        r = dac_ring_[size_t(idx) * 2 + 1];
+        ++dac_read_;
+        return;
+    }
+    if (dma_tick_clocked_) {
+        // The engine is advanced by tick().  If the host top-up asks for
+        // more samples than emulated time has produced, output silence
+        // rather than double-advancing DMA and firing block IRQs early.
+        l = 0;
+        r = 0;
+        return;
+    }
+    // render() called without a preceding tick() (unit tests do this):
+    // generate the DAC sample on demand.
+    l = 0;
+    r = 0;
+    read_dma_frame(l, r);
 }
 
 void Awe64::mix_internal(u32 frames) {
-    for (u32 i = 0; i < frames; ++i) {
-        i16 l = 0, r = 0;
-        render_internal_frame(l, r);
-        const u32 idx = u32(mix_generated_ & (mix_ring_size - 1));
-        mix_ring_[size_t(idx) * 2] = l;
-        mix_ring_[size_t(idx) * 2 + 1] = r;
-        ++mix_generated_;
-        ++sample_counter_;
+    // Block synthesis: the EMU8000 and the OPL3 advance an entire block at
+    // once, then the CT1745 mixer and the DSP DAC are applied per sample.
+    // Previously render_internal_frame() called both synthesizers one sample
+    // at a time and recomputed every mixer gain (and a tanh) per sample,
+    // which could not keep up with the audio device.
+    constexpr float output_gain = 3.0f;
+    while (frames) {
+        const u32 n = std::min(frames, mix_block);
+        emu_.render(emu_scratch_.data(), n, 44100);
+        opl3_.render(fm_scratch_.data(), n);
+        for (u32 i = 0; i < n; ++i) {
+            i16 dac_l = 0, dac_r = 0;
+            pop_dac(dac_l, dac_r);
+            float l = float(emu_scratch_[size_t(i) * 2]) * music_l_ +
+                      float(fm_scratch_[size_t(i) * 2]) * music_l_ +
+                      float(dac_l) * voice_l_;
+            float r = float(emu_scratch_[size_t(i) * 2 + 1]) * music_r_ +
+                      float(fm_scratch_[size_t(i) * 2 + 1]) * music_r_ +
+                      float(dac_r) * voice_r_;
+            l *= master_l_ * out_gain_l_ * output_gain;
+            r *= master_r_ * out_gain_r_ * output_gain;
+            const u32 idx = u32(mix_generated_ & (mix_ring_size - 1));
+            mix_ring_[size_t(idx) * 2] = clamp_i16(l);
+            mix_ring_[size_t(idx) * 2 + 1] = clamp_i16(r);
+            ++mix_generated_;
+            ++sample_counter_;
+        }
+        frames -= n;
     }
 }
 
 void Awe64::tick(u64 cpu_cycles) {
-    const u64 cycles_per_second = u64(cpu_mhz_) * 1000000ull;
-    if (cycles_per_second == 0) return;
+    // OPL3 timers run from emulated CPU time.  The DSP DMA engine does too:
+    // it produces 44.1 kHz frames into dac_ring_ even when no host audio is
+    // consumed, so block boundaries and IRQs stay correct in headless runs.
     opl3_.tick(cpu_cycles);
-    tick_acc_ += cpu_cycles;
-    const u64 per_sample = std::max<u64>(1, cycles_per_second / 44100ull);
-    u64 samples = tick_acc_ / per_sample;
-    tick_acc_ %= per_sample;
-    if (samples == 0) return;
-    if (samples > 8192) samples = 8192;
-
-    // Do not run far ahead of the resampler; audio is dropped rather than
-    // overwriting unread ring entries.
-    const u64 consumed = u64(mix_pos_ < 0.0 ? 0.0 : mix_pos_);
-    const u64 ahead = mix_generated_ > consumed ? mix_generated_ - consumed : 0;
-    const u64 room = (mix_ring_size / 2) > ahead ? (mix_ring_size / 2) - ahead : 0;
-    samples = std::min(samples, room);
-    if (samples) {
-        mix_internal(u32(samples));
-        perf().add_event(PerfNode::Awe64, samples);
-    }
+    dma_tick_clocked_ = true;
+    const u64 cycles_per_second = u64(cpu_mhz_) * 1'000'000ull;
+    if (cycles_per_second == 0) return;
+    // Fractional sample clock: tick_acc_ is in (cycles * 44100), so the DMA
+    // engine runs at exactly 44.1 kHz instead of a truncated integer divisor
+    // (which would slowly overrun the audio ring on a long session).
+    tick_acc_ += cpu_cycles * 44100ull;
+    const u64 samples = tick_acc_ / cycles_per_second;
+    tick_acc_ %= cycles_per_second;
+    if (samples) advance_dma(u32(std::min<u64>(samples, 65536ull)));
 }
 
 void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in) {
@@ -1004,32 +1044,50 @@ void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in
     const bool have_cd = cd_in.size() >= size_t(frames) * 2;
     // CT1745 output mixer switches 0x3C: bit 2 = CD.L, bit 3 = CD.R.
     const float cd_gain_l = (mixer_[0x3c] & 0x04 ? 1.0f : 0.0f) *
-                            mixer_gain(mixer_[0x36], 31) *
-                            mixer_gain(mixer_[0x30], 31) *
-                            std::pow(10.0f, 6.0f * float(mixer_[0x41] & 3) / 20.0f);
+                            mixer_gain(mixer_[0x36], 31) * master_l_ * out_gain_l_;
     const float cd_gain_r = (mixer_[0x3c] & 0x08 ? 1.0f : 0.0f) *
-                            mixer_gain(mixer_[0x37], 31) *
-                            mixer_gain(mixer_[0x31], 31) *
-                            std::pow(10.0f, 6.0f * float(mixer_[0x42] & 3) / 20.0f);
+                            mixer_gain(mixer_[0x37], 31) * master_r_ * out_gain_r_;
 
-    for (u32 f = 0; f < frames; ++f) {
-        if (mix_pos_ < 0.0) mix_pos_ = 0.0;
-        const u64 idx = u64(std::floor(mix_pos_));
-        const float frac = float(mix_pos_ - double(idx));
-        while (idx + 1 >= mix_generated_) mix_internal(1);
-        const u32 i0 = u32(idx & (mix_ring_size - 1));
-        const u32 i1 = u32((idx + 1) & (mix_ring_size - 1));
-        float l = float(mix_ring_[size_t(i0) * 2]) * (1.0f - frac) +
-                  float(mix_ring_[size_t(i1) * 2]) * frac;
-        float r = float(mix_ring_[size_t(i0) * 2 + 1]) * (1.0f - frac) +
-                  float(mix_ring_[size_t(i1) * 2 + 1]) * frac;
-        if (have_cd) {
-            l += float(cd_in[size_t(f) * 2]) * cd_gain_l;
-            r += float(cd_in[size_t(f) * 2 + 1]) * cd_gain_r;
+    // Generate the internal 44.1 kHz stream in chunks that fit the ring.
+    // Because synthesis is driven from here, every requested host sample has
+    // its source samples ready: no "generate one sample in the middle of the
+    // resampler" branch and no tick-side ring clamping/dropping.
+    u32 done = 0;
+    while (done < frames) {
+        const u32 chunk = std::min(frames - done, mix_block);
+        const double last_pos = mix_pos_ + ratio * double(chunk - 1);
+        const u64 last_idx = u64(std::floor(last_pos));
+        const u64 target = last_idx + 2; // interpolation needs idx and idx+1
+        if (target > mix_generated_) {
+            u64 need = target - mix_generated_;
+            need = std::min<u64>(need, mix_ring_size / 2);
+            if (need) mix_internal(u32(need));
         }
-        out[size_t(f) * 2] = clamp_i16(l);
-        out[size_t(f) * 2 + 1] = clamp_i16(r);
-        mix_pos_ += ratio;
+
+        for (u32 f = 0; f < chunk; ++f) {
+            if (mix_pos_ < 0.0) mix_pos_ = 0.0;
+            const u64 idx = u64(std::floor(mix_pos_));
+            const float frac = float(mix_pos_ - double(idx));
+            if (idx + 1 >= mix_generated_) {
+                const u64 need = idx + 2 - mix_generated_;
+                if (need) mix_internal(u32(need));
+            }
+            const u32 i0 = u32(idx & (mix_ring_size - 1));
+            const u32 i1 = u32((idx + 1) & (mix_ring_size - 1));
+            float l = float(mix_ring_[size_t(i0) * 2]) * (1.0f - frac) +
+                      float(mix_ring_[size_t(i1) * 2]) * frac;
+            float r = float(mix_ring_[size_t(i0) * 2 + 1]) * (1.0f - frac) +
+                      float(mix_ring_[size_t(i1) * 2 + 1]) * frac;
+            if (have_cd) {
+                const size_t cf = size_t(done + f);
+                l += float(cd_in[cf * 2]) * cd_gain_l;
+                r += float(cd_in[cf * 2 + 1]) * cd_gain_r;
+            }
+            out[size_t(done + f) * 2] = clamp_i16(l);
+            out[size_t(done + f) * 2 + 1] = clamp_i16(r);
+            mix_pos_ += ratio;
+        }
+        done += chunk;
     }
 }
 
@@ -1042,14 +1100,14 @@ u8 Awe64::io_read8(u16 port) {
     }
     if (port_in_range(port, sb, 0x10)) {
         switch (port - sb) {
-        case 0x0: return 0x00;                 // FM status (not busy)
+        case 0x0: return opl3_.read_status();  // FM status (IRQ/FT1/FT2)
         case 0x1: return 0xff;                 // FM data is write-only
-        case 0x2: return 0x00;                 // advanced FM status
+        case 0x2: return 0x00;                 // secondary index (write-only)
         case 0x3: return 0xff;
         case 0x4: return 0x00;                 // mixer index, write-only
         case 0x5: return mixer_read(mixer_index_);
         case 0x6: return 0x00;                 // reset, write-only
-        case 0x8: return 0x00;                 // FM status alias
+        case 0x8: return opl3_.read_status();  // FM status alias
         case 0x9: return 0xff;
         case 0xa: return dsp_read();
         case 0xc: return (dsp_high_speed_ || reset_state_) ? 0xff : 0x7f;

@@ -16,7 +16,7 @@ SDL3-фронтендом. Проект написан с нуля по перв
 | Flash | W29C020-12 (2MBit) |
 | 2D video | S3 Trio64 (86C764), 4 MiB VRAM, VGA + S3 2D engine |
 | 3D video | 3dfx Voodoo Graphics (SST-1, Diamond Monster 3D), 4 MiB, софтверный растеризатор |
-| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, CD-вход (CD-DA), MPU-401, EMU8000, OPL3 (YMF262) FM в отдельном модуле (AWE64 CQM не моделируется) |
+| Audio | Creative Sound Blaster AWE64 Gold: SB16 DSP, CT1745 mixer, CD-вход (CD-DA), MPU-401, EMU8000, полноценный OPL3 (YMF262) в отдельном модуле ([docs/opl3.md](docs/opl3.md); AWE64 CQM не моделируется) |
 | Storage | PIIX4 IDE (PIO), ATA/ATAPI CD-ROM (ISO и BIN/CUE с CD-DA), 82077AA FDC 1.44 MiB |
 | Input | PS/2 keyboard + PS/2 mouse через 8042 |
 | Firmware | Award BIOS из `specs/`, S3 Trio64 option ROM |
@@ -227,8 +227,14 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
   mip/bilinear, LFB и swapbuffer. Это именно растровый софтверный конвейер,
   без Glide/OpenGL и без перехвата вызовов.
 - AWE64: reset/version DSP, mixer, single/auto-init DMA, MPU-401 UART,
-  EMU8000 (32 голоса), OPL3 (YMF262) FM в `src/opl3.cpp`: 18 каналов/36 операторов, 4-оп режим, 8 волн, стерео, таймеры/статус OPL2/OPL3
-  (YM3812: период (256−N)×80.8 мкс, RST/ST, флаги FT1/FT2/IRQ), SDL audio.
+  EMU8000 (32 голоса), полноценный OPL3 (YMF262) FM в `src/opl3.cpp`:
+  два массива регистров с независимыми защёлкиваниями, 18 каналов/36
+  операторов, 6 четырёхоператорных каналов со всеми четырьмя схемами
+  соединения, 5 ритм-звуков, 8 waveform, KSL/KSR/NTS, 9-битная
+  огибающая в дБ, tremolo/vibrato (DAM/DVB), четыре выхода CHA–CHD,
+  таймеры 80/320 мкс и статус FT1/FT2/IRQ. Звуковой тракт синтезирует
+  блоками, кэширует громкости CT1745 и держит запас в аудиопотоке SDL,
+  поэтому звук не заикается; см. [docs/opl3.md](docs/opl3.md).
 - PC Speaker: канал 2 PIT (1193182/reload Гц) через порт 61h (gate/data),
   квадратная волна микшируется в тот же поток, что и звуковая карта, —
   бипер не блокирует и не заменяет звук AWE64.
@@ -267,7 +273,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 407 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 439 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -295,6 +301,8 @@ SB16/EMU8000/OPL3, CMOS/NVRAM (оба банка PIIX4, RTCCFG/lock, сохра�
 ## Документация
 
 - [docs/architecture.md](docs/architecture.md) — структура проекта и поток данных.
+- [docs/opl3.md](docs/opl3.md) — YMF262/OPL3: сравнение с даташитом,
+  покрытие возможностей чипа и меры против заикания звука.
 - [docs/perf.md](docs/perf.md) — счётчики производительности (F3): где
   тормозит эмулятор, как читать панель и график, `perf`/`--perf`.
 - [docs/console.md](docs/console.md) — консоль команд (F2/CLI): смена дискет и

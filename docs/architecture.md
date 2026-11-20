@@ -43,7 +43,8 @@
 - `src/s3_trio64.cpp`, `src/voodoo.cpp` — S3 Trio64 (VGA + 2D engine) и
   Voodoo SST-1 (FBI/TMU).
 - `src/awe64.cpp`, `src/emu8000.cpp`, `src/opl3.cpp` — SB16 DSP, CT1745 mixer
-  (включая CD-вход от привода), MPU-401, EMU8000, YMF262/OPL3 FM.
+  (включая CD-вход от привода), MPU-401, EMU8000 и полноценный YMF262/OPL3
+  ([docs/opl3.md](opl3.md)).
 - `src/ata.cpp`, `src/floppy.cpp` — PIIX4 IDE/ATA/ATAPI (ISO и BIN/CUE с
   CD-DA) и 82077AA FDC.
 - `src/machine.cpp` — сборка машины, карта памяти, запуск, reset, POST-коды.
@@ -61,10 +62,15 @@
    кадрами, в главном потоке.
 2. `Machine::run_frame()` выполняет CPU до бюджета 1/60 эмулируемой секунды.
 3. Каждые ~512 циклов вызываются `tick()` чипсета, видео, ATA, FDC, audio.
-4. `S3Trio64::tick`/`Voodoo::tick` при необходимости перерисовывают кадр.
-5. `Machine::display_frame()` выбирает источник: Voodoo, если он не в
+   `Awe64::tick` обслуживает DSP и таймеры OPL3, но не синтезирует звук.
+4. `Machine::render_audio()` синтезирует EMU8000/OPL3 блоками, применяет
+   CT1745 и DSP DAC, затем ресемплирует карту и микширует PC Speaker.
+5. `S3Trio64::tick`/`Voodoo::tick` при необходимости перерисовывают кадр.
+6. `Machine::display_frame()` выбирает источник: Voodoo, если он не в
    passthrough и уже сделал swap, иначе S3.
-6. `SdlFrontend` загружает XRGB8888-пиксели в SDL-текстуру и презентует.
+7. `SdlFrontend` загружает XRGB8888-пиксели в SDL-текстуру и презентует;
+   очередь SDL-аудио держится с запасом, а при отставании хоста цикл
+   выполняет до трёх гостевых кадров подряд.
 
 ## Профилирование
 

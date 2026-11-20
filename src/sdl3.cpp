@@ -654,8 +654,20 @@ void render_frame(SdlState& st, Machine& machine) {
 
 void push_audio(SdlState& st, Machine& machine) {
     if (!st.audio || !machine.audio()) return;
-    constexpr int frames_per_tick = 735; // 44100 / 60
-    st.audio_buffer.resize(frames_per_tick * 2);
+    constexpr int frame_samples = 735; // 44100 / 60
+    // Keep about three video frames of audio queued.  A larger queue absorbs
+    // host scheduling jitter and the window-present vsync stall without
+    // adding noticeable latency.  If the queue ran dry (a slow host frame),
+    // refill it in one go; this is the "no stutter" safety net.
+    constexpr int target_queued = frame_samples * 3;
+    int queued_bytes = SDL_GetAudioStreamQueued(st.audio);
+    if (queued_bytes < 0) queued_bytes = 0;
+    const int queued_frames = queued_bytes / int(sizeof(i16) * 2);
+    int frames = frame_samples;
+    if (queued_frames < target_queued) frames += target_queued - queued_frames;
+    frames = std::clamp(frames, frame_samples, frame_samples * 4);
+
+    st.audio_buffer.resize(std::size_t(frames) * 2);
     // render_audio() carries the AudioMix scope (card resampling + speaker).
     machine.render_audio(std::span<i16>(st.audio_buffer), 44100);
     {
@@ -790,7 +802,7 @@ int run_sdl_frontend(Machine& machine) {
         }).detach();
     }
 
-    u64 next = SDL_GetTicksNS();
+    u64 next_frame = SDL_GetTicksNS();
     const u64 frame_ns = 1'000'000'000ull / 60ull;
     u64 title_timer = 0;
     while (st.running && machine.running()) {
@@ -805,8 +817,27 @@ int run_sdl_frontend(Machine& machine) {
         drain_stdin(st, *feed);
         const bool emulated = !console.paused();
         if (emulated) {
-            machine.run_frame();
-            push_audio(st, machine);
+            // Run one guest frame per iteration; if the host fell behind,
+            // run up to three more so emulated time (and the audio stream)
+            // catches up with the wall clock instead of drifting into an
+            // underrun.  Audio is pushed for every frame that is run.
+            constexpr int max_catch_up = 3;
+            int frames_run = 0;
+            u64 now = SDL_GetTicksNS();
+            while (frames_run < max_catch_up && (frames_run == 0 || now >= next_frame)) {
+                machine.run_frame();
+                push_audio(st, machine);
+                ++frames_run;
+                next_frame += frame_ns;
+                if (!machine.running()) break;
+                now = SDL_GetTicksNS();
+            }
+            // A long stall (debugger, window drag) must not become a burst
+            // of hundreds of fast-forwarded frames.
+            if (now > next_frame + 500'000'000ull) next_frame = now;
+        } else {
+            // Paused: do not accumulate a guest-time backlog.
+            next_frame = SDL_GetTicksNS();
         }
         render_frame(st, machine);
         title_timer += frame_ns;
@@ -831,12 +862,11 @@ int run_sdl_frontend(Machine& machine) {
             if (console.paused()) title += "   [paused]";
             SDL_SetWindowTitle(st.window, title.c_str());
         }
-        next += frame_ns;
         const u64 now = SDL_GetTicksNS();
         {
             PerfScope scope(PerfNode::Idle);
-            if (next > now) SDL_DelayNS(next - now);
-            else if (now - next > 100'000'000ull) next = now;
+            if (next_frame > now) SDL_DelayNS(next_frame - now);
+            else if (now - next_frame > 100'000'000ull) next_frame = now;
         }
         if (emulated) {
             const u64 cycles_after = machine.cpu().state().cycles;

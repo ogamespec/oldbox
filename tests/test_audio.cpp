@@ -704,6 +704,375 @@ TEST(audio_opl3_egt_zero_uses_release_rate) {
     CHECK(slow_tail > slow_early / 2);   // RR=0: the level is nearly held
 }
 
+// ---------------------------------------------------------------------------
+// YMF262 register-file, four-operator, rhythm, LFO and output tests
+// ---------------------------------------------------------------------------
+
+namespace {
+
+void opl_write(Opl3& opl, bool secondary, u8 reg, u8 value) {
+    opl.write_index(secondary, reg);
+    opl.write_data(secondary, value);
+}
+
+// A simple sustained additive voice on channel 0: the modulator is muted and
+// the carrier is a full-level sine (or the selected waveform).
+void setup_sustained_voice(Opl3& opl, u8 c0, u8 carrier_tl = 0, u8 carrier_level = 0x21,
+                           u8 carrier_wave = 0, u8 b0 = 0x2a) {
+    opl_write(opl, true, 0x05, 0x01); // OPL3 mode
+    opl_write(opl, false, 0x20, 0x01);
+    opl_write(opl, false, 0x40, 0x3f); // mute the modulator
+    opl_write(opl, false, 0x60, 0xf0);
+    opl_write(opl, false, 0x80, 0x00);
+    opl_write(opl, false, 0x23, carrier_level);
+    opl_write(opl, false, 0x43, carrier_tl);
+    opl_write(opl, false, 0x63, 0xf0);
+    opl_write(opl, false, 0x83, 0x00);
+    opl_write(opl, false, 0xe3, carrier_wave);
+    opl_write(opl, false, 0xc0, c0);
+    opl_write(opl, false, 0xa0, 0x00);
+    opl_write(opl, false, 0xb0, b0);
+}
+
+} // namespace
+
+TEST(audio_opl3_register_arrays_have_independent_address_latches) {
+    // The two index ports latch independently.  A single shared latch would
+    // let the later bank-0 address write steal the bank-1 data write.
+    Opl3 opl;
+    opl.write_index(true, 0x05);  // array 1 index
+    opl.write_index(false, 0x01); // array 0 index
+    opl.write_data(true, 0x01);   // NEW=1 must still reach register 105h
+    CHECK(opl.opl3_mode());
+}
+
+TEST(audio_opl3_opl2_mode_ignores_secondary_bank) {
+    // With NEW=0 the chip is an OPL2: register array 1 does not exist and
+    // only the first nine channels are audible.
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    // Channel 10 (array 1, first channel) configured as a loud voice.
+    opl_write(opl, true, 0x20, 0x01);
+    opl_write(opl, true, 0x40, 0x00);
+    opl_write(opl, true, 0x60, 0xf0);
+    opl_write(opl, true, 0x80, 0x00);
+    opl_write(opl, true, 0x23, 0x01);
+    opl_write(opl, true, 0x43, 0x00);
+    opl_write(opl, true, 0x63, 0xf0);
+    opl_write(opl, true, 0x83, 0x00);
+    opl_write(opl, true, 0xc0, 0x30);
+    opl_write(opl, true, 0xa0, 0x00);
+    opl_write(opl, true, 0xb0, 0x3a);
+
+    std::vector<i16> buffer(size_t(4096) * 2);
+    opl.render(buffer.data(), 4096);
+    CHECK_EQ(peak(buffer), 0);
+
+    // Enabling OPL3 later does not retroactively apply the ignored writes.
+    opl_write(opl, true, 0x05, 0x01);
+    std::fill(buffer.begin(), buffer.end(), 0);
+    opl.render(buffer.data(), 4096);
+    CHECK_EQ(peak(buffer), 0);
+}
+
+TEST(audio_opl3_waveform_select_is_implicit_in_opl3_mode) {
+    // OPL3 always exposes all eight waveforms; the OPL2 waveform-select bit
+    // (register 01h) is not required.  Waveform 6 must be a square wave.
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    setup_sustained_voice(opl, 0x31, 0, 0x21, 6);
+    // No write to register 01h at all.
+    std::vector<i16> buffer(size_t(4096) * 2);
+    opl.render(buffer.data(), 4096);
+    const int p = peak(buffer);
+    CHECK(p > 500);
+    int high = 0;
+    for (size_t i = 0; i < 4096; ++i)
+        if (std::abs(int(buffer[i * 2])) > p / 2) ++high;
+    CHECK(high > 3500); // a square wave stays at full level most of the time
+}
+
+TEST(audio_opl3_four_operator_connections) {
+    // All four documented connection schemes must produce sound and must not
+    // collapse to the same topology.
+    auto render = [](u8 con1, u8 con2) {
+        Opl3 opl;
+        opl.set_sample_rate(44100);
+        opl_write(opl, true, 0x05, 0x01);
+        opl_write(opl, true, 0x04, 0x01); // four-operator pair 1/4
+        const u8 offs[4] = {0x00, 0x03, 0x08, 0x0b};
+        const u8 mult[4] = {1, 2, 3, 4};
+        for (u32 i = 0; i < 4; ++i) {
+            opl_write(opl, false, u8(0x20 + offs[i]), mult[i]);
+            opl_write(opl, false, u8(0x40 + offs[i]), 0x00);
+            opl_write(opl, false, u8(0x60 + offs[i]), 0xf0);
+            opl_write(opl, false, u8(0x80 + offs[i]), 0x00);
+            opl_write(opl, false, u8(0xe0 + offs[i]), 0x00);
+        }
+        opl_write(opl, false, 0xc0, u8(0x30 | con1));
+        opl_write(opl, false, 0xc3, u8(0x30 | con2));
+        opl_write(opl, false, 0xa0, 0x80);
+        opl_write(opl, false, 0xb0, 0x32); // block 4, fnum 0x280, key on
+        std::vector<i16> buffer(size_t(4096) * 2);
+        opl.render(buffer.data(), 4096);
+        return buffer;
+    };
+
+    const std::vector<i16> fm_fm = render(0, 0);  // OP1->OP2->OP3->OP4
+    const std::vector<i16> am_fm = render(1, 0);  // OP1 + (OP2->OP3->OP4)
+    const std::vector<i16> fm_am = render(0, 1);  // (OP1->OP2) + (OP3->OP4)
+    const std::vector<i16> am_am = render(1, 1);  // OP1 + (OP2->OP3) + OP4
+    CHECK(peak(fm_fm) > 100);
+    CHECK(peak(am_fm) > 100);
+    CHECK(peak(fm_am) > 100);
+    CHECK(peak(am_am) > 100);
+
+    auto difference = [](const std::vector<i16>& a, const std::vector<i16>& b) {
+        long long sum = 0;
+        for (size_t i = 0; i < a.size(); ++i) sum += std::abs(int(a[i]) - int(b[i]));
+        return sum;
+    };
+    CHECK(difference(fm_fm, am_fm) > 100000);
+    CHECK(difference(fm_fm, fm_am) > 100000);
+    CHECK(difference(fm_fm, am_am) > 100000);
+    CHECK(difference(am_fm, fm_am) > 100000);
+    CHECK(difference(am_fm, am_am) > 100000);
+    CHECK(difference(fm_am, am_am) > 100000);
+}
+
+TEST(audio_opl3_four_operator_key_on_is_base_only) {
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    opl_write(opl, true, 0x05, 0x01);
+    opl_write(opl, true, 0x04, 0x01);
+    const u8 offs[4] = {0x00, 0x03, 0x08, 0x0b};
+    for (u32 i = 0; i < 4; ++i) {
+        opl_write(opl, false, u8(0x20 + offs[i]), 0x01);
+        opl_write(opl, false, u8(0x40 + offs[i]), 0x00);
+        opl_write(opl, false, u8(0x60 + offs[i]), 0xf0);
+        opl_write(opl, false, u8(0x80 + offs[i]), 0x00);
+    }
+    opl_write(opl, false, 0xc0, 0x30);
+    opl_write(opl, false, 0xc3, 0x30);
+    opl_write(opl, false, 0xa0, 0x80);
+    opl_write(opl, false, 0xb0, 0x12); // block 4, fnum 0x280, key off
+    opl_write(opl, false, 0xb3, 0x32); // second half: KON is ignored
+    std::vector<i16> buffer(size_t(4096) * 2);
+    opl.render(buffer.data(), 4096);
+    CHECK_EQ(peak(buffer), 0);
+
+    opl_write(opl, false, 0xb0, 0x32); // base key-on keys all four
+    std::fill(buffer.begin(), buffer.end(), 0);
+    opl.render(buffer.data(), 4096);
+    CHECK(peak(buffer) > 100);
+}
+
+TEST(audio_opl3_rhythm_has_all_five_sounds) {
+    // BD, SD, TOM, TC and HH must each produce output in rhythm mode.
+    for (u8 bit = 0; bit < 5; ++bit) {
+        Opl3 opl;
+        opl.set_sample_rate(44100);
+        opl_write(opl, true, 0x05, 0x01);
+        // Operator offsets for BD(0x10,0x13), SD(0x14), TOM(0x12),
+        // TC(0x15) and HH(0x11).
+        const u8 offs[6] = {0x10, 0x13, 0x14, 0x12, 0x15, 0x11};
+        for (u8 off : offs) {
+            opl_write(opl, false, u8(0x20 + off), 0x01);
+            opl_write(opl, false, u8(0x40 + off), 0x00);
+            opl_write(opl, false, u8(0x60 + off), 0xf0);
+            opl_write(opl, false, u8(0x80 + off), 0x0f); // SL=0, RR=15
+        }
+        for (u8 ch = 6; ch <= 8; ++ch) {
+            opl_write(opl, false, u8(0xc0 + ch), 0x30);
+            opl_write(opl, false, u8(0xa0 + ch), 0x80);
+            opl_write(opl, false, u8(0xb0 + ch), 0x12); // block 4, fnum 0x280, key off
+        }
+        opl_write(opl, false, 0xbd, u8(0x20 | (1u << bit)));
+        std::vector<i16> buffer(size_t(8192) * 2);
+        opl.render(buffer.data(), 8192);
+        CHECK(peak(buffer) > 0);
+
+        // Clearing RYT releases the rhythm keys; RR=15 lets the tail fall to
+        // silence within the next 186 ms.
+        opl_write(opl, false, 0xbd, u8(1u << bit));
+        std::fill(buffer.begin(), buffer.end(), 0);
+        opl.render(buffer.data(), 8192);
+        CHECK_EQ(peak(buffer), 0);
+    }
+}
+
+TEST(audio_opl3_dac_channels_c_and_d) {
+    // C0h D7/D6 select the second DAC pair (CHC/CHD), not just CHA/CHB.
+    auto render = [](u8 c0) {
+        Opl3 opl;
+        opl.set_sample_rate(44100);
+        setup_sustained_voice(opl, c0, 0, 0x21);
+        std::vector<i16> buffer(size_t(4096) * 2);
+        opl.render(buffer.data(), 4096);
+        return buffer;
+    };
+    auto channel_peak = [](const std::vector<i16>& b, int ch) {
+        int p = 0;
+        for (size_t i = 0; i < b.size() / 2; ++i)
+            p = std::max(p, std::abs(int(b[i * 2 + size_t(ch)])));
+        return p;
+    };
+
+    const std::vector<i16> chc = render(0x41); // CHC + additive
+    CHECK(channel_peak(chc, 0) > 100);
+    CHECK_EQ(channel_peak(chc, 1), 0);
+
+    const std::vector<i16> chd = render(0x81); // CHD + additive
+    CHECK_EQ(channel_peak(chd, 0), 0);
+    CHECK(channel_peak(chd, 1) > 100);
+
+    const std::vector<i16> both = render(0xc1); // CHC + CHD
+    CHECK(channel_peak(both, 0) > 100);
+    CHECK(channel_peak(both, 1) > 100);
+}
+
+TEST(audio_opl3_tremolo_modulates_amplitude) {
+    Opl3 opl;
+    opl.set_sample_rate(44100);
+    // Carrier AM=1, EGT=1: a sustained note whose level is modulated by the
+    // 3.7 Hz tremolo LFO at the DAM=1 depth (4.8 dB).
+    setup_sustained_voice(opl, 0x31, 0, 0xa1);
+    opl_write(opl, false, 0xbd, 0x80); // DAM=1
+    std::vector<i16> buffer(size_t(44100) * 2);
+    opl.render(buffer.data(), 44100);
+
+    int min_peak = 1 << 30, max_peak = 0;
+    for (size_t start = 4410; start + 2048 <= 44100; start += 2048) {
+        int p = 0;
+        for (size_t i = start; i < start + 2048; ++i)
+            p = std::max(p, std::abs(int(buffer[i * 2])));
+        min_peak = std::min(min_peak, p);
+        max_peak = std::max(max_peak, p);
+    }
+    CHECK(min_peak > 100);
+    CHECK(max_peak > min_peak * 13 / 10); // ~1.74 expected for 4.8 dB
+}
+
+TEST(audio_opl3_vibrato_modulates_pitch) {
+    auto render = [](bool vibrato) {
+        Opl3 opl;
+        opl.set_sample_rate(44100);
+        // 1.5 kHz note so a few cents of vibrato produce a measurable phase
+        // difference; the modulator is muted.
+        setup_sustained_voice(opl, 0x31, 0, vibrato ? 0x61 : 0x21, 0, 0x3a);
+        opl_write(opl, false, 0xbd, vibrato ? 0x40 : 0x00); // DVB=1
+        std::vector<i16> buffer(size_t(8192) * 2);
+        opl.render(buffer.data(), 8192);
+        return buffer;
+    };
+    const std::vector<i16> flat = render(false);
+    const std::vector<i16> vibrato = render(true);
+    CHECK(peak(flat) > 100);
+    CHECK(peak(vibrato) > 100);
+    long long difference = 0;
+    for (size_t i = 0; i < flat.size(); ++i)
+        difference += std::abs(int(flat[i]) - int(vibrato[i]));
+    CHECK(difference > 1000000);
+}
+
+TEST(audio_opl3_total_level_is_0_75db_per_step) {
+    auto peak_for_tl = [](u8 tl) {
+        Opl3 opl;
+        opl.set_sample_rate(44100);
+        setup_sustained_voice(opl, 0x31, tl);
+        std::vector<i16> buffer(size_t(8192) * 2);
+        opl.render(buffer.data(), 8192);
+        return peak(buffer);
+    };
+    const int full = peak_for_tl(0);
+    const int minus6db = peak_for_tl(8); // 8 * 0.75 dB = 6 dB
+    CHECK(full > 500);
+    CHECK(minus6db > full * 45 / 100);
+    CHECK(minus6db < full * 56 / 100);
+}
+
+TEST(audio_opl3_sustained_note_does_not_stutter) {
+    // Emulate the host calling render() once per video frame while the CPU
+    // clock ticks in between.  A sustained note must stay continuous: no
+    // silent video frames and no long runs of zero samples.
+    Rig rig;
+    auto fm_write = [&](u8 reg, u8 value) {
+        rig.card.io_write8(0x388, reg);
+        rig.card.io_write8(0x389, value);
+    };
+    fm_write(0x20, 0x01);
+    fm_write(0x40, 0x3f);
+    fm_write(0x60, 0xf0);
+    fm_write(0x80, 0x00);
+    fm_write(0x23, 0x21); // EGT=1, MULT=1
+    fm_write(0x43, 0x00);
+    fm_write(0x63, 0xf0);
+    fm_write(0x83, 0x00);
+    fm_write(0xc0, 0x31); // additive, both outputs
+    fm_write(0xa0, 0x00);
+    fm_write(0xb0, 0x3a); // block 6, key on
+
+    constexpr u64 cycles_per_frame = 233'000'000ull / 60ull;
+    std::vector<i16> buffer(size_t(735) * 2);
+    int silent_frames = 0;
+    int zero_run = 0, max_zero_run = 0;
+    for (int frame = 0; frame < 300; ++frame) { // five emulated seconds
+        rig.card.tick(cycles_per_frame);
+        rig.card.render(buffer, 44100);
+        int frame_peak = 0;
+        for (size_t i = 0; i < 735; ++i) {
+            const int v = std::abs(int(buffer[i * 2]));
+            frame_peak = std::max(frame_peak, v);
+            if (v == 0) {
+                ++zero_run;
+                max_zero_run = std::max(max_zero_run, zero_run);
+            } else {
+                zero_run = 0;
+            }
+        }
+        if (frame > 6 && frame_peak < 200) ++silent_frames;
+    }
+    CHECK_EQ(silent_frames, 0);
+    CHECK(max_zero_run < 32);
+}
+
+TEST(audio_opl3_render_at_other_host_rates_does_not_drop_out) {
+    // The card always synthesizes at 44.1 kHz internally, but the SDL device
+    // may ask for another rate.  The resampler must not drop samples at the
+    // common 22.05/48 kHz rates.
+    for (u32 rate : {22050u, 48000u}) {
+        Rig rig;
+        auto fm_write = [&](u8 reg, u8 value) {
+            rig.card.io_write8(0x388, reg);
+            rig.card.io_write8(0x389, value);
+        };
+        fm_write(0x20, 0x01);
+        fm_write(0x40, 0x3f);
+        fm_write(0x60, 0xf0);
+        fm_write(0x80, 0x00);
+        fm_write(0x23, 0x21);
+        fm_write(0x43, 0x00);
+        fm_write(0x63, 0xf0);
+        fm_write(0x83, 0x00);
+        fm_write(0xc0, 0x31);
+        fm_write(0xa0, 0x00);
+        fm_write(0xb0, 0x3a);
+
+        const u32 frames = rate / 60;
+        std::vector<i16> buffer(size_t(frames) * 2);
+        int silent_frames = 0;
+        for (int frame = 0; frame < 120; ++frame) {
+            rig.card.tick(233'000'000ull / 60ull);
+            rig.card.render(buffer, rate);
+            int p = 0;
+            for (u32 i = 0; i < frames; ++i)
+                p = std::max(p, std::abs(int(buffer[size_t(i) * 2])));
+            if (frame > 6 && p < 200) ++silent_frames;
+        }
+        CHECK_EQ(silent_frames, 0);
+    }
+}
+
 TEST(audio_dsp_reset_exits_sb_midi_uart) {
     Rig rig;
     rig.card.io_write8(u16(kSb + 6), 1);
@@ -845,6 +1214,37 @@ TEST(audio_load_rom_dump) {
     }
     rig.card.load_rom(dump);
     CHECK_EQ(rig.card.emu().rom().size(), dump.size());
+}
+
+TEST(audio_dsp_dma_advances_from_tick_without_render) {
+    // DMA position, block completion and IRQs belong to emulated time.  A
+    // headless run never calls render(), but the engine must still advance.
+    Rig rig;
+    for (u32 i = 0; i < 256; ++i) rig.bus.write8(0x10000 + i, u8(0x80 + (i & 0x3f)));
+    rig.dma.io_write8(0x0a, 0x05);
+    rig.dma.io_write8(0x02, 0x00);
+    rig.dma.io_write8(0x02, 0x00);
+    rig.dma.io_write8(0x83, 0x10);
+    rig.dma.io_write8(0x03, 0xff);
+    rig.dma.io_write8(0x03, 0x00);
+    rig.dma.io_write8(0x0b, 0x49);
+    rig.dma.io_write8(0x0a, 0x01);
+    rig.card.io_write8(u16(kSb + 6), 1);
+    rig.card.io_write8(u16(kSb + 6), 0);
+    (void)rig.dsp_read();
+    rig.dsp_write(0x40);
+    rig.dsp_write(0xd2);
+    rig.dsp_write(0x41);
+    rig.dsp_write(0xac);
+    rig.dsp_write(0x44);
+    rig.dsp_write(0x14); // single-cycle 8-bit DMA output, 256 samples
+    rig.dsp_write(0xff);
+    rig.dsp_write(0x00);
+
+    // 256 samples at 44.1 kHz are ~5.8 ms; 1.5M cycles at 233 MHz is
+    // ~6.44 ms, enough to cross the block boundary without any render().
+    rig.card.tick(1'500'000);
+    CHECK(rig.card.irq_pending());
 }
 
 TEST(audio_dsp_dma_playback_and_irq) {

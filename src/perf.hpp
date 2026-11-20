@@ -23,8 +23,8 @@ enum class PerfNode : u8 {
     Chipset,   // the rest of the PIIX4 tick: PM timer and IRQ routing
     S3,        // S3 Trio64 frame composition and the 2D engine
     Voodoo,    // Voodoo SST-1 rasterizer and output conversion
-    Awe64,     // SB16 DSP + EMU8000/OPL3 synthesis inside Awe64::tick()
-    AudioMix,  // host-side resampling of the card and PC-speaker mixing
+    Awe64,     // SB16 DSP + OPL3 timers inside Awe64::tick()
+    AudioMix,  // block synthesis of EMU8000/OPL3, resampling and PC speaker
     Ata,       // PIIX4 IDE: PIO block transfers and ATAPI
     Fdc,       // 82077AA sector transfers
     Apic,      // local APIC timer

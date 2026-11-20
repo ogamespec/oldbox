@@ -238,8 +238,6 @@ private:
     IrqFn irq_;
     Emu8000 emu_;
     u32 output_rate_ = 44100;
-    u64 tick_acc_ = 0;
-    u64 tick_frac_ = 0;
     bool irq_pending_ = false;
     u8 irq_source_ = 0;
 
@@ -314,10 +312,31 @@ private:
     // OPL3-compatible FM synthesizer (separate module).
     Opl3 opl3_;
 
-    // Internal 44100 Hz mix ring and resampler.
+    // Internal 44100 Hz mix ring and resampler.  Synthesis is driven by
+    // Awe64::render(), i.e. by the samples the audio device actually
+    // consumes; this keeps the ring from under-running or dropping samples
+    // when the host frame rate jitters.
     std::array<i16, mix_ring_size * 2> mix_ring_{};
     u64 mix_generated_ = 0;
     double mix_pos_ = 0.0;
+    // DAC samples produced by the DSP DMA engine.  DMA position and block
+    // IRQs belong to emulated time, so tick() advances this queue even when
+    // the host does not consume audio (headless); render() drains it.
+    std::array<i16, mix_ring_size * 2> dac_ring_{};
+    u64 dac_written_ = 0;
+    u64 dac_read_ = 0;
+    u64 tick_acc_ = 0;
+    bool dma_tick_clocked_ = false;
+    static constexpr u32 mix_block = 1024;
+    std::array<i16, mix_block * 2> emu_scratch_{};
+    std::array<i16, mix_block * 2> fm_scratch_{};
+
+    // Cached CT1745 gains.  Recomputing six pow() calls plus tanh() for
+    // every internal sample was the main cause of audio underruns.
+    float master_l_ = 1.0f, master_r_ = 1.0f;
+    float voice_l_ = 1.0f, voice_r_ = 1.0f;
+    float music_l_ = 1.0f, music_r_ = 1.0f;
+    float out_gain_l_ = 1.0f, out_gain_r_ = 1.0f;
 
     void dsp_reset();
     void dsp_write(u8 value);
@@ -332,6 +351,7 @@ private:
     [[nodiscard]] std::optional<u8> fetch_dma_byte();
     [[nodiscard]] std::optional<u16> fetch_dma_word();
     void reset_mixer();
+    void refresh_mixer_gains();
     [[nodiscard]] u8 mixer_read(u8 reg) const;
     void mixer_write(u8 reg, u8 value);
     void update_irq();
@@ -340,7 +360,8 @@ private:
     void midi_feed(u8 byte);
     void midi_message(u8 status, u8 d1, u8 d2);
     void mix_internal(u32 frames);
-    void render_internal_frame(i16& l, i16& r);
+    void advance_dma(u32 frames);
+    void pop_dac(i16& l, i16& r);
     [[nodiscard]] float mixer_gain(u8 value, u8 maximum) const;
     [[nodiscard]] bool port_in_range(u16 port, u16 base, u16 size) const {
         return port >= base && u32(port) < u32(base) + size;
