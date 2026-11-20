@@ -1,0 +1,7532 @@
+
+
+===== PAGE 1 =====
+E 
+Information in this document is provided solely to enable use of Intel products. Intel assumes no liability whatsoever, including infringement
+of any patent or copyright, for sale and use of Intel products except as provided in Intel’s Terms and Conditions of Sale for such products.
+Information contained herein supersedes previously published specifications on these devices from Intel.
+© INTEL CORPORATION 1995
+January 1998
+Order Number: 243335-003
+n
+Available at 233 MHz, 266 MHz,
+300 MHz, and 333 MHz core
+frequencies
+n
+Binary compatible with applications
+running on previous members of the
+Intel microprocessor line
+n
+Dynamic Execution micro architecture
+n
+Dual Independent Bus architecture:
+Separate dedicated external System
+Bus and dedicated internal high-speed
+cache bus
+n
+Intel’s highest performance processor
+combines the power of the Pentium®
+Pro processor with the capabilities of
+MMX™ technology
+n
+Power Management capabilities
+System Management mode
+Multiple low-power states
+n
+Optimized for 32-bit applications
+running on advanced 32-bit operating
+systems
+n
+Single Edge Contact (S.E.C.) cartridge
+packaging technology; the S.E.C.
+cartridge delivers high performance
+with improved handling protection and
+socketability
+n
+Integrated high performance 16 KB
+instruction and 16 KB data,
+nonblocking, level one cache
+n
+Available with integrated 512 KB
+unified, nonblocking, level two cache
+n
+Enables systems which are scaleable
+up to two processors and 64 GB of
+physical memory
+n
+Error-correcting code for System Bus
+data
+The Intel Pentium® II processor is designed for high-performance desktops, workstations and mainstream
+servers, and is binary compatible with previous Intel Architecture processors. The Pentium II processor provides
+the best performance available for applications running on advanced operating systems such as Windows* 95,
+Windows NT and UNIX*. This is achieved by integrating the best attributes of Intel’s processors — the dynamic
+execution performance of the Pentium Pro processor plus the capabilities of MMX™ technology — bringing a
+new level of performance for system buyers. The Pentium II processor is scaleable to two processors in a
+multiprocessor system and extends the power of the Pentium Pro processor with performance headroom for
+business media, communication and Internet capabilities. Systems based on Pentium II processors also include
+the latest features to simplify system management and lower the cost of ownership for large and small business
+environments.
+ 
+PENTIUM® II PROCESSOR AT 233 MHZ,
+266 MHZ, 300 MHZ, AND 333 MHZ
+
+
+===== PAGE 2 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+2
+Information in this document is provided in connection with Intel products. No license, express or implied, by estoppel or
+otherwise, to any intellectual property rights is granted by this document. Except as provided in Intel’s Terms and Conditions of
+Sale for such products, Intel assumes no liability whatsoever, and Intel disclaims any express or implied warranty, relating to
+sale and/or use of Intel products including liability or warranties relating to fitness for a particular purpose, merchantability, or
+infringement of any patent, copyright or other intellectual property right. Intel products are not intended for use in medical, life
+saving, or life sustaining applications.
+Intel may make changes to specifications and product descriptions at any time, without notice.
+Designers must not rely on the absence or characteristics of any features or instructions marked “reserved” or “undefined.”
+Intel reserves these for future definition and shall have no responsibility whatsoever for conflicts or incompatibilities arising from
+future changes to them.
+The Pentium® II processor may contain design defects or errors known as errata which may cause the product to deviate from
+published specifications. Current characterized errata are available on request.Contact your local Intel sales office or your
+distributor to obtain the latest specifications and before placing your product order.
+Copies of documents which have an ordering number and are referenced in this document, or other Intel literature, may be
+obtained from by calling 1-800-548-4725 or by visiting Intel’s website at http://www.intel.com.
+Copyright © Intel Corporation 1996, 1997.
+* Third-party brands and names are the property of their respective owners.
+
+
+===== PAGE 3 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+3
+CONTENTS
+PAGE
+PAGE
+1.0. INTRODUCTION ...............................................7
+1.1. Terminology....................................................8
+1.1.1. S.E.C. CARTRIDGE TERMINOLOGY ...8
+1.2. References.....................................................8
+2.0. ELECTRICAL SPECIFICATIONS ....................9
+2.1. The Pentium® II Processor System Bus and
+VREF .............................................................9
+2.2. Clock Control and Low Power States ............9
+2.2.1. NORMAL STATE — STATE 1..............10
+2.2.2. AUTO HALT POWER DOWN STATE —
+STATE 2 ...............................................10
+2.2.3. STOP-GRANT STATE — STATE 3.....11
+2.2.4. HALT/GRANT SNOOP STATE —
+STATE 4 ...............................................11
+2.2.5. SLEEP STATE — STATE 5 .................11
+2.2.6. DEEP SLEEP STATE — STATE 6 ......12
+2.2.7. CLOCK CONTROL AND LOW POWER
+MODES.................................................12
+2.3. Power and Ground Pins...............................12
+2.4. Decoupling Guidelines .................................12
+2.4.1. SYSTEM BUS GTL+ DECOUPLING ...13
+2.5. Pentium® II Processor System Bus Clock
+and Processor Clocking...............................13
+2.5.1. MIXING PROCESSORS OF
+DIFFERENT FREQUENCIES..............16
+2.6. Voltage Identification....................................16
+2.7. Pentium® II Processor System Bus Unused
+Pins..............................................................18
+2.8. Pentium® II Processor System Bus Signal
+Groups .........................................................18
+2.8.1. ASYNCHRONOUS VS.
+SYNCHRONOUS FOR SYSTEM BUS
+SIGNALS ..............................................20
+2.9. Test Access Port (TAP) Connection............20
+2.10. Maximum Ratings ......................................20
+2.11. Processor DC Specifications.....................20
+2.12. GTL+ System Bus Specifications ..............26
+2.13. Pentium® II Processor System Bus AC
+Specifications...............................................26
+3.0. SYSTEM BUS SIGNAL SIMULATIONS.........37
+3.1. System Bus Clock (BCLK) Signal Quality
+Specifications...............................................37
+3.2. GTL+ Signal Quality Specifications..............39
+3.3. Non-GTL+ Signal Quality Specifications......39
+3.3.1. OVERSHOOT/UNDERSHOOT
+GUIDELINES........................................39
+3.3.2. RINGBACK SPECIFICATION ..............41
+3.3.3. SETTLING LIMIT GUIDELINE..............41
+4.0. THERMAL SPECIFICATIONS AND DESIGN
+CONSIDERATIONS........................................42
+4.1. Thermal Specifications.................................42
+4.2.  Pentium® II Processor Thermal Analysis ...43
+4.2.1. THERMAL SOLUTION
+PERFORMANCE..................................43
+4.2.2. MEASUREMENTS FOR THERMAL
+SPECIFICATIONS................................44
+4.2.2.1. Thermal Plate Temperature
+Measurement.................................44
+4.2.2.2. Cover Temperature Measurement.45
+4.3. Thermal Solution Attach Methods................45
+4.3.1. HEATSINK CLIP ATTACH ...................45
+4.3.2. RIVSCREW* ATTACH..........................47
+5.0. S.E.C. CARTRIDGE MECHANICAL
+SPECIFICATIONS ..........................................51
+5.1. S.E.C. Cartridge Materials Information ........51
+5.2. Processor Edge Finger Signal Listing..........63
+6.0. BOXED PROCESSOR SPECIFICATIONS....73
+6.1. Introduction...................................................73
+6.2. Mechanical Specifications............................74
+6.2.1. BOXED PROCESSOR FAN/HEATSINK
+DIMENSIONS.......................................74
+ 6.2.2. BOXED PROCESSOR
+FAN/HEATSINK WEIGHT....................76
+6.2.3. BOXED PROCESSOR RETENTION
+MECHANISM AND FAN/HEATSINK
+SUPPORT ............................................76
+6.3. Boxed Processor Requirements..................79
+6.3.1. FAN/HEATSINK POWER SUPPLY......79
+
+
+===== PAGE 4 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+4
+6.4. Thermal Specifications.................................81
+6.4.1. BOXED PROCESSOR COOLING
+REQUIREMENTS ................................81
+7.0. ADVANCED FEATURES................................82
+A.1 ALPHABETICAL SIGNALS REFERENCE ....83
+A.1.1 A[35:0]# (I/O) .........................................83
+A.1.2 A20M# (I)...............................................83
+A.1.3 ADS# (I/O).............................................83
+A.1.4 AERR# (I/O) ..........................................83
+A.1.5 AP[1:0]# (I/O).........................................83
+A.1.6 BCLK (I).................................................84
+A.1.7 BERR# (I/O) ..........................................84
+A.1.8 BINIT# (I/O) ...........................................84
+A.1.9 BNR# (I/O).............................................84
+A.1.10 BP[3:2]# (I/O).......................................84
+A.1.11 BPM[1:0]# (I/O)....................................84
+A.1.12 BPRI# (I)..............................................84
+A.1.13 BR0# (I/O), BR1# (I)............................85
+A.1.14 BSEL# (I/O) .........................................85
+A.1.15 D[63:0]# (I/O).......................................85
+A.1.16 DBSY# (I/O).........................................85
+A.1.17 DEFER# (I)..........................................85
+A.1.18 DEP[7:0]# (I/O)....................................85
+A.1.19 DRDY# (I/O) ........................................85
+A.1.20 EMI.......................................................86
+A.1.21 FERR# (O)...........................................86
+A.1.22 FLUSH# (I)...........................................86
+A.1.23 FRCERR (I/O) .....................................86
+A.1.24 HIT# (I/O), HITM# (I/O)........................86
+A.1.25 IERR# (O)............................................86
+A.1.26 IGNNE# (I)...........................................87
+A.1.27 INIT# (I)................................................87
+A.1.28 LINT[1:0] (I)..........................................87
+A.1.29 LOCK# (I/O).........................................87
+A.1.30 PICCLK (I) ...........................................87
+A.1.31 PICD[1:0] (I/O).....................................88
+A.1.32 PM[1:0]# (O) ........................................88
+A.1.33 PRDY# (O) ..........................................88
+A.1.34 PREQ# (I)............................................88
+A.1.35 PWRGOOD (I).....................................88
+A.1.36 REQ[4:0]# (I/O)....................................88
+A.1.37 RESET# (I) ..........................................88
+A.1.38 RP# (I/O)..............................................89
+A.1.39 RS[2:0]# (I)...........................................89
+A.1.40 RSP# (I)...............................................89
+A.1.41 SLOTOCC# (O)...................................89
+A.1.42 SLP# (I)................................................90
+A.1.43 SMI# (I) ................................................90
+A.1.44 STPCLK# (I) ........................................90
+A.1.454 TCK (I) ...............................................90
+A.1.46 TDI (I)...................................................90
+A.1.47 TDO (O)...............................................90
+A.1.48 TESTHI (I)............................................90
+A.1.49 THERMTRIP# (O) ...............................90
+A.1.50 TMS (I).................................................90
+A.1.51 TRDY# (I).............................................90
+A.1.52 TRST# (I).............................................90
+A.1.53 VID[4:0] (O)..........................................91
+A.2 SIGNAL SUMMARIES.....................................91
+FIGURES
+Figure 1. Second Level (L2) Cache
+Implementations....................................7
+Figure 2. GTL+ Bus Topology...............................9
+Figure 3. Stop Clock State Machine....................10
+Figure 4. Timing Diagram of System Bus
+Multiplier Signals.................................14
+Figure 5. Example Schematic for System Bus
+Multiplier Pin Sharing..........................15
+Figure 6. BCLK to Core Logic Offset ..................32
+Figure 7. BCLK, TCK, PICCLK Generic Clock
+Wave Form .........................................32
+Figure 8. System Bus Valid Delay Timings.........33
+Figure 9. System Bus Setup and Hold Timings ..33
+Figure 10. FRC Mode BCLK to PICCLK Timing .34
+Figure 11. System Bus Reset and Configuration
+Timings ...............................................34
+Figure 12. Power-On Reset and Configuration
+Timings ...............................................35
+Figure 13. Test Timings (TAP Connection).........36
+Figure 14. Test Reset Timings............................36
+Figure 15. BCLK, TCK, PICCLK Generic Clock
+Wave form at the Processor Edge
+Fingers................................................37
+
+
+===== PAGE 5 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+5
+Figure 16. Low to High GTL+ Receiver Ringback
+Tolerance............................................38
+Figure 17. Non-GTL+ Overshoot/Undershoot and
+Ringback.............................................40
+Figure 18. Processor S.E.C. Cartridge Thermal
+Plate....................................................42
+Figure 19. Processor Thermal Plate Temperature
+Measurement Location .......................44
+Figure 20. Technique for Measuring TPLATE with
+0° Angle Attachment...........................45
+Figure 21. Technique for Measuring TPLATE with
+90° Angle Attachment.........................45
+Figure 22. Guideline Locations for Cover
+Temperature (TCOVER)
+Thermocouple Placement...................46
+Figure 23. Processor with an Example Low
+Profile Heatsink Attached using Spring
+Clips....................................................46
+Figure 24. Processor with an Example Full
+Height Heatsink Attached using Spring
+Clips....................................................47
+Figure 25. Heatsink Recommendations and
+Guidelines for Use with Rivscrews* ...48
+Figure 26. Heatsink Rivscrew* and Thermal Plate
+Recommendations and Guidelines.....48
+Figure 27. General Rivscrew* Heatsink
+Mechanical Recommendations ..........49
+Figure 28. Heatsink Attachment Mechanism
+Design Space .....................................50
+Figure 29. S.E.C. Cartridge – Thermal Plate and
+Cover Side Views ...............................52
+Figure 30. S.E.C. Cartridge Overall Cartridge
+Dimensions.........................................53
+Figure 32. S.E.C. Cartridge Thermal Plate and
+Side View Dimensions........................55
+Figure 33. S.E.C. Cartridge Thermal Plate
+Flatness Dimensions ..........................56
+Figure 34. S.E.C. Cartridge Latch Details...........57
+Figure 35. S.E.C. Cartridge Latch Arm,
+Thermal Plate Lug, and Cover Lug
+Dimensions.........................................58
+Figure 36. S.E.C. Cartridge Mark Locations.......59
+Figure 37. S.E.C. Cartridge Bottom Side View ...60
+Figure 38. S.E.C. Cartridge Substrate
+Dimensions.........................................61
+Figure 39. S.E.C. Cartridge Substrate
+Dimensions, Cover Side View............61
+Figure 40. Substrate – S.E.C. Cartridge Substrate
+Detail A ...............................................62
+Figure 41. Conceptual Boxed Pentium® II
+Processor in Retention Mechanism....73
+Figure 42. Side View Space Requirements for the
+Boxed Processor  (fan heatsink
+supports not shown) ...........................74
+Figure 43. Front View Space Requirements for
+the Boxed Processor ..........................75
+Figure 44. Top View Space Requirements for the
+Boxed Processor ................................75
+Figure 45. Heatsink Support Hole Locations and
+Sizes ...................................................77
+Figure 46. Side View Space Requirements for
+Boxed Processor Fan/Heatsink
+Supports..............................................78
+Figure 47. Top View Space Requirements for
+Boxed Processor Fan/Heatsink
+Supports..............................................79
+Figure 48. Boxed Processor Fan/Heatsink Power
+Cable Connector Description..............80
+Figure 49. Recommended Motherboard Power
+Header Placement Relative to Fan
+Power Connector and Slot 1...............81
+Figure 50. PWRGOOD Relationship at
+Power-On............................................89
+TABLES
+Table 1. Core Frequency to System Bus
+Multiplier Configuration ........................14
+Table 2. Voltage Identification Definition.............17
+Table 3. Recommended Pull-Up Resistor
+Values (Approximate) for CMOS
+Signals .................................................18
+Table 4. Pentium® II Processor/Slot 1 System
+Bus Signal Groups...............................19
+Table 5. Pentium® II Processor Absolute
+Maximum Ratings ................................21
+Table 6. Pentium® II Processor Voltage and
+Current Specifications..........................22
+Table 7. GTL+ Signal Groups DC
+Specifications.......................................25
+Table 8. Non-GTL+ Signal Groups DC
+Specifications.......................................25
+Table 9. Pentium® II Processor GTL+ Bus
+Specifications.......................................26
+
+
+===== PAGE 6 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+6
+Table 10. System Bus AC Specifications
+(Clock) .................................................27
+Table 11. Valid Slot 1 System Bus, Core
+Frequency and Cache Bus
+Frequencies.........................................28
+Table 12. GTL+ Signal Groups System Bus AC
+Specifications.......................................28
+Table 13. System Bus AC Specifications (CMOS
+Signal Group).......................................29
+Table 14. System Bus AC Specifications (Reset
+Conditions)...........................................29
+Table 15. System Bus AC Specifications (APIC
+Clock and APIC I/O) ............................30
+Table 16. System Bus AC Specifications (TAP
+Connection)..........................................31
+Table 17. BCLK Signal Quality Specifications....37
+Table 18. GTL+ Signal Groups Ringback
+Tolerance.............................................38
+Table 19. Signal Ringback Specifications for Non-
+GTL+ Signals.......................................41
+Table 20. Pentium® II Processor Thermal Design
+Specification.........................................43
+Table 21. Example Thermal Solution
+Performance for 266 MHz Pentium® II
+Processor at Thermal Plate Power of
+37.0 Watts............................................43
+Table 22. S.E.C. Cartridge Materials ..................51
+Table 23. S.E.C. Cartridge Dimensions..............51
+Table 24. Description Table for Processor
+Markings ..............................................59
+Table 25. Signal Listing in Order by Pin
+Number ................................................63
+Table 26. Signal Listing in Order by Signal
+Name....................................................68
+Table 27. Boxed Processor Fan/Heatsink Spatial
+Dimensions ..........................................75
+Table 28. Boxed Processor Fan/Heatsink
+Support Dimensions.............................76
+Table 29. Fan/Heatsink Power and Signal
+Specifications.......................................80
+Table 30. BR0# (I/O) and BR1# Signals Rotating
+Interconnect .........................................85
+Table 31. BR[1:0]# Signal Agent IDs ..................85
+Table 32. Slot 1 Occupation Truth Table ............89
+Table 33. Output Signals.....................................91
+Table 34. Input Signals........................................92
+Table 35. Input/Output Signals (Single Driver)....93
+Table 36. Input/Output Signals (Multiple Driver) .93
+
+
+===== PAGE 7 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+7
+1.0.
+INTRODUCTION
+The Pentium II processor is the next in the
+Intel386™, Intel486™, Pentium and Pentium Pro
+line of Intel processors. The Pentium II processor,
+like the Pentium Pro processor, implements a
+Dynamic Execution micro-architecture — a unique
+combination of multiple branch prediction, data flow
+analysis and speculative execution. This enables
+the 
+Pentium II 
+processor 
+to 
+deliver 
+higher
+performance than the Pentium processor, while
+maintaining binary compatibility with all previous
+Intel 
+architecture 
+processors. 
+The 
+Pentium II
+processor 
+also 
+executes 
+MMX 
+technology
+instructions for enhanced media and communication
+performance. The Pentium II processor utilizes
+multiple low-power states such as AutoHALT, Stop-
+Grant, Sleep and Deep Sleep to conserve power
+during idle times.
+The Pentium II processor utilizes the same multi-
+processing System Bus technology as the Pentium
+Pro processor. This allows for a higher level of
+performance for both uni-processor and two-way
+multi-processor (2-way MP) systems. Memory is
+cacheable for up to 512 MB of addressable memory
+space, allowing significant headroom for business
+desktop systems.
+The Pentium II processor System Bus operates in
+the same manner as the Pentium Pro processor
+System Bus. The Pentium II processor System Bus
+uses GTL+ signal technology. The Pentium II
+processor deviates from the Pentium Pro processor
+by using commercially available die for the L2
+cache. The L2 cache (the TagRAM and burst
+pipeline 
+synchronous 
+static 
+RAM 
+(BSRAM)
+memories) are now multiple die. Transfer rates
+between the Pentium II processor core and the L2
+cache are one-half the processor core clock
+frequency and scale with the processor core
+frequency. Both the TagRAM and BSRAM receive
+clocked data directly from the Pentium II processor
+core. As with the Pentium Pro processor, the L2
+cache does not connect to the Pentium II processor
+System Bus (see Figure 1). As with the Pentium Pro
+processor, 
+the 
+Pentium II 
+processor 
+has 
+a
+dedicated L2 bus, thus maintaining the dual
+independent bus architecture to deliver high bus
+bandwidth and high performance (see Figure 1).
+The Pentium II processor utilizes Single Edge
+Contact (S.E.C.) cartridge packaging technology.
+The S.E.C. cartridge allows the L2 cache to remain
+tightly coupled to the processor, while enabling use
+of high volume commercial SRAM components. The
+L2 cache is performance optimized and tested at
+the package level. The S.E.C. cartridge utilizes
+surface mount technology and a substrate with an
+edge finger connection. The S.E.C. cartridge
+introduced on the Pentium II processor will also be
+used in future Slot 1 processors.
+The S.E.C. cartridge has the following features: a
+thermal plate, a cover and a substrate with an edge
+finger 
+connection. 
+The 
+thermal 
+plate 
+allows
+standardized heatsink attachment or customized
+thermal solutions. The full enclosure also protects
+the surface mount components. The edge finger
+connection maintains socketability for system
+configuration. The edge finger connector is noted as
+‘Slot 1 connector’ in this and other documentation.
+Pentium II Processor
+Substrate and Components
+Processor Core
+Processor
+Core
+Tag
+L2
+Pentium ® Pro Processor
+Dual Die Cavity Package
+L2
+Schematic only
+000756c
+Figure 1. Second Level (L2) Cache Implementations
+
+
+===== PAGE 8 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+8
+1.1.
+Terminology
+In this document, a ‘#’ symbol after a signal name
+refers to an active low signal. This means that a
+signal is in the active state (based on the name of the
+signal) when driven to a low level. For example,
+when FLUSH# is low, a flush has been requested.
+When NMI is high, a nonmaskable interrupt has
+occurred. In the case of signals where the name
+does not imply an active state but describes part of a
+binary sequence (such as address or data), the ‘#’
+symbol implies that the signal is inverted. For
+example, D[3:0] = ‘HLHL’ refers to a hex ‘A’, and
+D#[3:0] = ‘LHLH’ also refers to a hex ‘A’ (H= High
+logic level, L= Low logic level).
+The term “System Bus” refers to the interface
+between the processor, system core logic (a.k.a. the
+PCIset components) and other bus agents. The
+System Bus is a multiprocessing interface to
+processors, memory and I/O. The term “Cache Bus”
+refers to the interface between the processor and the
+L2 cache components (TagRAM and BSRAMs). The
+Cache Bus does NOT connect to the System Bus,
+and is not visible to other agents on the System Bus.
+1.1.1.
+S.E.C. CARTRIDGE TERMINOLOGY
+The following terms are used often in this document
+and are explained here for clarification:
+Pentium® II processor — The entire product
+including internal components, substrate, thermal
+plate and cover.
+S.E.C. cartridge — The new processor packaging
+technology is called a “Single Edge Contact
+cartridge.”
+Processor substrate —The structure on which the
+components are mounted inside the S.E.C.
+cartridge (with or without components attached).
+Processor core — The processor’s execution
+engine.
+Thermal plate — The surface used to connect a
+heatsink or other thermal solutions to the
+processor.
+Cover — The processor casing on the opposite side
+of the thermal plate.
+Latch Arms — A processor feature that can be
+utilized as a means for securing the processor in
+the retention mechanism.
+Additional terms referred to in this and other related
+documentation:
+Slot 1 — The connector that the S.E.C. cartridge
+plugs into, just as the Pentium® Pro processor
+uses Socket 8.
+Retention mechanism — An enabled mechanical
+piece which holds the package in the Slot 1
+connector.
+Heatsink support — The support pieces that are
+mounted on the motherboard to provide added
+support for heatsinks.
+The L2 cache (TagRAM, BSRAM) dies keep
+standard industry names.
+1.2.
+References
+The reader of this specification should also be
+familiar with material and concepts presented in the
+following documents:
+AP-485, Intel Processor Identification With the
+CPUID Instruction (Order Number 241618)
+AP-585, Pentium® II Processor GTL+ Guidelines
+(Order Number 243330)
+AP-586, Pentium® II Processor Thermal Design
+Guidelines (Order Number 243333)
+AP-587, Pentium® II Processor Power Distribution
+Guidelines (Order Number 243332)
+AP-588, Mechanical and Assembly Technology for
+S.E.C. Cartridge Processors (Order Number
+243333)
+AP-589, Pentium® II Processor Electro-Magnetic
+Interference (Order Number 243334)
+Pentium® II Processor Specification Update (Order
+Number 243337)
+Pentium® II Processor I/O Buffer Models, IBIS
+Format (Electronic Form)
+Pentium® II Processor Developer’s Manual (Order
+Number 243341)
+Intel Architecture Software Developer’s Manual
+Volume I: Basic Architecture (Order Number
+243190)
+Volume II: Instruction Set Reference (Order
+Number 243191)
+Volume III: System Programming Guide (Order
+Number 243192)
+
+
+===== PAGE 9 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+9
+2.0.
+ELECTRICAL SPECIFICATIONS
+2.1.
+The Pentium® II Processor
+System Bus and VREF
+Most of the Pentium II processor signals use a
+variation of the low voltage Gunning Transceiver
+Logic (GTL) signaling technology.
+The Pentium II processor System Bus specification
+is similar to the GTL specification, but has been
+enhanced to provide larger noise margins and
+reduced 
+ringing. 
+The 
+improvements 
+are
+accomplished by increasing the termination voltage
+level and controlling the edge rates. Because this
+specification is different from the standard GTL
+specification, it is referred to as GTL+ in this
+document. 
+For 
+more 
+information 
+on 
+GTL+
+specifications, see AP-585, Pentium® II Processor
+GTL+ Guidelines (Order Number 243330).
+The GTL+ signals are open-drain and requires
+termination to a supply that provides the high signal
+level. The GTL+ inputs use differential receivers
+which require a reference signal (VREF). Termination
+(usually a resistor at each end of the signal trace) is
+used to pull the bus up to the high voltage level and
+to control reflections on the transmission line. VREF is
+used by the receivers to determine if a signal is a
+logical 0 or a logical 1, and is generated on the
+S.E.C. cartridge for the processor core. The
+processor contains termination resistors that provide
+termination for one end of the Pentium II processor
+System Bus. Termination (usually a resistor on each
+end of the signal trace) is used to pull the bus up to
+the high voltage level and to control reflections on the
+transmission line. See Table 9 for the bus termination
+voltage specifications for GTL+ and the Pentium® II
+Processor Developer’s Manual (Order Number
+243341) for the GTL+ bus specification. VREF is
+generated on the S.E.C. cartridge for the Pentium II
+processor core. Local VREF copies should be
+generated on the motherboard for all other devices
+on the GTL+ System Bus. Figure 2 is a schematic
+representation of GTL+ bus topology with the
+Pentium II processor.
+The GTL+ bus depends on incident wave switching.
+Therefore timing calculations for GTL+ signals are
+based on flight time as opposed to capacitive
+deratings. Analog signal simulation of the Pentium II
+processor System Bus including trace lengths is
+highly recommended when designing a system with
+a heavily loaded GTL+ bus. See Intel’s World Wide
+Web page (http://www.intel.com) to download the
+buffer models, Pentium® II Processor I/O Buffer
+Models, IBIS Format (Electronic Form).
+2.2.
+Clock Control and Low Power
+States
+The Pentium II processor allows the use of
+AutoHALT, Stop-Grant, Sleep and Deep Sleep states
+to reduce power consumption by stopping the clock
+to internal sections of the processor, depending on
+each particular state. See Figure 3 for a visual
+representation of the Pentium II processor low power
+states.
+For the processor to fully realize the low current
+consumption of the Stop-Grant, Sleep and Deep
+Sleep states, a Model Specific Register (MSR) bit
+must be set. For the MSR at 02AH (Hex), bit 26 must
+be set to a ‘1’ (this is the power on default setting) for
+the processor to stop all internal clocks during these
+modes. For more information, see the Pentium® II
+Processor Developer’s Manual (Order Number
+243341).
+Pentium® II
+Processor
+No Stubs
+ASIC
+ASIC
+Pentium II
+Processor
+000916
+Figure 2. GTL+ Bus Topology
+
+
+===== PAGE 10 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+10
+2.  Auto HALT Power Down State
+BCLK running.
+Snoops and interrupts allowed.
+HALT Instruction and
+HALT Bus Cycle Generated
+INIT#, BINIT#, INTR, NMI,
+SMI#, RESET#
+1.  Normal State
+Normal execution.
+STPCLK#
+Asserted
+STPCLK#
+De-asserted
+3.  Stop Grant State
+BCLK running.
+Snoops and interrupts allowed.
+SLP#
+Asserted
+SLP#
+De-asserted
+5.  Sleep State
+BCLK running.
+No snoops or interrupts allowed.
+BCLK
+Input
+Stopped
+BCLK
+Input
+Restarted
+6.  Deep Sleep State
+BCLK stopped.
+No snoops or interrupts allowed.
+4.  HALT/Grant Snoop State
+BCLK running.
+Service snoops to caches.
+Snoop Event Occurs
+Snoop Event Serviced
+Snoop
+Event
+Occurs
+Snoop
+Event
+Serviced
+STPCLK# Asserted
+STPCLK# De-asserted
+B757a
+Figure 3. Stop Clock State Machine
+Due to the inability of processors to recognize bus
+transactions during Sleep state and Deep Sleep
+state, two-way MP systems are not allowed to have
+one processor in Sleep/Deep Sleep state and the
+other processor in Normal or Stop-Grant states
+simultaneously.
+2.2.1.
+NORMAL STATE — STATE 1
+This is the normal operating state for the processor.
+2.2.2.
+AUTO HALT POWER DOWN STATE —
+STATE 2
+AutoHALT is a low power state entered when the
+processor executes the HALT instruction. The
+processor will transition to the Normal state upon the
+occurrence of SMI#, BINIT#, INIT#, or LINT[1:0]
+(NMI, INTR). RESET# will cause the processor to
+immediately initialize itself.
+The return from the SMI handler can be to either
+Normal Mode or the AutoHALT Power Down state.
+See the Intel Architecture Software Developer’s
+Manual, Volume III: System Programming Guide
+(Order Number 243192) for more information.
+
+
+===== PAGE 11 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+11
+FLUSH# will be serviced during AutoHALT state and
+the processor will return to the AutoHALT state.
+The system can generate a STPCLK# while the
+processor is in the AutoHALT Power Down state.
+When the system deasserts the STPCLK# interrupt,
+the processor will return execution to the HALT state.
+2.2.3.
+STOP-GRANT STATE — STATE 3
+The Stop-Grant state on the processor is entered
+when the STPCLK# signal is asserted.
+Since the GTL+ signal pins receive power from the
+System Bus, these pins should not be driven
+(allowing the level to return to VTT) for minimum
+power drawn by the termination resistors in this state.
+In addition, all other input pins on the System Bus
+should be driven to the inactive state.
+FLUSH# will be serviced during Stop-Grant state and
+the processor will return to the Stop-Grant state.
+RESET# will cause the processor to immediately
+initialize itself, but the processor will stay in Stop-
+Grant state. A transition back to the Normal state will
+occur with the deassertion of the STPCLK# signal.
+A transition to the HALT/Grant Snoop state will occur
+when the processor detects a snoop on the System
+Bus (see Section 2.2.4.). A transition to the Sleep
+state (see Section 2.2.5.) will occur with the assertion
+of the SLP# signal.
+While in the Stop-Grant state, SMI#, INIT# and
+LINT[1:0] will be latched by the processor, and only
+serviced when the processor returns to the Normal
+state. Only one occurrence of each event will be
+recognized upon return to the Normal state.
+2.2.4.
+HALT/GRANT SNOOP STATE —
+STATE 4
+The processor will respond to snoop transactions on
+the Slot 1 processor System Bus while in Stop-Grant
+state or in AutoHALT Power Down state. During a
+snoop 
+transaction, 
+the 
+processor 
+enters 
+the
+HALT/Grant Snoop state. The processor will stay in
+this state until the snoop on the Slot 1 processor
+System Bus has been serviced (whether by the
+processor or another agent on the Slot 1 by the
+processor or another agent on the Slot 1 processor
+System Bus). After the snoop is serviced, the
+processor will return to the Stop-Grant state or
+AutoHALT Power Down state, as appropriate.
+2.2.5.
+SLEEP STATE — STATE 5
+The Sleep state is a very low power state in which
+the processor maintains its context, maintains the
+phase-locked loop (PLL), and has stopped all internal
+clocks. The Sleep state can only be entered from
+Stop-Grant state. Once in the Stop-Grant state, the
+SLP# pin can be asserted, causing the processor to
+enter the Sleep state. The SLP# pin is not recognized
+in the Normal or AutoHALT states.
+Snoop events that occur while in Sleep state or
+during a transition into or out of Sleep state will cause
+unpredictable behavior.
+In the Sleep state, the processor is incapable of
+responding to snoop transactions or latching interrupt
+signals. No transitions or assertions of signals (with
+the exception of SLP# or RESET#) are allowed on
+the system bus while the processor is in Sleep state.
+Any transition on an input signal before the processor
+has returned to Stop Grant state will result in
+unpredictable behavior.
+If RESET# is driven active while the processor is in
+the Sleep state, and held active as specified in the
+RESET# pin specification, then the processor will
+reset itself, ignoring the transition through Stop-Grant
+state. If RESET# is driven active while the processor
+is in the Sleep state, the SLP# and STPCLK# signals
+should be deasserted immediately after RESET# is
+asserted to ensure the processor correctly executes
+the Reset sequence.
+While in the Sleep state, the processor is capable of
+entering its lowest power state, the Deep Sleep state,
+by stopping the BCLK input. (see Section 2.2.6.)
+Once in the Sleep or Deep Sleep states, the SLP#
+pin can be deasserted if another asynchronous
+System Bus event occurs. The SLP# pin has a
+minimum assertion of one BCLK period.
+
+
+===== PAGE 12 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+12
+2.2.6.
+DEEP SLEEP STATE — STATE 6
+The Deep Sleep state is the lowest power state the
+processor can enter while maintaining context. The
+Deep Sleep state is entered by stopping the BCLK
+input (after the Sleep state was entered from the
+assertion of the SLP# pin). The processor is in Deep
+Sleep state immediately after the BCLK is stopped. It
+is recommended that the BCLK input be held low
+during the Deep Sleep state. Stopping of the BCLK
+input lowers the overall current consumption to
+leakage levels.
+To re-enter the Sleep state, the BCLK input must be
+restarted. A period of 1 ms (to allow for PLL
+stabilization) must occur before the processor can be
+considered to be in the Sleep state.
+While in Deep Sleep state, the processor is
+incapable of responding to snoop transactions or
+latching interrupt signals. No transitions or assertions
+of signals are allowed on the System Bus while the
+processor is in Deep Sleep state. Any transition on
+an input signal before the processor has returned to
+Stop-Grant state will result in unpredictable behavior.
+2.2.7.
+CLOCK CONTROL AND LOW POWER
+MODES
+The processor provides the clock signal to the L2
+cache. During AutoHALT Power Down and Stop-
+Grant states, the processor will process the snoop
+phase of a System Bus cycle. The processor will not
+stop the clock data to the L2 cache during AutoHALT
+Power Down or Stop-Grant states. Entrance into the
+HALT/Grant Snoop state will allow the L2 cache to
+be snooped, similar to Normal state.
+When the processor is in Sleep and Deep Sleep
+states, it will not respond to interrupts or snoop
+transactions. During Sleep state, the clock to the L2
+cache is not stopped. During the Deep Sleep state,
+the clock to the L2 cache is stopped. The clock to the
+L2 cache will be restarted only after the internal
+clocking mechanism for the processor is stable (i.e.,
+the processor has re-entered Sleep state).
+The PICCLK should not be removed during the
+AutoHALT Power Down or Stop-Grant states. The
+PICCLK can be removed during the Sleep or Deep
+Sleep states. When transitioning from the Deep
+Sleep to Sleep states, the PICCLK must be restarted
+with the BCLK.
+2.3.
+Power and Ground Pins
+As future versions of Pentium II processors are
+released, the operating voltage of the processor core
+and of the L2 cache die may differ from each other.
+There are two groups of power inputs on the
+Pentium II processor package to support the possible
+voltage difference between the two components in
+the package. There are also five pins defined on the
+package for voltage identification (VID). These pins
+specify the voltage required by the processor core.
+These have been added to cleanly support voltage
+specification variations on current and 
+future
+Pentium II processors.
+For clean on-chip power distribution, Pentium II
+processors have 27 VCC (power) and 30 VSS
+(ground) inputs. The 27 VCC pins are further divided
+to provide the different voltage levels to the
+components. VccCORE inputs for the processor core
+and some L2 cache components account for 19 of
+the VCC pins, while 4 VTT inputs (1.5 V) are used to
+provide a GTL+ termination voltage to the processor
+and 3 VccL2 inputs (3.3 V) are for use by the L2
+cache TagRAM and BSRAMs. One Vcc5 pin is
+provided for use by the Slot 1 Test Kit. Vcc5, VccL2,
+and VccCORE must remain electrically separated from
+each other. On the circuit board, all VccCORE pins
+must be connected to a voltage island and all VccL2
+pins must be connected to a separate voltage island
+(an island is a portion of a power plane that has been
+divided, or an entire plane). Similarly, all VSS pins
+must be connected to a system ground plane.
+2.4.
+Decoupling Guidelines
+Due to the large number of transistors and high
+internal clock speeds, the processor is capable of
+generating large average current swings between
+low and full power states. This causes voltages on
+power planes to sag below their nominal value if bulk
+decoupling is not adequate. Care must be taken in
+the board design to ensure that the voltage provided
+to the processor remains within the specifications
+listed in this document. Failure to do so can result in
+timing violations or a reduced lifetime of the
+component.
+
+
+===== PAGE 13 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+13
+Regulator solutions need to provide bulk capacitance
+with a low Effective Series Resistance (ESR) and
+keep an interconnect resistance from the regulator
+(or VRM pins) to the Slot 1 connector of less than
+0.5 mΩ. This can be accomplished by keeping a
+maximum distance of 1.5 inches between the
+regulator 
+output 
+and 
+Slot 
+1 
+connector. 
+The
+recommended VccCORE interconnect is a 2.0 inch
+wide (the width of the VRM connector) by 1.5 inch
+long 
+(maximum 
+distance 
+between 
+the 
+Slot 1
+connector and the VRM connector) plane segment
+with a standard 1-ounce plating. Bulk decoupling for
+the large current swings when the processor is
+powering on, or entering/exiting low power states, is
+provided on the voltage regulation module (VRM)
+defined 
+in 
+the 
+Pentium® II 
+Processor 
+Power
+Distribution Guidelines. The VccCORE input should be
+capable of delivering a recommended minimum
+dIccCORE/dt (defined in Table 6) while maintaining the
+tolerances (also defined in Table 6).
+2.4.1.
+SYSTEM BUS GTL+ DECOUPLING
+The Pentium II processor contains high frequency
+decoupling capacitance on the processor substrate;
+however, bulk decoupling must be provided for by
+the system motherboard for proper GTL+ bus
+operation. See AP-585, Pentium® II Processor GTL+
+Guidelines 
+(Order 
+Number 
+243330); 
+AP-587,
+Pentium® II Processor Power Distribution Guidelines
+(Order Number 243332); and Pentium® II Processor
+Developer’s Manual (Order Number 243341) for
+more information.
+2.5.
+Pentium® II Processor System
+Bus Clock and Processor
+Clocking
+The BCLK input directly controls the operating speed
+of the Pentium II Processor System Bus interface. All
+Pentium II Processor System Bus timing parameters
+are specified with respect to the rising edge of the
+BCLK 
+input. 
+The 
+Pentium II 
+processor 
+core
+frequency must be configured during Reset by using
+the A20M#, IGNNE#, LINT[1]/NMI and LINT[0]/INTR
+pins. (See Table 1.) The value on these pins during
+Reset determines the multiplier that the PLL will use
+for the internal core clock. See the Pentium® II
+Processor Developer’s Manual (Order Number
+243341) for the definition of these pins during Reset
+and the operation of the pins after Reset.
+See Figure 4 for the timing relationship between the
+System Bus multiplier signals, RESET#, CRESET#
+and normal processor operation. Table 1 is a list of
+multipliers supported. All other multipliers are not
+authorized or supported.
+Using CRESET# (CMOS reset on the baseboard),
+the circuit in Figure 5 can be used to share these
+configuration signals. The component used as the
+multiplexer must not have outputs that drive higher
+than 2.5 V in order to meet the Pentium II processor’s
+2.5 V tolerant buffer specifications. The multiplexer
+output current should be limited to 200 mA maximum,
+in case the VccCORE supply to the processor ever
+fails.
+As shown in Figure 4, the pull-up resistors between
+the multiplexer and the processor (330 Ω) force a
+ratio of ½ into the processor in the event that the
+Pentium II 
+processor 
+powers 
+up 
+before 
+the
+multiplexer and/or the core logic. This prevents the
+processor from ever seeing a ratio higher than the
+final ratio.
+If the multiplexer were powered by Vcc2.5, a pull-
+down could be used on CRESET# instead of the four
+pull-up resistors between the multiplexer and the
+Pentium II processor. In this case, the multiplexer
+must be designed such that the compatibility inputs
+are truly ignored, as their state is unknown.
+The compatibility inputs to the multiplexer must meet
+the input specifications of the multiplexer. This may
+require a level translation before the multiplexer
+inputs unless the inputs and the signals driving them
+are already compatible.
+For FRC mode operation, the multiplexer will need to
+be clocked using BCLK to meet setup and hold times
+to the processors. This may require the use of high
+speed programmable logic.
+Multiplying the bus clock frequency is required to
+increase performance while allowing for cost
+effective distribution of signals within a system. The
+System Bus frequency multipliers supported are
+shown in Table 11; other combinations will not be
+validated 
+nor 
+are 
+they 
+authorized 
+for
+implementation.
+
+
+===== PAGE 14 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+14
+Table 1. Core Frequency to System Bus Multiplier Configuration
+Ratio of System Bus to Processor Core Frequency
+LINT[1]
+LINT[0]
+A20M#
+IGNNE#
+1/2
+L
+L
+L
+L
+1/4
+L
+L
+H
+L
+1/5
+L
+L
+H
+H
+2/7
+L
+H
+L
+H
+2/9
+L
+H
+H
+L
+1/2
+H
+H
+H
+H
+BCLK
+RESET#
+CRESET#
+System
+Bus
+Multiplier
+Compatibility
+≤Final Ratio
+Final Ratio
+000917a
+Figure 4. Timing Diagram of System Bus Multiplier Signals
+
+
+===== PAGE 15 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+15
+A20M#
+IGNNE#
+LINT1/NMI
+LINT0/INTR
+Pentium® II
+Processors
+1KΩ
+2.5 V
+Set Ratio:
+CRESET#
+Mux
+2.5 V
+000918
+Figure 5. Example Schematic for System Bus Multiplier Pin Sharing
+
+
+===== PAGE 16 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+16
+Clock multiplying within the processor is provided by
+the internal Phase Lock Loop (PLL), requiring a
+constant frequency BCLK input. The System Bus
+frequency ratio cannot be changed dynamically
+during normal operation, nor can it be changed
+during any low power modes. The System Bus
+frequency ratio can be changed when RESET# is
+active, assuming that all Reset specifications are
+met. The BCLK frequency should not be changed in
+Deep Sleep state. (See Section 2.2.6.)
+2.5.1.
+MIXING PROCESSORS OF
+DIFFERENT FREQUENCIES
+Mixing 
+processor 
+of 
+different 
+internal 
+clock
+frequencies is not fully supported and has not been
+validated by Intel. Intel recommends using identical
+steppings of processor running at the same
+core/system frequencies.
+2.6.
+Voltage Identification
+There are five voltage identification pins on the
+Pentium II processor/Slot 1 connector. These pins
+can be used to support automatic selection of power
+supply voltages. These pins are not signals, but are
+either an open circuit or a short circuit to VSS on the
+processor. The combination of opens and shorts
+defines the voltage required by the processor core.
+The VID pins are needed to cleanly support voltage
+specification variations on the Pentium II and future
+processors. These pins (VID[0] through VID[4]) are
+defined in Table 2. A ‘1’ in this table refers to an open
+pin and a ‘0’ refers to a short to ground. The definition
+provided below is a superset of the definition
+previously defined for the Pentium Pro processor.
+The power supply must supply the voltage that is
+requested or disable itself.
+Table 2 provides the definition of VID[4:0]. To ensure
+the system is ready for Pentium II processor
+variations, the range of values which are in BOLD in
+Table 2 must be supported. A smaller range will risk
+the ability of the system to migrate to a higher
+performance processor. A wider range provides
+more flexibility and is acceptable. Support for a wider
+range of VID settings will benefit the system in
+meeting 
+the 
+power 
+requirements 
+of 
+future
+processors.
+Note that the ‘11111’ (all opens) ID can be used to
+detect the absence of a processor core in a Slot 1
+connector as long as the power supply used does
+not affect these lines. Detection logic and pull-ups
+should not affect VID inputs at the power source.
+(See Section A.1.53.)
+The VID pins should be pulled up to a TTL-
+compatible level with external resistors to the power
+source of the regulator only if required by the
+regulator or external logic monitoring the VID[4:0]
+signals. The power source chosen must be
+guaranteed to be stable whenever the supply to the
+voltage regulator is stable. This will prevent the
+possibility of the processor supply going above 2.8 V
+in the event of a failure in the supply for the VID lines.
+In the case of a DC-to-DC converter, this can be
+accomplished by using the input voltage to the
+converter for the VID line pull-ups. A resistor of
+greater than or equal to 10K ohms should be used to
+connect the VID signals to the converter input. See
+the 
+Pentium® II 
+Processor 
+Power 
+Distribution
+Guidelines for further information on power supply
+specifications for the Pentium II processor and future
+Slot 1 processors.
+
+
+===== PAGE 17 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+17
+Table 2. Voltage Identification Definition1, 2, 3
+Processor Pins
+VID4
+VID3
+VID2
+VID1
+VID0
+VccCORE
+0
+1
+1
+1
+1
+Reserved
+0
+1
+1
+1
+0
+Reserved
+0
+1
+1
+0
+1
+Reserved
+0
+1
+1
+0
+0
+Reserved
+0
+1
+0
+1
+1
+Reserved
+0
+1
+0
+1
+0
+Reserved
+0
+1
+0
+0
+1
+Reserved
+0
+1
+0
+0
+0
+Reserved
+0
+0
+1
+1
+1
+Reserved
+0
+0
+1
+1
+0
+Reserved
+0
+0
+1
+0
+1
+1.80 4
+0
+0
+1
+0
+0
+1.85 4
+0
+0
+0
+1
+1
+1.90 4
+0
+0
+0
+1
+0
+1.95 4
+0
+0
+0
+0
+1
+2.00 4
+0
+0
+0
+0
+0
+2.05 4
+1
+1
+1
+1
+1
+No Core
+1
+1
+1
+1
+0
+2.1 4
+1
+1
+1
+0
+1
+2.2 4
+1
+1
+1
+0
+0
+2.3 4
+1
+1
+0
+1
+1
+2.4 4
+1
+1
+0
+1
+0
+2.5 4
+1
+1
+0
+0
+1
+2.6 4
+1
+1
+0
+0
+0
+2.7 4
+1
+0
+1
+1
+1
+2.8 4
+1
+0
+1
+1
+0
+2.9
+1
+0
+1
+0
+1
+3.0
+1
+0
+1
+0
+0
+3.1
+1
+0
+0
+1
+1
+3.2
+1
+0
+0
+1
+0
+3.3
+1
+0
+0
+0
+1
+3.4
+1
+0
+0
+0
+0
+3.5
+NOTES:
+1.
+0 = Processor pin connected to VSS.
+2.
+1 = Open on processor; may be pulled up to TTL VIH on motherboard. See the Pentium® II Processor Power Distribution
+Guidelines (Order Number 243332).
+3.
+VRM output should be disabled for VccCORE values less than 1.80 V.
+4.
+To ensure the system is ready for Pentium® II processor variations, the values in BOLD in Table 2 must be supported.
+
+
+===== PAGE 18 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+18
+2.7.
+Pentium® II Processor System
+Bus Unused Pins
+All RESERVED pins must remain unconnected.
+Connection of Reserved pins to VccCORE, VccL2, VSS
+or to any signal can result in component malfunction
+or incompatibility with future Slot 1 products. See
+Section 5.2. for a pin listing of the processor and the
+location of each Reserved pin.
+All TESTHI pins must be connected to 2.5 V via a
+pull-up resistor of between 1 and 10 KΩ value.
+PICCLK must be driven with a valid clock input and
+the PICD[1:0] lines must be pulled-up to 2.5 V even
+when the local APIC will not be used. A separate
+pull-up resistor must be provided for each PICD line
+(see Table 3 for recommended values).
+Table 3. Recommended Pull-Up Resistor
+Values (Approximate) for CMOS Signals1, 2, 3
+Recommended
+Resistor Value
+(Approximate)
+CMOS Signal
+150
+TDO, TMS, PICD[0]#,
+PICD[1]#
+150 – 220
+FERR#, IERR#, THERMTRIP#
+150 – 330
+A20M#, IGNNE#, INIT#,
+LINT[1]/NMI, LINT[0]/INTR,
+PWRGOOD, SLP#, PREQ#,
+TDI
+410
+STPCLK#, SMI#
+500
+FLUSH#
+NOTES:
+1.
+These resistor values are recommended for system
+implementations using open drain CMOS buffers.
+2.
+These approximate resistor values are for proper
+operation of debug tools only A ~150Ω pull-up resistor
+is expected for these signals.
+3.
+The TRST# signal must be driven low at power on
+reset. This can be accomplished with a 680 Ω pull-
+down resistor.
+For reliable operation, always connect unused inputs
+or bi-directional signals to an appropriate signal level.
+Unused GTL+ inputs should be left as no connects;
+GTL+ termination is provided on the processor.
+Unused active low CMOS inputs should be
+connected to 2.5V. Unused active high inputs should
+be connected to ground (VSS). Unused outputs can
+be left unconnected. A resistor must be used when
+tying bi-directional signals to power or ground. When
+tying any signal to power or ground, a resistor will
+also allow for system testability. For unused pins, it is
+suggested that ∼10 KΩ resistors be used for pull-ups
+(except for PICD[1:0] as discussed above) and
+∼1 KΩ resistors be used for pull-downs.
+2.8.
+Pentium® II Processor System
+Bus Signal Groups
+In order to simplify the following discussion, the
+Pentium II processor System Bus signals have been
+combined into groups by buffer type. All Pentium II
+processor System Bus outputs are open drain
+and require a high-level source provided externally
+by the termination or pull-up resistor.
+GTL+ input signals have differential input buffers,
+which use VREF as a reference signal. GTL+ output
+signals require termination to 1.5 V. In this document,
+the term “GTL+ Input” refers to the GTL+ input group
+as well as the GTL+ I/O group when receiving.
+Similarly, “GTL+ Output” refers to the GTL+ output
+group as well as the GTL+ I/O group when driving.
+EMI pins should be connected to motherboard
+ground and/or to chassis ground through zero ohm
+(0 Ω) resistors. The zero ohm resistors should be
+placed in close proximity to the Slot 1 connector. The
+path to chassis ground should be short in length and
+have a low impedance.
+The CMOS, Clock, APIC and JTAG inputs can each
+be driven from ground to 2.5 V. The CMOS, APIC
+and JTAG outputs are open drain and should be
+pulled high to 2.5 V. This ensures not only correct
+operation 
+for 
+the 
+Pentium II 
+processor, 
+but
+compatibility for future Slot 1 products as well. See
+Table 3 for recommended pull-up resistor values on
+each CMOS signal. 150Ω resistors are expected on
+the PICD[1:0] lines. Other values in Table 3 are
+specified for proper logic analyzer and test mode
+operation only.
+The groups and the signals contained within each
+group are shown in Table 4. Refer to Appendix A for
+descriptions of these signals.
+
+
+===== PAGE 19 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+19
+Table 4. Pentium® II Processor/Slot 1 System Bus Signal Groups
+Group Name
+Signals
+GTL+ Input
+BPRI#, BR1# , DEFER#, RESET#, RS[2:0]#, RSP#, TRDY#
+GTL+ Output
+PRDY#
+GTL+ I/O
+A[35:3]#, ADS#, AERR#, AP[1:0]#, BERR#, BINIT#, BNR#, BP[3:2]#,
+BPM[1:0]#, BR0#1, D[63:0]#, DBSY#, DEP[7:0]#, DRDY#, FRCERR, HIT#,
+HITM#, LOCK#, REQ[4:0]#, RP#
+CMOS Input
+A20M#, FLUSH#, IGNNE#, INIT#, LINT0/INTR, LINT1/NMI, PREQ#,
+PWRGOOD2, SMI#, SLP#3, STPCLK#
+CMOS Output
+FERR#, IERR#, THERMTRIP#4
+Host Bus Clock
+BCLK
+APIC Clock
+PICCLK
+APIC I/O5
+PICD[1:0]
+TAP Input5
+TCK, TDI, TMS, TRST#
+TAP Output5
+TDO
+Power/Other6
+VccCORE, VccL2, Vcc5, VID[4:0], VTT, VSS, SLOTOCC#, TESTHI, BSEL#,
+EMI
+NOTES:
+1.
+The BR0# pin is the only BREQ signal that is bi-directional. The internal BREQ# signals are mapped onto BR# pins after
+the agent ID is determined. See Appendix A for more information.
+2.
+See Section A.1.35 for information on the PWRGOOD signal.
+3.
+See Section 2.2.5 and Section A.1.42 for information on the SLP# signal.
+4.
+See Section A.1.49 for information on the THERMTRIP# signal.
+5.
+These signals are specified for 2.5 V operation. See Table 3 for recommended pull-up resistor values.
+6.
+VccCORE is the power supply for the processor core and L2 cache I/O logic.
+VccL2 is the power supply for the L2 cache component core logic.
+VID[4:0] is described in Section 2.6.
+VTT is used to terminate the System Bus and generate VREF on the processor substrate.
+Vss is system ground.
+TESTHI should be connected to 2.5 V with a 1K–10K ohm resistor.
+Vcc5 is not connected to the Pentium® II processor. This supply is used for the debug purposes only.
+SLOTOCC# is described in Section A.1.41.
+BSEL# should be connected at VSS.
+See Appendix A for EMI pin descriptions.
+
+
+===== PAGE 20 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+20
+2.8.1.
+ASYNCHRONOUS VS.
+SYNCHRONOUS FOR SYSTEM BUS
+SIGNALS
+All GTL+ signals are synchronous to BCLK. All of the
+CMOS, Clock, APIC and TAP signals can be applied
+asynchronously to BCLK, except when running two
+processors in FRC mode. Synchronization logic is
+required on all signals going to both processors in
+order to run in FRC mode.
+Also note the timing requirements for FRC mode
+operation. With FRC enabled, PICCLK must be ¼ of
+BCLK and synchronized with respect to BCLK.
+PICCLK must always lag BCLK as specified in
+Table 15.
+All APIC signals are synchronous to PICCLK. All
+TAP signals are synchronous to TCK.
+2.9.
+Test Access Port (TAP)
+Connection
+Due to the voltage levels supported by other
+components in the Test Access Port (TAP) logic, it is
+recommended that the Pentium II processor be first
+in the TAP chain and followed by any other
+components within the system. A translation buffer
+should be used to connect to the rest of the chain
+unless one of the other components is capable of
+accepting a 2.5 V input. Similar considerations must
+be made for TCK, TMS and TRST#. Two copies of
+each signal may be required with each driving a
+different voltage level.
+A Debug Port is described in the Pentium® II
+Processor Developer’s Manual (Order Number
+243341). The Debug Port will have to be placed at
+the start and end of the TAP chain with the TDI of the
+first component coming from the Debug Port and the
+TDO from the last component going to the Debug
+Port. In a 2-way MP system, be cautious when
+including an empty Slot 1 connector in the scan
+chain. All connectors in the scan chain must have a
+processor installed to complete the chain or the
+system must support a method to bypass empty
+connectors; the Slot 1 terminator substrate connects
+TDI to TDO. See the Pentium® II Processor
+Developer’s Manual (Order Number 243341) for
+more details.
+2.10.
+Maximum Ratings
+Table 5 contains Pentium II processor stress ratings
+only. Functional operation at the absolute maximum
+and minimum is not implied nor guaranteed. The
+processor should not receive a clock while subjected
+to these conditions. Functional operating conditions
+are given in the AC and DC tables. Extended
+exposure to the maximum ratings may affect device
+reliability. Furthermore, although the processor
+contains protective circuitry to resist damage from
+static electric discharge, one should always take
+precautions to avoid high static voltages or electric
+fields.
+2.11.
+Processor DC Specifications
+The processor DC specifications in this section are
+defined at the Pentium II processor edge fingers. See
+Appendix A for the processor edge finger signal
+definitions.
+Most of the signals on the Pentium II processor
+System Bus are in the GTL+ signal group. These
+signals are specified to be terminated to 1.5 V. The
+DC specifications for these signals are listed in
+Table 8.
+To allow connection with other devices, the Clock,
+CMOS, APIC and TAP are designed to interface at
+non-GTL+ levels. The DC specifications for these
+pins are listed in Table 8.
+Table 6 through Table 9 list the DC specifications for
+the Pentium II processor. Specifications are valid
+only 
+while 
+meeting 
+specifications 
+for 
+case
+temperature, clock frequency and input voltages.
+Care should be taken to read all notes associated
+with each parameter.
+
+
+===== PAGE 21 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+21
+Table 5. Pentium® II Processor Absolute Maximum Ratings
+Symbol
+Parameter
+Min
+Max
+Unit
+Notes
+TStorage
+Processor storage
+temperature
+–40
+85
+°C
+VCC(All)
+Any processor supply voltage
+with respect to VSS
+–0.5
+Operating
+Voltage +1.4
+Operating
+Voltage +1.0
+V
+V
+1, 2, 7
+1,2,8
+VinGTL+
+GTL+ buffer DC input voltage
+with respect to VSS
+–0.5
+-0.3
+3.3
+Vcc CORE +0.7
+V
+V
+7
+8
+VinCMOS
+CMOS buffer DC input voltage
+with respect to VSS
+–0.5
+-0.3
+3.3
+3.3
+V
+V
+3, 7
+3, 8
+IVID
+Max VID pin current
+5
+mA
+ISLOTOCC
+Max SLOTOCC# pin current
+5
+mA
+Mech Max
+Latch Arms
+Mechanical integrity of latch
+arms
+50
+Cycles
+4
+Mech Max
+Edge
+Fingers
+Mechanical integrity of
+substrate edge fingers
+50
+Insertion/
+Extraction
+5, 6
+NOTES:
+1.
+Operating voltage is the voltage to which the component is designed to operate. See Table 6.
+2.
+This rating applies to the VccCORE, VccL2, Vcc5 and any input (except as noted below) to the processor.
+3.
+Parameter applies to CMOS, APIC and TAP bus signal groups only.
+4.
+The mechanical integrity of the latch arms is specified to last a maximum of 50 cycles.
+5.
+The electrical and mechanical integrity of the substrate edge fingers is specified to last for 50 insertion/extraction cycles.
+6.
+Intel has performed internal testing showing functionality of single S.E.C. cartridge processors after 5000 insertions. While
+insertion/extraction cycling above 50 insertions may cause an increase in the contact resistance (above 0.1 ohms) and a
+degradation in the material integrity of the edge finger gold plating, it is possible to have processor functionality above the
+specified limit. The actual number of insertions before processor failure will vary based upon system configuration and
+environmental conditions.
+7.
+This specification applies to CPU ID 63x.
+8.
+This specification applies to CPU ID 65x.
+
+
+===== PAGE 22 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+22
+Table 6. Pentium® II Processor Voltage and Current Specifications1
+Symbol
+Parameter
+Core
+Freq
+Min
+Typ
+Max
+Unit
+Notes
+VccCORE
+VCC for processor core
+233 MHz
+266 MHz
+266 MHz
+300 MHz
+300 MHz
+333 MHz
+2.80
+2.80
+2.00
+2.80
+2.00
+2.00
+V
+V
+V
+V
+V
+V
+2, 3, 15, 17
+2, 3, 15, 17
+2, 3, 15, 18
+2, 3, 15, 17
+2, 3, 15, 18
+2, 3, 15, 18
+VccL2
+VCC for L2 cache
+3.135
+3.30
+3.465
+V
+3
+VTT
+Bus termination voltage
+1.365
+1.5
+1.635
+V
+1.5 V ±3%,
+±9%4
+Baseboard
+Tolerance, Static
+Baseboard voltage, static
+tolerance level
+–0.070
+0.100
+V
+5
+Baseboard
+Tolerance, Transient
+Baseboard voltage, transient
+tolerance level
+233 MHz
+266 MHz
+266 MHz
+300 MHz
+333 MHz
+–0.150
+-0.150
+-0.120
+-0.145
+-0.120
+0.150
+0.150
+0.120
+0.145
+0.120
+V
+V
+V
+V
+V
+5, 17
+5, 17
+5, 18
+5, 17
+5, 18
+VccCORE Tolerance,
+Static
+VccCORE voltage, static
+tolerance level
+233 MHz
+266 MHz
+266 MHz
+300 MHz
+333 MHz
+–0.090
+-0.090
+-0.085
+-0.090
+-0.085
+0.100
+0.100
+0.100
+0.100
+0.100
+V
+V
+V
+V
+V
+6, 17
+6, 17
+6, 18
+6, 18
+6, 18
+VccCORE Tolerance,
+Transient
+VccCORE voltage, transient
+tolerance level
+233 MHz
+266 MHz
+266 MHz
+300 MHz
+333 MHz
+–0.195
+-0.195
+-0.140
+-0.185
+-0.140
+0.195
+0.195
+0.140
+0.185
+0.140
+V
+V
+V
+V
+V
+6, 17
+6, 17
+6, 18
+6, 17
+6, 18
+IccCORE
+ICC for VccCORE
+233 MHz
+266 MHz
+266 MHz
+300 MHz
+333 MHz
+11.8
+12.7
+8.492
+14.2
+9.303
+A
+A
+A
+A
+A
+2, 7, 8, 16, 17
+2, 7, 8, 16, 17
+2, 7, 8, 16, 18
+2, 7, 8, 16, 17
+2, 7, 8, 16, 18
+IccL2
+ICC for L2 cache
+1.4
+1.0
+A
+A
+3, 8, 17
+3, 8, 18
+Ivtt
+Termination voltage supply
+current
+2.7
+2.677
+A
+A
+9, 17
+9, 18
+
+
+===== PAGE 23 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+23
+Table 6. Pentium® II Processor Voltage and Current Specifications1 (Cont’d)
+Symbol
+Parameter
+Core
+Freq
+Min
+Typ
+Max
+Unit
+Notes
+IccDSLP CORE
+ICC for Deep Sleep VccCORE
+0.35
+0.35
+A
+A
+8, 17
+8, 18
+IccSGNT L2
+ICC for Stop-Grant for VccL2
+0.2
+TBD
+A
+A
+10, 17
+10, 18
+IccSLP L2
+ICC for Sleep VccL2
+0.2
+TBD
+A
+A
+8, 17
+8, 18
+IccDSLP L2
+ICC for Deep Sleep VccL2
+0.1
+TBD
+A
+A
+8, 17
+8, 18
+dlccCORE/dt
+Power supply current slew
+rate
+30
+20
+A/µs
+A/µs
+11, 12, 13, 17
+11, 12, 13, 18
+dlccL2/dt
+L2 cache power supply
+current slew rate
+1
+A/µs 11, 12, 13
+dlccVtt/dt
+Termination current slew
+rate
+8
+A/µs See Table 9
+12, 13
+Vcc5
+5 V supply voltage
+4.75
+5.00
+5.25
+V
+14
+Icc5
+ICC for 5 V supply voltage
+1.0
+A
+14
+
+
+===== PAGE 24 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+24
+NOTES:
+1.
+Unless otherwise noted, all specifications in this table apply to all processor frequencies and cache sizes.
+2.
+IccCORE and VccCORE supply the processor core and the L2 cache I/O buffers.
+3.
+VccL2 and IccL2 supply the L2 cache core.
+4.
+VTT must be held to 1.5 V ±9%. It is recommended that VTT be held to 1.5 V±3% during System Bus idle.
+5.
+These are the tolerance requirements, across a 20 MHz bandwidth, at the Slot 1 connector pins on the bottom side of
+the baseboard. The requirements at the Slot 1 connector pins account for voltage drops (and impedance discontinuities)
+across the connector, substrate edge fingers and to the processor core. The Slot 1 connector has the following
+requirements: Pin Self Inductance: 10.5 nH(max); Pin to Pin Capacitance: 2pF (max, at 1 MHz); Contact Resistance: 12
+mΩ (max averaged over power/ground contacts). Contact Intel for testing conditions of these requirements.
+6.
+These are the tolerance requirements, across a 20 MHz bandwidth, at the processor substrate edge fingers. The
+requirements at the processor substrate edge fingers account for voltage drops (and impedance discontinuities) at the
+substrate edge fingers and to the processor core.
+7.
+The typical IccCORE measurements are an average current draw during the execution of Winstone* 96 on a Windows* 95
+operating system. These numbers are meant as a guideline only, not a guaranteed specification. Actual measurements will
+vary based upon system environmental conditions and configuration.
+8.
+Max ICC measurements are measured at VCC nominal voltage under maximum signal loading conditions.
+9.
+The current specified is the current required for a single Pentium® II processor. A similar current is needed for the opposite
+end of the GTL+ bus.
+10. The current specified is also for AutoHALT Power Down state.
+11. Maximum values are specified by design/characterization at nominal VccCORE and nominal VccL2.
+12. Based on simulation and averaged over the duration of any change in current. Use to compute the maximum inductance
+tolerable and reaction time of the voltage regulator. This parameter is not tested.
+13. dICC/dt is measured at the Slot 1 connector pins.
+14. Vcc5 and Icc5 are not used by the Pentium II processor. This supply is used for debug purposes only.
+15. Use Typical Voltage Specification with tolerance level specification to provide correct voltage regulation to the processor.
+16. Voltage regulators may be designed with a minimum equivalent internal resistance to ensure that the output voltage, at
+maximum current output, is no greater than the nominal voltage level of VccCORE (VccCORE_TYP). In this case, the
+maximum current level for the regulator, IccCORE_REG, can be reduced from the specified maximum current IccCORE_MAX
+and is calculated by the equation:
+IccCORE_REG = IccCORE_MAX x VccCORE_TYP / VccCORE_MAX
+17. This specification applies to CPU ID 63x.
+18. This specification applies to CPU ID 65x.
+
+
+===== PAGE 25 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+25
+Table 7. GTL+ Signal Groups DC Specifications
+Symbol
+Parameter
+Min
+Max
+Unit
+Notes
+VIL
+Input Low Voltage
+–0.3
+0.82
+V
+VIH
+Input High Voltage
+1.22
+VTT
+V
+VOL
+Output Low Voltage
+0.60
+V
+1
+VOH
+Output High Voltage
+VTT
+VTT + 0.015
+VTT
+VTT
+V
+V
+4, 5
+4,6
+IOL
+Output Low Current
+36
+48 55
+mA
+12
+IL
+Leakage Current
+±100
+µA
+2
+ILO
+Output Leakage Current
+±15
+µA
+3
+NOTES:
+1.
+Parameter measured into a 50Ω resistor to 1.5 V.
+2.
+(0 ≤ VIN ≤ 2.5 V +5%).
+3.
+(0 ≤ VOUT ≤ 2.5 V +5%).
+4.
+See VTT max in Table 9.
+5.
+This specification applies to CPU ID 63x.
+6.
+This specification applies to CPU ID 65x.
+Table 8. Non-GTL+ Signal Groups DC Specifications
+Symbol
+Parameter
+Min
+Max
+Unit
+Notes
+VIL
+Input Low Voltage
+–0.3
+0.7
+V
+VIH
+Input High Voltage
+1.7
+2.625
+V
+2.5 V +5% maximum
+VOL
+Output Low Voltage
+0.4
+V
+1
+VOH
+Output High Voltage
+N/A
+2.625
+V
+All outputs are open-
+drain to 2.5 V +5%
+IOL
+Output Low Current
+14
+mA
+ILI
+Input Leakage Current
+±100
+µA
+2
+ILO
+Output Leakage Current
+±15
+µA
+3
+NOTES:
+1.
+Parameter measured at 14 mA (for use with TTL inputs).
+2.
+(0 ≤ VIN ≤ 2.5 V +5%).
+3.
+(0 ≤ VOUT ≤ 2.5 V +5%).
+
+
+===== PAGE 26 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+26
+2.12.
+GTL+ System Bus
+Specifications
+It is recommended to have the GTL+ bus routed in a
+daisy-chain fashion with termination resistors at each
+end of every signal trace. These termination resistors
+are placed electrically between the ends of the signal
+traces and the VTT voltage supply and generally are
+chosen to approximate the substrate impedance. The
+valid high and low levels are determined by the input
+buffers using a reference voltage called VREF.
+Table 9 lists the nominal specification for the GTL+
+termination voltage (VTT). The GTL+ reference
+voltage (VREF) should be set to 2/3 VTT for the core
+logic using a voltage divider on the motherboard. It is
+important that the motherboard impedance be
+specified and held to a ±20% tolerance, and that the
+intrinsic trace capacitance for the GTL+ signal group
+traces is known. For more details on GTL+, see the
+Pentium® II Processor Developer’s Manual (Order
+Number 243341) and the Pentium® II Processor
+GTL+ Guidelines (Order Number 243330).
+2.13.
+Pentium® II Processor System
+Bus AC Specifications
+The System Bus timings specified in this section are
+defined at the processor edge fingers. Timings will be
+tested at the processor core during manufacturing.
+Timings at the processor edge fingers will be
+specified by design characterization.
+See Appendix A for the Pentium II processor edge
+finger signal definitions.
+Table 10 through Table 15 list the AC specifications
+associated with the Pentium II processor System
+Bus. The System Bus AC specifications are broken
+into the following categories: Table 10 and Table 11
+contain the System Bus clock core frequency and
+Cache Bus frequencies; Table 12 contains the GTL+
+specifications Table 13 contains the CMOS signal
+group specifications; Table 14 contains timings for
+the reset conditions; Table 15 covers APIC bus
+timing; Table 16 covers TAP timing.
+All System Bus AC specifications for the GTL+ signal
+group are relative to the rising edge of the BCLK
+input. All GTL+ timings are referenced to VREF for
+both ‘0’ and ‘1’ logic levels unless otherwise
+specified.
+The timings specified in this section should be used
+in conjunction with the I/O buffer models provided by
+Intel. These I/O buffer models, which include
+package information, are available in IBIS format on
+Intel’s Web site: “http://www.intel.com”. GTL+ layout
+guidelines are also available in AP-585, Pentium® II
+Processor GTL+ Guidelines (Order Number 243330).
+Care should be taken to read all notes associated
+with a particular timing parameter.
+Table 9. Pentium® II Processor GTL+ Bus Specifications1
+Symbol
+Parameter
+Min
+Typ
+Max
+Units
+Notes
+VTT
+Bus Termination Voltage
+1.365
+1.5
+1.635
+V
+1.5 V ±3%, ±9%2
+RTT
+Termination Resistor
+56
+Ohms
+±5%
+VREF
+Bus Reference Voltage
+2/3 VTT
+V
+±2%3
+NOTES:
+1.
+The Pentium® II processor contains GTL+ termination resistors at the end of the signal trace on the processor substrate.
+The Pentium II processor generates VREF, on the processor, by using a voltage divider on VTT supplied through the Slot 1
+connector.
+2.
+VTT must be held to 1.5 V ±9%; dIccVtt/dt is specified in Table 6. It is recommended that VTT be held to 1.5 ±3% during
+System Bus idle.
+3.
+VREF is generated by the processor to be 2/3 VTT nominally.
+
+
+===== PAGE 27 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+27
+Table 10. System Bus AC Specifications (Clock)1, 2
+T#
+Parameter
+Min
+Nom
+Max
+Unit
+Figure
+Notes
+System Bus Frequency
+66.67
+ MHz
+All processor core
+frequencies 3
+T1:
+BCLK Period
+15.0
+ns
+7
+3, 4
+T1B:
+BCLK to Core Logic Offset
+0.78
+ns
+6
+Absolute Value5, 6
+T2:
+BCLK Period Stability
+±300
+ps
+7, 8
+T3:
+BCLK High Time
+4.70
+ns
+7
+@>1.8 V
+T4:
+BCLK Low Time
+5.10
+ns
+7
+@<0.7 V
+T5:
+BCLK Rise Time
+0.75
+1.95
+ns
+7
+(0.7 V–1.8 V)9
+T6:
+BCLK Fall Time
+0.75
+1.95
+ns
+7
+(1.8 V–0.7 V)9
+NOTES:
+1.
+All AC timings for the GTL+ signals are referenced to the BCLK rising edge at 0.70 V at the processor edge fingers. This
+reference is to account for trace length and capacitance on the processor substrate, allowing the processor core to
+receive the signal with a reference at 1.25 V. All GTL+ signal timings (address bus, data bus, etc.) are referenced at
+1.00 V at the processor edge fingers.
+2.
+All AC timings for the CMOS signals are referenced to the BCLK rising edge at 0.70 V at the processor edge fingers. This
+reference is to account for trace length and capacitance on the processor substrate, allowing the processor core to
+reference voltage of 1.25 V. All CMOS signal timings (address bus, data bus, etc.) are referenced at 1.25 V at the
+processor edge fingers.
+3.
+The internal core clock frequency is derived from the System Bus clock. The System Bus clock to core clock ratio is
+determined during initialization as described in Section 2.5. Table 11 shows the supported ratios for each processor.
+4.
+The BCLK period allows a +0.5 ns tolerance for clock driver variation.
+5.
+The BCLK offset time is the absolute difference needed between the BCLK signal rising edge arriving at the Slot 1 edge
+finger at 0.7 V vs. arriving at the core logic at 1.25 V. The positive offset is needed to account for the delay between the
+Slot 1 connector and processor core. The positive offset ensures both the processor core and the core logic receive the
+BCLK edge concurrently.
+6.
+See Section 3.1. for System Bus clock signal quality specifications.
+7.
+Due to the difficulty of accurately measuring processor clock jitter in a system, it is recommended that a clock driver be
+used that is designed to meet the period stability specification into a test load of 10 to 20 pF. This should be measured on
+the rising edges of adjacent BCLKs crossing 1.25 V. The jitter present must be accounted for as a component of BCLK
+timing skew between devices.
+8.
+The clock driver’s closed loop jitter bandwidth must be set low to allow any PLL-based device to track the jitter created by
+the clock driver. The -20 dB attenuation point of the clock driver, as measured into a 10 to 20 pF load, should be less than
+500 kHz. This specification may be ensured by design and/or measured with a spectrum analyzer.
+9.
+Not 100% tested. Specified by design/characterization as a clock driver requirement.
+
+
+===== PAGE 28 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+28
+Table 11. Valid Slot 1 System Bus, Core Frequency and Cache Bus Frequencies1, 2
+BCLK Frequency
+(MHz)
+Frequency Multipliers
+Supported
+Core Frequency
+Rating (MHz)
+L2 Cache Frequency
+(MHz)
+66.67
+7/2
+233.33
+116.67 3
+66.67
+4
+266.66
+133.33 3
+66.67
+4
+266.67
+133.33 4
+66.67
+9/2
+300.00
+150.00 3
+66.67
+5
+333.33
+166.67 4
+NOTES:
+1.
+Contact your local Intel representative for the latest information on processor frequencies and/or frequency multipliers.
+2.
+While other bus ratios are defined, operation at frequencies other than those listed are not supported.
+3.
+This specification applies to CPU ID 63x.
+4.
+This specification applies to CPU ID 65x.
+Table 12. GTL+ Signal Groups System Bus AC Specifications1, 2
+T#
+Parameter
+Min
+Max
+Unit
+Figure
+Notes
+T7:
+GTL+ Output Valid Delay
+1.07
+6.37
+ns
+8
+3
+T8:
+GTL+ Input Setup Time
+2.53
+ns
+9
+4, 5, 6
+T9:
+GTL+ Input Hold Time
+1.53
+ns
+9
+7
+T10:
+RESET# Pulse Width
+1.00
+ms
+12
+8
+NOTES:
+1.
+Not 100% tested. Specified by design characterization.
+2.
+All AC timings for the GTL+ signals are referenced to the BCLK rising edge at 0.70 V at the processor edge fingers. All
+GTL+ signal timings (address bus, data bus, etc.) are referenced at 1.00 V at the processor edge fingers.
+3.
+Valid delay timings for these signals are specified into 50Ω to 1.5 V.
+4.
+A minimum of 3 clocks must be specified between two active-to-inactive transitions of TRDY#.
+5.
+RESET# can be asserted (active) asynchronously, but must be deasserted synchronously.
+6.
+Specification is for a minimum 0.40 V swing.
+7.
+Specification is for a maximum 1.0 V swing.
+8.
+After VccCORE, VccL2 and BCLK become stable.
+
+
+===== PAGE 29 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+29
+Table 13. System Bus AC Specifications (CMOS Signal Group)1, 2, 3
+T#
+Parameter
+Min
+Max
+Unit
+Figure
+Notes
+T11:
+2.5 V Output Valid Delay
+1.00
+10.5
+ns
+8
+4
+T12:
+2.5 V Input Setup Time
+5.50
+ns
+9
+5, 6
+T13:
+2.5 V Input Hold Time
+1.75
+ns
+9
+5
+T14:
+2.5 V Input Pulse Width,
+except PWRGOOD
+2
+BCLKs
+8
+Active and Inactive
+states
+T15:
+PWRGOOD Inactive Pulse
+Width
+10
+BCLKs
+8
+13
+7
+NOTES:
+1.
+Not 100% tested. Specified by design characterization.
+2.
+All AC timings for the CMOS signals are referenced to the BCLK rising edge at 0.7 V at the processor edge fingers. All
+CMOS signal timings (address bus, data bus, etc.) are referenced at 1.25 V at the processor edge fingers.
+3.
+These signals may be driven asynchronously, but must be driven synchronously in FRC mode.
+4.
+Valid delay timings for these signals are specified to 2.5 V +5%.. See Table 3 for pull-up resistor values.
+5.
+To ensure recognition on a specific clock, the setup and hold times with respect to BCLK must be met.
+6.
+INTR and NMI are only valid during APIC disable mode. LINT[1:0]# are only valid during APIC enabled mode.
+7.
+When driven inactive or after VccCORE, VccL2 and BCLK become stable.
+Table 14. System Bus AC Specifications (Reset Conditions)
+T#
+Parameter
+Min
+Max
+Unit
+Figure
+Notes
+T16:
+Reset Configuration Signals
+(A[14:5]#, BR0#, FLUSH#,
+INIT#) Setup Time
+4
+BCLKs
+11
+Before deassertion of
+RESET#
+T17:
+Reset Configuration Signals
+(A[14:5]#, BR0#, FLUSH#,
+INIT#) Hold Time
+2
+20
+BCLKs
+11
+After clock that
+deasserts RESET#
+T18:
+Reset Configuration Signals
+(A20M#, IGNNE#,
+LINT[1:0]#) Setup Time
+1
+ms
+12
+Before deassertion of
+RESET#
+T19:
+Reset Configuration Signals
+(A20M#, IGNNE#,
+LINT[1:0]#) Delay Time
+5
+BCLKs
+12
+After assertion of
+RESET# 1
+T20:
+Reset Configuration Signals
+(A20M#, IGNNE#,
+LINT[1:0]#) Hold Time
+2
+20
+BCLKs
+12
+11
+After clock that
+deasserts RESET#
+NOTE:
+1.
+For a Reset, the clock ratio defined by these signals must be a safe value (their final or lower multiplier) within this delay
+unless PWRGOOD is being driven inactive.
+
+
+===== PAGE 30 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+30
+Table 15. System Bus AC Specifications (APIC Clock and APIC I/O)1, 2
+T#
+Parameter
+Min
+Max
+Unit
+Figure
+Notes
+T21:
+PICCLK Frequency
+2.0
+33.3
+MHz
+3
+T21B: FRC Mode BCLK to PICCLK
+Offset
+1.0
+5.0
+ns
+10
+3
+T22:
+PICCLK Period
+30.0
+500.0
+ns
+7
+T23:
+PICCLK High Time
+12.0
+ns
+7
+T24:
+PICCLK Low Time
+12.0
+ns
+7
+T25:
+PICCLK Rise Time
+1.0
+5.0
+ns
+7
+T26:
+PICCLK Fall Time
+1.0
+5.0
+ns
+7
+T27:
+PICD[1:0] Setup Time
+8.5
+ns
+9
+4
+T28:
+PICD[1:0] Hold Time
+3.0
+ns
+9
+4
+T29:
+PICD[1:0] Valid Delay
+3.0
+12.0
+ns
+8
+4, 5, 6
+NOTES:
+1.
+Not 100% tested. Specified by design characterization.
+2.
+All AC timings for the CMOS signals are referenced to the PICCLK rising edge at 0.70 V at the processor edge fingers. All
+CMOS signal timings (address bus, data bus, etc.) are referenced at 1.25 V at the processor edge fingers.
+3.
+With FRC enabled PICCLK must be 1/4X BCLK and synchronized with respect to BCLK.
+4.
+Referenced to PICCLK Rising Edge.
+5.
+For open drain signals, Valid Delay is synonymous with Float Delay.
+6.
+Valid delay timings for these signals are specified to 2.5 V +5%. See Table 3 for recommended pull-up resistor values.
+
+
+===== PAGE 31 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+31
+Table 16. System Bus AC Specifications (TAP Connection)1
+T#
+Parameter
+Min
+Max
+Unit
+Figure
+Notes
+T30:
+TCK Frequency
+16.667
+MHz
+T31:
+TCK Period
+60.0
+ns
+7
+T32:
+TCK High Time
+25.0
+ns
+7
+@1.7 V2
+T33:
+TCK Low Time
+25.0
+ns
+7
+@0.7 V2
+T34:
+TCK Rise Time
+5.0
+ns
+7
+(0.7 V–1.7 V)2
+T35:
+TCK Fall Time
+5.0
+ns
+7
+(1.7 V–0.7 V)2
+T36:
+TRST# Pulse Width
+40.0
+ns
+14
+Asynchronous2
+T37:
+TDI, TMS Setup Time
+5.5
+ns
+13
+4
+T38:
+TDI, TMS Hold Time
+14.5
+ns
+13
+4
+T39:
+TDO Valid Delay
+2.0
+13.5
+ns
+13
+5, 6
+T40:
+TDO Float Delay
+28.5
+ns
+13
+2, 5, 6
+T41:
+Non-Test Outputs Valid
+Delay
+2.0
+27.5
+ns
+13
+5, 7, 8
+T42:
+Non-Test Inputs Setup Time
+27.5
+ns
+13
+2, 5, 7, 8
+T43:
+Non-Test Inputs Setup Time
+5.5
+ns
+13
+4, 7, 8
+T44:
+Non-Test Inputs Hold Time
+14.5
+ns
+13
+4, 7, 8
+NOTES:
+1.
+All AC timings for the TAP signals are referenced to the TCK rising edge at 0.70 V at the processor edge fingers. All TAP
+signal timings (address bus, data bus, etc.) are referenced at 1.25 V at the processor edge fingers.
+2.
+Not 100% tested. Specified by design characterization.
+3.
+Referenced to TCK rising edge.
+4.
+Referenced to TCK falling edge.
+5.
+Valid delay timing for this signal is specified to 2.5 V +5%. See Table 3 for pull-up resistor values.
+6.
+Non-Test Outputs and Inputs are the normal output or input signals (besides TCK, TRST#, TDI, TDO and TMS). These
+timings correspond to the response of these signals due to TAP operations.
+7.
+During Debug Port operation, use the normal specified timings rather than the TAP signal timings.
+
+
+===== PAGE 32 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+32
+ 
+BCLK at
+Slot 1
+0.7V
+BCLK at
+Core Logic
+1.25V
+T1B
+000807
+Figure 6. BCLK to Core Logic Offset
+NOTES FOR FIGURE 7 THROUGH FIGURE 14
+1.
+Figure 7 through Figure 12 are to be used in conjunction with Table 8 through Table 16.
+2.
+All AC timings for the GTL+ signals are referenced to the BCLK rising edge at 0.70 V at the processor edge fingers. This
+reference is to account for trace length and capacitance on the processor substrate, allowing the processor core to
+receive the signal with a reference at 1.25 V. Timings for other components on the baseboard should use a BCLK
+reference voltage of 1.25 V. All GTL+ signal timings (address bus, data bus, etc.) are referenced at 1.00 V at the Slot 1
+connector pin.
+3.
+These measurements are collected at the Pentium® II processor edge fingers.
+ 
+CLK
+1.8V
+0.7V
+1.25V
+Th
+Tl
+Tp
+Tr
+Tf
+Tr
+T5, T25, T34 (Rise Time)
+Tf
+T6, T26, T35 (Fall Time)
+T3, T23, T32 (High Time)
+Th
+T4, T24, T33 (Low Time)
+Tl
+T1, T22, T31 (BLCK, TCK, PICCLK Period)
+=
+=
+=
+=
+=
+Tp
+000761b
+Figure 7. BCLK, TCK, PICCLK Generic Clock Wave Form
+
+
+===== PAGE 33 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+33
+ 
+CLK
+Signal
+Tx
+Tx
+V
+Valid
+Valid
+Tx
+T7, T11, T29 (Valid Delay)
+=
+Tpw
+T14, T15 (Pulse Wdith)
+=
+V
+1.0V for GTL+ signal group; 1.25V for CMOS, APIC and TAP signal groups
+=
+Tpw
+000762b
+Figure 8. System Bus Valid Delay Timings
+ 
+CLK
+Signal
+V Valid
+Ts
+T8, T12, T27 (Setup Time)
+=
+Th
+T9, T13, T28 (Hold Time)
+=
+V
+1.0V for GTL+ signal group; 1.25V for CMOS, APIC and TAP signal groups
+=
+Th
+Ts
+000763b
+Figure 9. System Bus Setup and Hold Timings
+
+
+===== PAGE 34 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+34
+BCLK
+PICCLK
+0.7 V
+0.7 V
+Lag
+Lag = T21B (FRC Mode BCLK to PICCLK offset)
+000919
+Figure 10. FRC Mode BCLK to PICCLK Timing
+BCLK
+RESET#
+Configuration
+(A20M#, IGNNE#,
+LINT[1:0]#)
+Configuration
+(A[14:5], BR0#,
+FLUSH#, [1:0]#)
+Tt
+T9 (GTL+ Input Hold Time)
+=
+Tu
+T8 (GTL+ Input Setup Time)
+=
+Tv
+T10 (RESET# Pulse Width)
+=
+Tw
+T16 (Reset Configuration Signals (A[14:5]#, BR0#, FLUSH#, INIT#) Setup Time)
+=
+Tx
+T17 (Reset Configuration Signals (A[14:5]#, BR0#, FLUSH#, INIT#) Hold Time)
+=
+T20 (Reset Configuration Signals (A20M#, IGNNE#, LINT[1:0]#) Hold Time)
+Ty = T19 (Reset Configuration Signals (A20M#, IGNNE#, LINT[1:0]#) Delay Time)
+Tz = T18 (Reset Configuration Signals (A20M#, IGNNE#, LINT[1:0]#) Setup Time)
+Ty
+Tz
+Tv
+Tx
+Tt
+Tu
+Tw
+Valid
+Valid
+Safe
+PCB-764
+Figure 11. System Bus Reset and Configuration Timings
+
+
+===== PAGE 35 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+35
+BCLK
+PWRGOOD
+RESET#
+Configuration
+(A20M#, IGNNE#,
+LINT[1:0]#)
+Ta
+Tb
+Tc
+Ta
+T15 (PWRGOOD Inactive Pulse Width)
+=
+Tb
+T10 (RESET# Pulse Width)
+=
+Tc
+T20 (Reset Configuration Signals (A20M#, IGNNE#, LINT[1:0#]) Hold Time)
+=
+Valid Ratio
+V       ,
+REF
+V             ,
+CORE
+CC
+VCC L2
+000765b
+Figure 12. Power-On Reset and Configuration Timings
+
+
+===== PAGE 36 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+36
+TCK
+TDI, TMS
+Input
+Signals
+TDO
+Output
+Signals
+1.25 V
+Tv
+Tw
+Tr
+Ts
+Tx
+Tu
+Ty
+Tz
+1.8 V
+Tr
+T43 (All Non-Test Inputs Setup Time)
+=
+Ts
+T44 (All Non-Test Inputs Hold Time)
+=
+Tu
+T40 (TDO Float Delay)
+=
+Tv
+T37 (TDI, TMS Setup Time)
+=
+Tw
+T38 (TDI, TMS Hold Time)
+=
+Tx
+T39 (TDO Valid Delay)
+=
+Ty
+T41 (All Non-Test Outputs Valid Delay)
+=
+Tz
+T42 (All Non-Test Outputs Float Delay)
+=
+000766b
+Figure 13. Test Timings (TAP Connection)
+ 
+TRST#
+1.25V
+Tq
+Tq
+T37 (TRST# Pulse Width)
+=
+PCB-773
+Figure 14. Test Reset Timings
+
+
+===== PAGE 37 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+37
+3.0.
+SYSTEM BUS SIGNAL
+SIMULATIONS
+Many scenarios have been simulated to generate a
+set of GTL+ layout guidelines which are available in
+the Pentium® II Processor GTL+ Guidelines (Order
+Number 243330). Refer to the Pentium® II Processor
+Developer’s Manual (Order Number 243341) for the
+GTL+ buffer specification. All wave terms described
+below are simulated at the contact to the processor
+edge fingers.
+3.1.
+System Bus Clock (BCLK)
+Signal Quality Specifications
+Table 17 describes the signal quality for the System
+Bus clock (BCLK) signal. Figure 15 describes the
+signal quality wave form for the System Bus clock.
+Table 17. BCLK Signal Quality Specifications
+T#
+Parameter
+Min
+Nom
+Max
+Unit
+Figure
+Notes
+V1:
+BCLK VIL
+0.7
+V
+7
+V2:
+BCLK VIH
+1.8
+V
+7
+V3:
+VIN Absolute Voltage
+Range
+–0.5
+3.3
+V
+7
+Overshoot,
+Undershoot
+V4:
+Rising Edge Ringback
+2.0
+V
+7
+Absolute Value1
+V5:
+Falling Edge Ringback
+0.5
+V
+7
+Absolute Value1
+V6:
+Tline Ledge Voltage
+1.0
+1.7
+V
+7
+At Ledge Midpoint2
+V7:
+Tline Ledge Oscillation
+0.2
+V
+7
+Peak-to-Peak3
+NOTES:
+1.
+The rising and falling edge ringback voltage specified is the minimum (rising) or maximum (falling) absolute voltage the
+BCLK signal can dip back to after passing the VIH (rising) or VIL (falling) voltage limits.
+2.
+The BCLK at the processor edge fingers may have a dip or ledge midway on the rising or falling edge. The midpoint
+voltage level of this ledge must be within the range specified.
+3.
+The ledge (V13) is allowed to have peak-to-peak oscillation as specified.
+T3
+V3
+V5
+V3
+V2
+V1
+V7
+V6
+T6
+T4
+T5
+V4
+000808
+Figure 15. BCLK, TCK, PICCLK Generic Clock Wave form at the Processor Edge Fingers
+
+
+===== PAGE 38 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+38
+Table 18. GTL+ Signal Groups Ringback Tolerance
+T#
+Parameter
+Min
+Unit
+Figure
+Notes
+α:
+Overshoot
+100
+mV
+16
+1, 2
+τ:
+Minimum Time at High
+1.5
+ns
+16
+1, 2
+ρ:
+Amplitude of Ringback
+–250
+mV
+16
+1, 2, 3
+φ:
+Final Settling Voltage
+250
+mV
+16
+1, 2
+δ:
+Duration of Sequential Ringback
+N/A
+ns
+16
+1, 2
+NOTES:
+1.
+Specified for the edge rate of 0.3 – 0.8 V/ns. See Figure 16 for the generic wave form.
+2.
+All values determined by design/characterization.
+3.
+Ringback VREF +250 mV is not authorized.
+ 
+Clk Ref
+τ
+α
+ρ
+φ
+Vstart
+V       +0.2
+REF
+VREF
+V       –0.2
+REF
+Time
+Clock
+δ
+0.7V Clk Ref
+NOTE:
+High to Low case is analogous.
+000914a
+Figure 16. Low to High GTL+ Receiver Ringback Tolerance
+
+
+===== PAGE 39 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+39
+3.2.
+GTL+ Signal Quality
+Specifications
+Table 18 and Figure 16 describe the GTL+ signal
+quality specifications for the Pentium II processor.
+For more information on the GTL+ interface, see the
+Pentium® II Processor Developer’s Manual (Order
+Number 243341).
+3.3.
+Non-GTL+ Signal Quality
+Specifications
+Signals driven on the Pentium II processor System
+Bus should meet signal quality specifications to
+ensure that the components read data properly and
+that incoming signals do not affect the long term
+reliability of the component. There are three signal
+quality parameters defined: Overshoot/Undershoot,
+Ringback and Settling Limit. All three signal quality
+parameters are shown in Figure 17 for non-GTL+
+signal groups.
+3.3.1.
+OVERSHOOT/UNDERSHOOT
+GUIDELINES
+Overshoot (or undershoot) is the absolute value of
+the maximum voltage above the nominal high voltage
+or below VSS. The overshoot/undershoot guideline
+limits transitions beyond VCC or VSS due to the fast
+signal edge rates. (See Figure 17 for non-GTL+
+signals.) The processor can be damaged by
+repeated overshoot events on 2.5 V tolerant buffers if
+the charge is large enough (i.e., if the overshoot is
+great enough). However, excessive ringback is the
+dominant detrimental system timing effect resulting
+from 
+overshoot/undershoot 
+(i.e., 
+violating 
+the
+overshoot/undershoot guideline will make satisfying
+the ringback specification difficult). The overshoot/
+undershoot guideline is 0.8 V and assumes the
+absence of diodes on the input. These guidelines
+should be verified in simulations without the on-
+chip ESD protection diodes present because the
+diodes will begin clamping the 2.5 V tolerant signals
+beginning at approximately 1.25 V above VccCORE
+and 0.5 V below VSS. If signals are not reaching the
+clamping voltage, this will not be an issue. A system
+should not rely on the diodes for overshoot/
+undershoot protection as this will negatively affect
+the life of the components and make meeting the
+ringback specification very difficult.
+
+
+===== PAGE 40 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+40
+ 
+Undershoot
+Overshoot
+Settling Limit
+Settling Limit
+Rising-Edge
+Ringback
+Falling-Edge
+Ringback
+VLO
+VSS
+Time
+V    =
+HI
+VCC2.5
+000767b
+Figure 17. Non-GTL+ Overshoot/Undershoot and Ringback
+
+
+===== PAGE 41 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+41
+3.3.2.
+RINGBACK SPECIFICATION
+Ringback refers to the amount of reflection seen after
+a signal has switched. The ringback specification is
+the voltage that the signal rings back to after
+achieving its maximum absolute value. (See
+Figure 18 for an illustration of ringback.) Excessive
+ringback can cause false signal detection or extend
+the propagation delay. The ringback specification
+applies to the input pin of each receiving agent.
+Violations of the signal Ringback specification are not
+allowed under any circumstances for the non-GTL+
+signals.
+Ringback can be simulated with or without the input
+protection diodes that can be added to the input
+buffer model. However, signals that reach the
+clamping voltage should be evaluated further. See
+Table 19 for the signal ringback specifications for
+non-GTL+ signals.
+3.3.3.
+SETTLING LIMIT GUIDELINE
+Settling limit defines the maximum amount of ringing
+at the receiving pin that a signal must reach before its
+next transition. The amount allowed is 10 percent of
+the total signal swing (VHI–VLO) above and below its
+final value. A signal should be within the settling limits
+of its final value, when either in its high state or low
+state, before it transitions again.
+Signals that are not within their settling limit before
+transitioning are at risk of unwanted oscillations
+which could jeopardize signal integrity. Simulations to
+verify settling limit may be done either with or without
+the input protection diodes present. Violation of the
+settling limit guideline is acceptable if simulations of 5
+to 10 successive transitions do not show the
+amplitude of the ringing increasing in the subsequent
+transitions.
+Table 19. Signal Ringback Specifications for Non-GTL+ Signals
+Input Signal Group
+Transition
+Maximum Ringback
+(with Input Diodes Present)
+Figure
+Non-GTL+ Signals
+0 → 1
+2.0 V
+17
+Non-GTL+ Signals
+1 → 0
+0.7 V
+17
+
+
+===== PAGE 42 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+42
+4.0.
+THERMAL SPECIFICATIONS
+AND DESIGN
+CONSIDERATIONS
+The Pentium II processor has a thermal plate for
+heatsink attachment. The thermal plate interface is
+intended to provide for multiple types of thermal
+solutions. This chapter will provide the necessary
+data for a thermal solution to be developed. See
+Figure 18 for thermal plate location.
+4.1.
+Thermal Specifications
+Table 20 
+provides 
+the 
+thermal 
+design 
+power
+dissipation for the Pentium II processor. While the
+processor core dissipates the majority of the thermal
+power, the thermal power dissipated by the L2 cache
+also impacts the thermal plate power specification
+and the overall processor power specification.
+Systems should design for the highest possible
+thermal power, even if a processor with a lower
+thermal dissipation is planned. The thermal plate is
+the attach location for all thermal solutions. The
+maximum allowed thermal plate temperature is
+specified in Table 6. A thermal solution should be
+designed to ensure the temperature of the thermal
+plate never exceeds these specifications.
+The processor power is a result of heat dissipated
+through the thermal plate and other paths. The heat
+dissipation is a combination of heat from both the
+processor core and L2 cache. The overall system
+thermal design must comprehend the processor
+power. The combination of the processor core and
+the L2 cache dissipating heat through the thermal
+plate is the thermal plate power. The heatsink should
+be designed to dissipate the thermal plate power.
+See Table 20 for Pentium II processor thermal design
+specifications.
+ 
+Skirt
+Left Latch
+Right Latch
+Cover
+Thermal Plate
+000921
+Figure 18. Processor S.E.C. Cartridge Thermal Plate
+
+
+===== PAGE 43 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+43
+Table 20. Pentium® II Processor Thermal Design Specification1
+Processor
+Core
+Frequency
+(MHz)
+L2 Cache
+Size
+(kB)
+Max
+Processor
+Power2
+(W)
+Max
+Thermal
+Plate
+Power3
+(W)
+Min TPLATE
+(°C)
+Max TPLATE
+(°C)
+Min TCOVER
+(°C)
+Max TCOVER
+(°C)
+333 5
+512
+23.7
+21.8
+5
+65
+5
+75
+300 4
+512
+43.0
+41.4
+5
+72
+5
+72
+266 5
+512
+19.5
+17.8
+5
+65
+5
+75
+266 4
+512
+38.2
+37.0
+5
+75
+5
+75
+233 4
+512
+34.8
+33.6
+5
+75
+5
+75
+NOTES:
+1.
+These values are specified at nominal VccCORE for the processor core and nominal VccL2 (3.3 V) for the L2 cache.
+2.
+Processor power is 100% of processor core and 100% L2 cache power.
+3.
+Thermal plate power is 100% of the processor core power and a percentage of the L2 cache power.
+4.
+This specification applies to CPU ID 63x.
+5.
+This specification applies to CPU ID 65x.
+4.2. 
+Pentium® II Processor Thermal
+Analysis
+4.2.1.
+THERMAL SOLUTION
+PERFORMANCE
+All processor thermal solutions should attach to the
+thermal plate.
+The thermal solution must adequately control the
+thermal plate and cover temperatures below the
+maximum and above the minimum specified in
+Table 20. The performance of any thermal solution is
+defined as the thermal resistance between the
+thermal plate and the ambient air around the
+processor (Θthermal plate to ambient). The lower the
+thermal resistance between the thermal plate and the
+ambient air, the more efficient the thermal solution is.
+The required Θthermal plate to ambient is dependent upon
+the maximum allowed thermal plate temperature
+(TPLATE), the ambient temperature (TLA) and the
+thermal plate power (PPLATE).
+Θthermal plate to ambient =
+(TPLATE – TLA) / PPLATE
+The maximum TPLATE and the thermal plate power
+are listed in Table 20. TLA is a function of the system
+design. Table 21 provides the resultant thermal
+solution performance for a 266 MHz Pentium II
+processor at different ambient air temperatures
+around the processor.
+Table 21. Example Thermal Solution
+Performance for 266 MHz Pentium® II
+Processor at Thermal Plate Power of
+37.0 Watts
+Thermal Solution
+(Performance)
+Local Ambient
+Temperature (TLA)
+35 °C
+40 °C
+45 °C
+Θthermal plate to ambient
+(°C/watt)
+1.08
+0.95
+0.81
+The Θthermal plate to ambient value is made up of two
+primary components: the thermal resistance between
+the thermal plate and heatsink (Θthermal plate to heatsink)
+and the thermal resistance between the heatsink and
+the ambient air around the processor (Θheatsink to air).
+A critical but controllable factor to decrease the
+resultant value of Θthermal 
+plate 
+to 
+heatsink is
+management of the thermal interface between the
+thermal plate and heatsink. Thermal interfaces are
+addressed 
+in 
+AP-586, 
+Pentium® II 
+Processor
+Thermal Design Guidelines (Order Number 243333).
+The other controllable factor (Θheatsink to air) is
+resultant in the design of the heatsink and airflow
+around the heatsink. Heatsink design constraints are
+also provided in AP-586, Pentium® II Processor
+Thermal Design Guidelines (Order Number 243333).
+
+
+===== PAGE 44 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+44
+4.2.2.
+MEASUREMENTS FOR THERMAL
+SPECIFICATIONS
+4.2.2.1.
+Thermal Plate Temperature
+Measurement
+To 
+ensure 
+functional 
+and 
+reliable 
+Pentium II
+processor operation, the thermal plate temperature
+(TPLATE) must be maintained at or below the
+maximum TPLATE temperature specified in Table 20.
+Figure 19 
+shows 
+the 
+location 
+for 
+TPLATE
+measurement.
+Special care is required when measuring TPLATE to
+ensure an accurate temperature measurement.
+Thermocouples are used to measure TPLATE. Before
+taking 
+any 
+temperature 
+measurements, 
+the
+thermocouples must be calibrated. When measuring
+the temperature of a surface, errors can be
+introduced in the measurement if not handled
+properly. The measurement errors can be due to a
+poor thermal contact between the thermocouple
+junction and the surface of the thermal plate,
+conduction through thermocouple leads, heat loss by
+radiation and convection, or by contact between the
+thermocouple cement and the heatsink base. To
+minimize these errors, the following approach is
+recommended:
+•
+Use 36 gauge or finer diameter K, T, or J type
+thermocouples. Intel’s laboratory testing was
+done using a thermocouple made by Omega*
+(part number: 5TC-TTK-36-36).
+•
+Attach the thermocouple bead or junction to the
+top surface of the thermal plate at the location
+specified in Figure 19 using high thermal
+conductivity cements.
+•
+The thermocouple should be attached at a 0°
+angle if no heatsink is attached to the thermal
+plate. If a heatsink is attached to the thermal
+plate but the heatsink does not cover the location
+specified 
+for 
+TPLATE 
+measurement, 
+the
+thermocouple should be attached at a 0° angle
+(refer to Figure 20).
+2.673
+1.089
+Measure from edge of thermal plate.
+Cover
+Measure T
+at this point.
+PLATE
+Processor
+Core
+Substrate
+All dimensions in inches.
+0.35 R
+Recommended location of
+thermal grease application.
+Approx. location for
+recommended
+heatsink attachment.
+000874b
+Figure 19. Processor Thermal Plate Temperature Measurement Location
+
+
+===== PAGE 45 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+45
+000899
+Figure 20. Technique for Measuring TPLATE with 0° Angle Attachment
+ 
+000900
+Figure 21. Technique for Measuring TPLATE with 90° Angle Attachment
+•
+The thermocouple should be attached at a 90°
+angle if a heatsink is attached to the thermal
+plate and the heatsink covers the location
+specified for TPLATE measurement (refer to
+Figure 21).
+•
+The hole size through the heatsink base to route
+the thermocouple wires out should be smaller
+than 0.150" in diameter.
+•
+Make sure there is no contact between the
+thermocouple cement and heatsink base. This
+contact will affect the thermocouple reading.
+4.2.2.2.
+Cover Temperature Measurement
+The maximum and minimum S.E.C. cartridge cover
+temperature (TCOVER) for the Pentium II processor is
+specified in Table 20. This temperature specification
+is meant to ensure correct and reliable operation of
+the processor. Figure 22 illustrates the hottest points
+on the S.E.C. cartridge cover. TCOVER thermal
+measurements should be made at these points.
+4.3.
+Thermal Solution Attach
+Methods
+The design of the thermal plate is intended to support
+two different attach methods — heatsink clips and
+Rivscrews*. Figure 41 shows the thermal plate and
+the locations of the attach features. Only one attach
+method should be used for any thermal solution.
+4.3.1.
+HEATSINK CLIP ATTACH
+Figure 23 and Figure 24 illustrate example clip
+designs to support a low profile and a full height
+heatsink, respectively. The clips attach the heatsink
+by engaging with the underside of the thermal plate.
+The clearance of the thermal plate to the internal
+processor substrate is a minimum 0.124" (illustrated
+in Figure 23 and Figure 24). The clips should be
+designed such that they will engage within this
+space, and also not damage the substrate upon
+insertion or removal. Finally, the clips should be able
+to retain the heatsink onto the thermal plate through a
+system level mechanical shock and vibration test.
+The clips should also apply a high enough force to
+spread the interface material for the spot size
+selected.
+
+
+===== PAGE 46 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+46
+ 
+Edge near Slot 1 connector
+0.8
+2.8
+1.0
+1.31
+0.8
+1.0
+000966
+Figure 22. Guideline Locations for Cover Temperature (TCOVER) Thermocouple Placement
+0.124 Min Gap
+Thermal Plate
+Spring Clip
+Cover
+Processor Substrate
+All dimensions in inches.
+Processor Core
+000877a
+Figure 23. Processor with an Example Low Profile Heatsink Attached using Spring Clips
+
+
+===== PAGE 47 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+47
+0.124 Min Gap
+Thermal Plate
+Spring Clip
+Cover
+Processor Substrate
+All dimensions in inches.
+Processor Core
+000878a
+Figure 24. Processor with an Example Full Height Heatsink Attached using Spring Clips
+4.3.2.
+RIVSCREW* ATTACH
+The Rivscrew attach mechanism uses a specialized
+rivet that is inserted through a hole in the heatsink
+into the thermal plate. Upon insertion, a threaded
+fastener is formed that can be removed if necessary.
+For Rivscrew attachment, the minimum gap between
+the thermal plate and the processor substrate is
+0.139". For use of the Advel Rivscrew (part number
+1712-3510), the heatsink base thickness must be
+0.140 ±0.010". See Figure 25, Figure 26 and
+Figure 27 for details of heatsink requirements for use
+with Rivscrews.
+For other heatsink base thickness, contact Advel for
+other Rivscrew parts that would be required.
+
+
+===== PAGE 48 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+48
+3.0
+Maximum Total
+Heatsink Depth
+0.140 ±0.010
+Recommended Heatsink
+Base Thickness
+All dimensions in inches.
+0.305 gap in fins to allow for
+clearance of nose, Rivscrew*
+and mandrel (Minimum)
+0.064
+(Including Tolerance)
+000901
+Figure 25. Heatsink Recommendations and Guidelines for Use with Rivscrews*
+All dimensions in inches.
+Heatsink Base
+Thermal Plate
+Processor Core
+Processor Substrate
+0.139 Min.
+0.140 ±0.010 Heatsink Base (Recommended)
+0.144 ±0.005
+Thermal Grease
+Mandrel
+Rivscrew*
+000915
+Figure 26. Heatsink Rivscrew* and Thermal Plate Recommendations and Guidelines
+
+
+===== PAGE 49 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+49
+Y
+X
+Hole is 4 x 0.150 0.005
+0.305
+Heatsink
+All dimensions in inches.
+000903
+Figure 27. General Rivscrew* Heatsink Mechanical Recommendations
+
+
+===== PAGE 50 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+50
+ 
+Figure 28. Heatsink Attachment Mechanism Design Space
+
+
+===== PAGE 51 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+51
+5.0.
+S.E.C. CARTRIDGE
+MECHANICAL SPECIFICATIONS
+The Pentium II processor uses S.E.C. cartridge
+technology. The S.E.C. cartridge contains the
+processor core, L2 cache and other passive
+components. The S.E.C. cartridge connects to the
+motherboard through an edge connector. Mechanical
+specifications for the processor are given in this
+section. 
+See 
+Section 1.1.1. 
+for 
+a 
+complete
+terminology listing.
+Figure 29 shows the thermal plate side view and the
+cover side view of the processor. Figure 30 shows
+the S.E.C. cartridge dimensions. Figure 38 through
+Figure 40 provide details of the S.E.C. cartridge
+substrate edge finger contacts. The processor edge
+connector defined in this document is referred to as
+“Slot 1”.
+Table 23 through Table 26 provide the processor
+edge fingers and Slot 1 connector signal definitions
+for the Pentium II processor. The signal locations on
+the Slot 1 edge connector are to be used for signal
+routing, simulation and component placement on the
+motherboard.
+5.1.
+S.E.C. Cartridge Materials
+Information
+The S.E.C. cartridge is comprised of multiple pieces
+to make the complete assembly. This section will
+provide information relevant to the use and
+acceptance of the package. The complete S.E.C.
+cartridge assembly weighs approximately 150 grams.
+See Table Table 22 for further piece part information.
+Table 22. S.E.C. Cartridge Materials
+S.E.C. Cartridge Piece
+Piece Material
+Maximum Piece Weight (Grams)
+Thermal Plate
+Aluminum 6063-T6
+67.0
+Latch Arms
+GE Lexan 940, 30% glass filled
+Less than 2.0 per latch arm
+Cover
+GE Lexan 940
+24.0
+Skirt
+GE Lexan 940
+6.5
+Table 23. S.E.C. Cartridge Dimensions
+Symbol
+Description
+Min
+Max
+Figure
+A
+S.E.C. Cartridge Length
+5.495
+5.515
+37
+B
+S.E.C. Cartridge Height
+2.457
+2.489
+31
+C
+S.E.C. Cartridge Depth
+0.637
+0.657
+30
+D
+Thermal Plate Length
+5.324
+5.354
+37
+E
+Thermal Plate Height
+1.917
+1.927
+31
+NOTE:
+1.
+This table applies to the dimensions noted in Figure 30 through Figure 35.
+
+
+===== PAGE 52 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+52
+NOTES FOR FIGURE 29 THROUGH FIGURE 40
+Unless otherwise specified, the following drawings are dimensioned in inches. All dimensions provided with tolerances are
+guaranteed to be met for all normal production product.
+Figures and drawings labeled as “Reference Dimensions” are provided for informational purposes. Reference Dimensions are
+extracted from the mechanical design database and are nominal dimensions with no tolerance information applied. Reference
+Dimensions are NOT checked as part of the processor manufacturing.
+Drawings are not to scale.
+Skirt
+Left Latch
+Right Latch
+Cover
+Thermal Plate
+Right Latch
+Left Latch
+Cover
+000893a
+Figure 29. S.E.C. Cartridge – Thermal Plate and Cover Side Views
+
+
+===== PAGE 53 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+53
+Top View
+Cover Side View
+Thermal Plate Side View
+Left
+Right
+Right
+Side
+Right
+Left
+Skirt
+Thermal Plate
+Right Latch
+Left Latch
+Cover
+C
+000894b
+Figure 30. S.E.C. Cartridge Overall Cartridge Dimensions
+
+
+===== PAGE 54 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+54
+3.805 ±0.020
+2X 0.340
+±0.005
+2X 0.127
+±0.005
+1.830 ±0.005
+1.845 ±0.005
+2X 0.265 ±0.005
+1.235
+±0.020
+2.473
+±0.016
+2.070
+±0.020
+These dimensions are from 
+the bottom of  the substrate 
+edge fingers
+E
+B
+NOTE:
+1.
+See Figure 34 for details.
+000906
+Figure 31. S.E.C Cartridge Thermal Plate Side Dimensions
+
+
+===== PAGE 55 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+55
+Detail A
+6X 0.124 +0.001
+–0.002
+8X R 0.0625 ±0.002
+4X 0.365
+±0.005
+See Detail A
+2.110 ±0.008
+0.000
+0.978 ±0.008
+0.500 ±0.008
+0.250 ±0.008
+0.000
+0.375 ±0.008
+NOTE:
+1.
+See Figure 35 for details.
+000907
+Figure 32. S.E.C. Cartridge Thermal Plate and Side View Dimensions
+
+
+===== PAGE 56 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+56
+2.50
+1.25
+0.001 / 1.000 x 1.000
+NOTE:
+All dimensions without tolerance information are considered reference dimensions only.
+000908
+Figure 33. S.E.C. Cartridge Thermal Plate Flatness Dimensions
+
+
+===== PAGE 57 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+57
+0.236
+0.113
+0.060
+0.022
+Detail A
+Detail B
+(Bottom Side View)
+0.084
+0.060
+0.122
+0.075
+R 0.015
+0.060
+0.055
+0.316
+0.058
+0.277
+0.116
+0.291
+Detail C
+Detail D
+Detail E
+45°
+0.120 Min.
+0.082
+0.276
+0.216
+NOTE:
+All dimensions without tolerance information are considered reference dimensions only.
+000909
+Figure 34. S.E.C. Cartridge Latch Details
+
+
+===== PAGE 58 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+58
+2X 0.174 ±0.005
+2X 0.488
+±0.010
+2X 0.238 ±0.010
+2X 0.103 ± 0.005
+2X 0.647
+±0.015
+2X 0.253 ±0.010
+2X 0.058
+±0.005
+2X 0.136
+±0.005
+Left
+000910
+Figure 35. S.E.C. Cartridge Latch Arm, Thermal Plate Lug, and Cover Lug Dimensions
+
+
+===== PAGE 59 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+59
+iCOMP® 2.0 index=YYY
+SZNNN/XYZ   ORDER CODE
+XXXXXXXX-NNNN
+2-D Matrix Mark
+Hologram
+Location
+pentium
+®II
+P     R     O     C     E     S     S     O     R
+i
+'94 '96
+m C
+Dynamic Mark Area
+pentium
+®II
+P     R     O     C     E     S     S     O     R
+with MMX™ technology
+pentium
+®II
+P     R     O     C     E     S     S     O     R
+with MMX™ technology
+000911a
+Figure 36. S.E.C. Cartridge Mark Locations
+Table 24. Description Table for Processor Markings
+Code Letter
+Description
+A
+Logo
+B
+Product Name
+C
+Trademark
+D
+Logo
+E
+Product Name
+F
+Dynamic Mark Area – with 2-D matrix
+
+
+===== PAGE 60 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+60
+ 
+Skirt
+Thermal Plate
+2.263 ±0.015
+5.255 ±0.006
+Cover
+3.243 ±0.015
+5.344 ±0.010
+5.505 ±0.010
+Bottom View
+Left
+Right
+A
+D
+000870d
+Figure 37. S.E.C. Cartridge Bottom Side View
+
+
+===== PAGE 61 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+61
+Thermal Plate
+2.835
+Cover
+Pin A121
+Pin A1
+Substrate
+1.850
+2.992 ±0.008
+2.008 ±0.008
+5.000
+W
+X
+Y
+Z
+70°
+0.062 +0.007
+–0.005
+See Detail A
+in Next Figure
+NOTE:
+All dimensions without tolerance information are considered reference dimensions only.
+000814d
+Figure 38. S.E.C. Cartridge Substrate Dimensions
+Pin B121
+Pin B1
+Substrate
+Cover
+NOTE:
+Cover not completely shown to allow for substrate details to be shown.
+This drawing shows the pin details of the cover side of the S.E.C. cartridge.
+000858c
+Figure 39. S.E.C. Cartridge Substrate Dimensions, Cover Side View
+
+
+===== PAGE 62 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+62
+0.146 Max.
+0.098
+Y
+Pin A74
+Pin A73
+0.098
+W
+0.039
+0.037
+121 X 0.016 ±0.002
+0.045
+0.236
+0.074 ±0.002
+.20 .008
+L
+Z
+W M
+.05 .002
+Pad to Pad
+121 X 0.043 ±0.002
+.20 .008
+L
+Z
+W M
+.05 .002
+Pad to Pad
+L
+L
+0.356
+Min.
+0.138 Min.
+0.008
+(0.010)
+NOTE:
+All dimensions without tolerance information are considered reference dimensions only.
+000859b
+Figure 40. Substrate – S.E.C. Cartridge Substrate Detail A
+
+
+===== PAGE 63 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+63
+5.2.
+Processor Edge Finger Signal Listing
+Table 25 is the processor substrate edge finger listing in order by pin number.
+Table 25. Signal Listing in Order by Pin Number
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A1
+VCC_VTT
+GTL+ VTT Supply
+B1
+EMI
+EMI Management
+A2
+GND
+VSS
+B2
+FLUSH#
+CMOS Input
+A3
+VCC_VTT
+GTL+ VTT Supply
+B3
+SMI#
+CMOS Input
+A4
+IERR#
+CMOS Output
+B4
+INIT#
+CMOS Input
+A5
+A20M#
+CMOS Input
+B5
+VCC_VTT
+GTL+ VTT Supply
+A6
+GND
+VSS
+B6
+STPCLK#
+CMOS Input
+A7
+FERR#
+CMOS Output
+B7
+TCK
+JTAG Input
+A8
+IGNNE#
+CMOS Input
+B8
+SLP#
+CMOS Input
+A9
+TDI
+JTAG Input
+B9
+VCC_VTT
+GTL+ VTT Supply
+A10
+GND
+VSS
+B10
+TMS
+JTAG Input
+A11
+TDO
+JTAG Output
+B11
+TRST#
+JTAG Input
+A12
+PWRGOOD
+CMOS Input
+B12
+Reserved
+Reserved for Future Use
+A13
+TESTHI
+CMOS Test Input
+B13
+VCC_CORE
+Processor Core VCC
+A14
+GND
+VSS
+B14
+Reserved
+Reserved for Future Use
+A15
+THERMTRIP#
+CMOS Output
+B15
+Reserved
+Reserved for Future Use
+A16
+Reserved
+Reserved for Future Use
+B16
+LINT[1]/NMI
+CMOS Input
+A17
+LINT[0]/INTR
+CMOS Input
+B17
+VCC_CORE
+Processor Core VCC
+A18
+GND
+VSS
+B18
+PICCLK
+APIC Clock Input
+A19
+PICD[0]
+CMOS I/O
+B19
+BP#[2]
+GTL+ I/O
+A20
+PREQ#
+CMOS Input
+B20
+Reserved
+Reserved for Future Use
+A21
+BP#[3]
+GTL+ I/O
+B21
+BSEL#
+GND
+A22
+GND
+VSS
+B22
+PICD[1]
+CMOS I/O
+A23
+BPM#[0]
+GTL+ I/O
+B23
+PRDY#
+GTL+ Output
+A24
+BINIT#
+GTL+ I/O
+B24
+BPM#[1]
+GTL+ I/O
+A25
+DEP#[0]
+GTL+ I/O
+B25
+VCC_CORE
+Processor Core VCC
+
+
+===== PAGE 64 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+64
+Table 25. Signal Listing in Order by Pin Number (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A26
+GND
+VSS
+B26
+DEP#[2]
+GTL+ I/O
+A27
+DEP#[1]
+GTL+ I/O
+B27
+DEP#[4]
+GTL+ I/O
+A28
+DEP#[3]
+GTL+ I/O
+B28
+DEP#[7]
+GTL+ I/O
+A29
+DEP#[5]
+GTL+ I/O
+B29
+VCC_CORE
+Processor Core VCC
+A30
+GND
+VSS
+B30
+D#[62]
+GTL+ I/O
+A31
+DEP#[6]
+GTL+ I/O
+B31
+D#[58]
+GTL+ I/O
+A32
+D#[61]
+GTL+ I/O
+B32
+D#[63]
+GTL+ I/O
+A33
+D#[55]
+GTL+ I/O
+B33
+VCC_CORE
+Processor Core VCC
+A34
+GND
+VSS
+B34
+D#[56]
+GTL+ I/O
+A35
+D#[60]
+GTL+ I/O
+B35
+D#[50]
+GTL+ I/O
+A36
+D#[53]
+GTL+ I/O
+B36
+D#[54]
+GTL+ I/O
+A37
+D#[57]
+GTL+ I/O
+B37
+VCC_CORE
+Processor Core VCC
+A38
+GND
+VSS
+B38
+D#[59]
+GTL+ I/O
+A39
+D#[46]
+GTL+ I/O
+B39
+D#[48]
+GTL+ I/O
+A40
+D#[49]
+GTL+ I/O
+B40
+D#[52]
+GTL+ I/O
+A41
+D#[51]
+GTL+ I/O
+B41
+EMI
+EMI Management
+A42
+GND
+VSS
+B42
+D#[41]
+GTL+ I/O
+A43
+D#[42]
+GTL+ I/O
+B43
+D#[47]
+GTL+ I/O
+A44
+D#[45]
+GTL+ I/O
+B44
+D#[44]
+GTL+ I/O
+A45
+D#[39]
+GTL+ I/O
+B45
+VCC_CORE
+Processor Core VCC
+A46
+GND
+VSS
+B46
+D#[36]
+GTL+ I/O
+A47
+Reserved
+Reserved for Future Use
+B47
+D#[40]
+GTL+ I/O
+A48
+D#[43]
+GTL+ I/O
+B48
+D#[34]
+GTL+ I/O
+A49
+D#[37]
+GTL+ I/O
+B49
+VCC_CORE
+Processor Core VCC
+A50
+GND
+VSS
+B50
+D#[38]
+GTL+ I/O
+A51
+D#[33]
+GTL+ I/O
+B51
+D#[32]
+GTL+ I/O
+A52
+D#[35]
+GTL+ I/O
+B52
+D#[28]
+GTL+ I/O
+
+
+===== PAGE 65 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+65
+Table 25. Signal Listing in Order by Pin Number (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A53
+D#[31]
+GTL+ I/O
+B53
+VCC_CORE
+Processor Core VCC
+A54
+GND
+VSS
+B54
+D#[29]
+GTL+ I/O
+A55
+D#[30]
+GTL+ I/O
+B55
+D#[26]
+GTL+ I/O
+A56
+D#[27]
+GTL+ I/O
+B56
+D#[25]
+GTL+ I/O
+A57
+D#[24]
+GTL+ I/O
+B57
+VCC_CORE
+Processor Core VCC
+A58
+GND
+VSS
+B58
+D#[22]
+GTL+ I/O
+A59
+D#[23]
+GTL+ I/O
+B59
+D#[19]
+GTL+ I/O
+A60
+D#[21]
+GTL+ I/O
+B60
+D#[18]
+GTL+ I/O
+A61
+D#[16]
+GTL+ I/O
+B61
+EMI
+EMI Management
+A62
+GND
+VSS
+B62
+D#[20]
+GTL+ I/O
+A63
+D#[13]
+GTL+ I/O
+B63
+D#[17]
+GTL+ I/O
+A64
+D#[11]
+GTL+ I/O
+B64
+D#[15]
+GTL+ I/O
+A65
+D#[10]
+GTL+ I/O
+B65
+VCC_CORE
+Processor Core VCC
+A66
+GND
+VSS
+B66
+D#[12]
+GTL+ I/O
+A67
+D#[14]
+GTL+ I/O
+B67
+D#[7]
+GTL+ I/O
+A68
+D#[9]
+GTL+ I/O
+B68
+D#[6]
+GTL+ I/O
+A69
+D#[8]
+GTL+ I/O
+B69
+VCC_CORE
+Processor Core VCC
+A70
+GND
+VSS
+B70
+D#[4]
+GTL+ I/O
+A71
+D#[5]
+GTL+ I/O
+B71
+D#[2]
+GTL+ I/O
+A72
+D#[3]
+GTL+ I/O
+B72
+D#[0]
+GTL+ I/O
+A73
+D#[1]
+GTL+ I/O
+B73
+VCC_CORE
+Processor Core VCC
+A74
+GND
+VSS
+B74
+RESET#
+GTL+ Input
+A75
+BCLK
+Processor Clock Input
+B75
+BR1#
+GTL+ Input
+A76
+BR0#
+GTL+ I/O
+B76
+FRCERR
+GTL+ I/O
+A77
+BERR#
+GTL+ I/O
+B77
+VCC_CORE
+Processor Core VCC
+A78
+GND
+VSS
+B78
+A#[35]
+GTL+ I/O
+A79
+A#[33]
+GTL+ I/O
+B79
+A#[32]
+GTL+ I/O
+
+
+===== PAGE 66 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+66
+Table 25. Signal Listing in Order by Pin Number (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A80
+A#[34]
+GTL+ I/O
+B80
+A#[29]
+GTL+ I/O
+A81
+A#[30]
+GTL+ I/O
+B81
+EMI
+EMI Management
+A82
+GND
+VSS
+B82
+A#[26]
+GTL+ I/O
+A83
+A#[31]
+GTL+ I/O
+B83
+A#[24]
+GTL+ I/O
+A84
+A#[27]
+GTL+ I/O
+B84
+A#[28]
+GTL+ I/O
+A85
+A#[22]
+GTL+ I/O
+B85
+VCC_CORE
+Processor Core VCC
+A86
+GND
+VSS
+B86
+A#[20]
+GTL+ I/O
+A87
+A#[23]
+GTL+ I/O
+B87
+A#[21]
+GTL+ I/O
+A88
+Reserved
+Reserved for Future Use
+B88
+A#[25]
+GTL+ I/O
+A89
+A#[19]
+GTL+ I/O
+B89
+VCC_CORE
+Processor Core VCC
+A90
+GND
+VSS
+B90
+A#[15]
+GTL+ I/O
+A91
+A#[18]
+GTL+ I/O
+B91
+A#[17]
+GTL+ I/O
+A92
+A#[16]
+GTL+ I/O
+B92
+A#[11]
+GTL+ I/O
+A93
+A#[13]
+GTL+ I/O
+B93
+VCC_CORE
+Processor Core VCC
+A94
+GND
+VSS
+B94
+A#[12]
+GTL+ I/O
+A95
+A#[14]
+GTL+ I/O
+B95
+A#[8]
+GTL+ I/O
+A96
+A#[10]
+GTL+ I/O
+B96
+A#[7]
+GTL+ I/O
+A97
+A#[5]
+GTL+ I/O
+B97
+VCC_CORE
+Processor Core VCC
+A98
+GND
+VSS
+B98
+A#[3]
+GTL+ I/O
+A99
+A#[9]
+GTL+ I/O
+B99
+A#[6]
+GTL+ I/O
+A100
+A#[4]
+GTL+ I/O
+B100
+EMI
+EMI Management
+A101
+BNR#
+GTL+ I/O
+B101
+SLOTOCC#
+GND
+A102
+GND
+VSS
+B102
+REQ#[0]
+GTL+ I/O
+A103
+BPRI#
+GTL+ Input
+B103
+REQ#[1]
+GTL+ I/O
+A104
+TRDY#
+GTL+ Input
+B104
+REQ#[4]
+GTL+ I/O
+A105
+DEFER#
+GTL+ Input
+B105
+VCC_CORE
+Processor Core VCC
+A106
+GND
+VSS
+B106
+LOCK#
+GTL+ I/O
+
+
+===== PAGE 67 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+67
+Table 25. Signal Listing in Order by Pin Number (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A107
+REQ#[2]
+GTL+ I/O
+B107
+DRDY#
+GTL+ I/O
+A108
+REQ#[3]
+GTL+ I/O
+B108
+RS#[0]
+GTL+ Input
+A109
+HITM#
+GTL+ I/O
+B109
+VCC5
+Other VCC
+A110
+GND
+VSS
+B110
+HIT#
+GTL+ I/O
+A111
+DBSY#
+GTL+ I/O
+B111
+RS#[2]
+GTL+ Input
+A112
+RS#[1]
+GTL+ Input
+B112
+Reserved
+Reserved for Future Use
+A113
+Reserved
+Reserved for Future Use
+B113
+VCC_L2
+Other VCC
+A114
+GND
+VSS
+B114
+RP#
+GTL+ I/O
+A115
+ADS#
+GTL+ I/O
+B115
+RSP#
+GTL+ Input
+A116
+Reserved
+Reserved for Future Use
+B116
+AP#[1]
+GTL+ I/O
+A117
+AP#[0]
+GTL+ I/O
+B117
+VCC_L2
+Other VCC
+A118
+GND
+VSS
+B118
+AERR#
+GTL+ I/O
+A119
+VID[2]
+VccCORE or VSS
+B119
+VID[3]
+VccCORE or VSS
+A120
+VID[1]
+VccCORE or VSS
+B120
+VID[0]
+VccCORE or VSS
+A121
+VID[4]
+VccCORE or VSS
+B121
+VCC_L2
+Other VCC
+
+
+===== PAGE 68 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+68
+Table 26 is the processor substrate edge connector listing in order by pin name.
+Table 26. Signal Listing in Order by Signal Name
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+B98
+A#[3]
+GTL+ I/O
+B80
+A#[29]
+GTL+ I/O
+A100
+A#[4]
+GTL+ I/O
+A81
+A#[30]
+GTL+ I/O
+A97
+A#[5]
+GTL+ I/O
+A83
+A#[31]
+GTL+ I/O
+B99
+A#[6]
+GTL+ I/O
+B79
+A#[32]
+GTL+ I/O
+B96
+A#[7]
+GTL+ I/O
+A79
+A#[33]
+GTL+ I/O
+B95
+A#[8]
+GTL+ I/O
+A80
+A#[34]
+GTL+ I/O
+A99
+A#[9]
+GTL+ I/O
+B78
+A#[35]
+GTL+ I/O
+A96
+A#[10]
+GTL+ I/O
+A5
+A20M#
+CMOS Input
+B92
+A#[11]
+GTL+ I/O
+A115
+ADS#
+GTL+ I/O
+B94
+A#[12]
+GTL+ I/O
+B118
+AERR#
+GTL+ I/O
+A93
+A#[13]
+GTL+ I/O
+A117
+AP#[0]
+GTL+ I/O
+A95
+A#[14]
+GTL+ I/O
+B116
+AP#[1]
+GTL+ I/O
+B90
+A#[15]
+GTL+ I/O
+A75
+BCLK
+Processor Clock Input
+A92
+A#[16]
+GTL+ I/O
+A77
+BERR#
+GTL+ I/O
+B91
+A#[17]
+GTL+ I/O
+A24
+BINIT#
+GTL+ I/O
+A91
+A#[18]
+GTL+ I/O
+A101
+BNR#
+GTL+ I/O
+A89
+A#[19]
+GTL+ I/O
+B19
+BP#[2]
+GTL+ I/O
+B86
+A#[20]
+GTL+ I/O
+A21
+BP#[3]
+GTL+ I/O
+B87
+A#[21]
+GTL+ I/O
+A23
+BPM#[0]
+GTL+ I/O
+A85
+A#[22]
+GTL+ I/O
+B24
+BPM#[1]
+GTL+ I/O
+A87
+A#[23]
+GTL+ I/O
+A103
+BPRI#
+GTL+ Input
+B83
+A#[24]
+GTL+ I/O
+A76
+BR0#
+GTL+ I/O
+B88
+A#[25]
+GTL+ I/O
+B75
+BR1#
+GTL+ Input
+B82
+A#[26]
+GTL+ I/O
+B21
+BSEL#
+GND
+A84
+A#[27]
+GTL+ I/O
+B72
+D#[0]
+GTL+ I/O
+B84
+A#[28]
+GTL+ I/O
+A73
+D#[1]
+GTL+ I/O
+
+
+===== PAGE 69 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+69
+Table 26. Signal Listing in Order by Signal Name (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+B71
+D#[2]
+GTL+ I/O
+B54
+D#[29]
+GTL+ I/O
+A72
+D#[3]
+GTL+ I/O
+A55
+D#[30]
+GTL+ I/O
+B70
+D#[4]
+GTL+ I/O
+A53
+D#[31]
+GTL+ I/O
+A71
+D#[5]
+GTL+ I/O
+B51
+D#[32]
+GTL+ I/O
+B68
+D#[6]
+GTL+ I/O
+A51
+D#[33]
+GTL+ I/O
+B67
+D#[7]
+GTL+ I/O
+B48
+D#[34]
+GTL+ I/O
+A69
+D#[8]
+GTL+ I/O
+A52
+D#[35]
+GTL+ I/O
+A68
+D#[9]
+GTL+ I/O
+B46
+D#[36]
+GTL+ I/O
+A65
+D#[10]
+GTL+ I/O
+A49
+D#[37]
+GTL+ I/O
+A64
+D#[11]
+GTL+ I/O
+B50
+D#[38]
+GTL+ I/O
+B66
+D#[12]
+GTL+ I/O
+A045
+D#[39]
+GTL+ I/O
+A63
+D#[13]
+GTL+ I/O
+B47
+D#[40]
+GTL+ I/O
+A67
+D#[14]
+GTL+ I/O
+B42
+D#[41]
+GTL+ I/O
+B64
+D#[15]
+GTL+ I/O
+A043
+D#[42]
+GTL+ I/O
+A61
+D#[16]
+GTL+ I/O
+A48
+D#[43]
+GTL+ I/O
+B63
+D#[17]
+GTL+ I/O
+B44
+D#[44]
+GTL+ I/O
+B60
+D#[18]
+GTL+ I/O
+A044
+D#[45]
+GTL+ I/O
+B59
+D#[19]
+GTL+ I/O
+A039
+D#[46]
+GTL+ I/O
+B62
+D#[20]
+GTL+ I/O
+B43
+D#[47]
+GTL+ I/O
+A60
+D#[21]
+GTL+ I/O
+B39
+D#[48]
+GTL+ I/O
+B58
+D#[22]
+GTL+ I/O
+A040
+D#[49]
+GTL+ I/O
+A59
+D#[23]
+GTL+ I/O
+B35
+D#[50]
+GTL+ I/O
+A57
+D#[24]
+GTL+ I/O
+A041
+D#[51]
+GTL+ I/O
+B56
+D#[25]
+GTL+ I/O
+B40
+D#[52]
+GTL+ I/O
+B55
+D#[26]
+GTL+ I/O
+A36
+D#[53]
+GTL+ I/O
+A56
+D#[27]
+GTL+ I/O
+B36
+D#[54]
+GTL+ I/O
+B52
+D#[28]
+GTL+ I/O
+A33
+D#[55]
+GTL+ I/O
+
+
+===== PAGE 70 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+70
+Table 26. Signal Listing in Order by Signal Name (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+B34
+D#[56]
+GTL+ I/O
+A2
+GND
+VSS
+A37
+D#[57]
+GTL+ I/O
+A6
+GND
+VSS
+B31
+D#[58]
+GTL+ I/O
+A10
+GND
+VSS
+B38
+D#[59]
+GTL+ I/O
+A14
+GND
+VSS
+A35
+D#[60]
+GTL+ I/O
+A18
+GND
+VSS
+A32
+D#[61]
+GTL+ I/O
+A22
+GND
+VSS
+B30
+D#[62]
+GTL+ I/O
+A26
+GND
+VSS
+B32
+D#[63]
+GTL+ I/O
+A30
+GND
+VSS
+A111
+DBSY#
+GTL+ I/O
+A34
+GND
+VSS
+A105
+DEFER#
+GTL+ Input
+A38
+GND
+VSS
+A25
+DEP#[0]
+GTL+ I/O
+A042
+GND
+VSS
+A27
+DEP#[1]
+GTL+ I/O
+A46
+GND
+VSS
+B26
+DEP#[2]
+GTL+ I/O
+A50
+GND
+VSS
+A28
+DEP#[3]
+GTL+ I/O
+A54
+GND
+VSS
+B27
+DEP#[4]
+GTL+ I/O
+A58
+GND
+VSS
+A29
+DEP#[5]
+GTL+ I/O
+A62
+GND
+VSS
+A31
+DEP#[6]
+GTL+ I/O
+A66
+GND
+VSS
+B28
+DEP#[7]
+GTL+ I/O
+A70
+GND
+VSS
+B107
+DRDY#
+GTL+ I/O
+A74
+GND
+VSS
+B1
+EMI
+EMI Management
+A78
+GND
+VSS
+B41
+EMI
+EMI Management
+A82
+GND
+VSS
+B61
+EMI
+EMI Management
+A86
+GND
+VSS
+B81
+EMI
+EMI Management
+A90
+GND
+VSS
+B100
+EMI
+EMI Management
+A94
+GND
+VSS
+A7
+FERR#
+CMOS Output
+A98
+GND
+VSS
+B2
+FLUSH#
+CMOS Input
+A102
+GND
+VSS
+B76
+FRCERR
+GTL+ I/O
+A106
+GND
+VSS
+
+
+===== PAGE 71 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+71
+Table 26. Signal Listing in Order by Signal Name (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+A110
+GND
+VSS
+B12
+Reserved
+Reserved for Future Use
+A114
+GND
+VSS
+B14
+Reserved
+Reserved for Future Use
+A118
+GND
+VSS
+B15
+Reserved
+Reserved for Future Use
+B110
+HIT#
+GTL+ I/O
+B20
+Reserved
+Reserved for Future Use
+A109
+HITM#
+GTL+ I/O
+B112
+Reserved
+Reserved for Future Use
+A4
+IERR#
+CMOS Output
+B74
+RESET#
+GTL+ Input
+A8
+IGNNE#
+CMOS Input
+B114
+RP#
+GTL+ I/O
+B4
+INIT#
+CMOS Input
+B108
+RS#[0]
+GTL+ Input
+A17
+LINT[0]/INTR
+CMOS Input
+A112
+RS#[1]
+GTL+ Input
+B16
+LINT[1]/NMI
+CMOS Input
+B111
+RS#[2]
+GTL+ Input
+B106
+LOCK#
+GTL+ I/O
+B115
+RSP#
+GTL+ Input
+B18
+PICCLK
+APIC Clock Input
+B101
+SLOTOCC#
+GND
+A19
+PICD[0]
+CMOS I/O
+B8
+SLP#
+CMOS Input
+B22
+PICD[1]
+CMOS I/O
+B3
+SMI#
+CMOS Input
+B23
+PRDY#
+GTL+ Output
+B6
+STPCLK#
+CMOS Input
+A20
+PREQ#
+CMOS Input
+B7
+TCK
+JTAG Input
+A12
+PWRGOOD
+CMOS Input
+A9
+TDI
+JTAG Input
+B102
+REQ#[0]
+GTL+ I/O
+A11
+TDO
+JTAG Output
+B103
+REQ#[1]
+GTL+ I/O
+A13
+TESTHI
+CMOS Test Input
+A107
+REQ#[2]
+GTL+ I/O
+A15
+THERMTRIP#
+CMOS Output
+A108
+REQ#[3]
+GTL+ I/O
+B10
+TMS
+JTAG Input
+B104
+REQ#[4]
+GTL+ I/O
+A104
+TRDY#
+GTL+ Input
+A16
+Reserved
+Reserved for Future Use
+B11
+TRST#
+JTAG Input
+A47
+Reserved
+Reserved for Future Use
+B13
+VCC_CORE
+Processor Core VCC
+A88
+Reserved
+Reserved for Future Use
+B17
+VCC_CORE
+Processor Core VCC
+A113
+Reserved
+Reserved for Future Use
+B25
+VCC_CORE
+Processor Core VCC
+A116
+Reserved
+Reserved for Future Use
+B29
+VCC_CORE
+Processor Core VCC
+
+
+===== PAGE 72 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+72
+Table 26. Signal Listing in Order by Signal Name (Cont’d)
+Pin
+No.
+Pin Name
+Signal Buffer Type
+Pin
+No.
+Pin Name
+Signal Buffer Type
+B33
+VCC_CORE
+Processor Core VCC
+B105
+VCC_CORE
+Processor Core VCC
+B37
+VCC_CORE
+Processor Core VCC
+B113
+VCC_L2
+Other VCC
+B45
+VCC_CORE
+Processor Core VCC
+B117
+VCC_L2
+Other VCC
+B49
+VCC_CORE
+Processor Core VCC
+B121
+VCC_L2
+Other VCC
+B53
+VCC_CORE
+Processor Core VCC
+A1
+VCC_VTT
+GTL+ VTT Supply
+B57
+VCC_CORE
+Processor Core VCC
+A3
+VCC_VTT
+GTL+ VTT Supply
+B65
+VCC_CORE
+Processor Core VCC
+B5
+VCC_VTT
+GTL+ VTT Supply
+B69
+VCC_CORE
+Processor Core VCC
+B9
+VCC_VTT
+GTL+ VTT Supply
+B73
+VCC_CORE
+Processor Core VCC
+B109
+VCC5
+Other VCC
+B77
+VCC_CORE
+Processor Core VCC
+B120
+VID[0]
+VccCORE or VSS
+B85
+VCC_CORE
+Processor Core VCC
+A120
+VID[1]
+VccCORE or VSS
+B89
+VCC_CORE
+Processor Core VCC
+A119
+VID[2]
+VccCORE or VSS
+B93
+VCC_CORE
+Processor Core VCC
+B119
+VID[3]
+VccCORE or VSS
+B97
+VCC_CORE
+Processor Core VCC
+A121
+VID[4]
+VccCORE or VSS
+
+
+===== PAGE 73 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+73
+6.0.
+BOXED PROCESSOR
+SPECIFICATIONS
+6.1.
+Introduction
+The Pentium II processor is also offered as an Intel
+Boxed processor. Intel Boxed processors are
+intended for system integrators who build systems
+from motherboards and standard components. The
+Boxed Pentium II processor will be supplied with an
+attached fan/heatsink. This chapter documents
+motherboard and system requirements for the
+fan/heatsink that will be supplied with the Boxed
+Pentium II processor. This chapter is particularly
+important for OEMs that manufacture motherboards
+for system integrators. Unless otherwise noted, all
+figures in this chapter are dimensioned in inches.
+Figure 43 shows a mechanical representation of the
+Boxed 
+Pentium II 
+processor 
+in 
+a 
+retention
+mechanism.
+NOTE
+The airflow of the fan/heatsink is into the
+center and out of the sides of the fan/heatsink.
+The large arrows in Figure 41 denote the
+direction of airflow.
+Processor
+Fan
+Shroud Covering
+Heatsink Fins
+Retention
+Mechanism
+Fan Power Connector
+Motherboard
+Boxed Processor Heatsink Support Mechanism
+Heatsink Support Mechanism
+000904a
+Figure 41. Conceptual Boxed Pentium® II Processor in Retention Mechanism
+
+
+===== PAGE 74 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+74
+6.2.
+Mechanical Specifications
+This 
+section 
+documents 
+the 
+mechanical
+specifications of the Boxed Pentium II processor
+fan/heatsink.
+6.2.1.
+BOXED PROCESSOR FAN/HEATSINK
+DIMENSIONS
+The Boxed processor will be shipped with an
+attached fan/heatsink. Clearance is required around
+the fan/heat sink to ensure unimpeded air flow for
+proper cooling. The space 
+requirements 
+and
+dimensions for the Boxed Processor with integrated
+fan/heatsink are shown in Figure 42 (Side View),
+Figure 43 (Front View), and Figure 44 (Top View). All
+dimensions are in inches.
+0.485 (B)
+1.291
+Max (A)
+Slot 1 Connector
+Fan Heatsink
+S.E.C. Cartridge Cover
+000890a
+Figure 42. Side View Space Requirements for the Boxed Processor
+(fan heatsink supports not shown)
+
+
+===== PAGE 75 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+75
+4.90 Max (D)
+1.25
+2.19 (C)
+Power Cable
+Connector
+000891a
+Figure 43. Front View Space Requirements for the Boxed Processor
+0.20 Min
+Air space
+(F)
+0.40 Min Air Space (E)
+(both ends)
+Measure ambient temperature
+0.3” above center of fan inlet
+S.E.C. Cartridge Cover
+Fan Heatsink
+Fan
+Air Space
+000892
+Figure 44. Top View Space Requirements for the Boxed Processor
+Table 27. Boxed Processor Fan/Heatsink Spatial Dimensions
+Fig. Ref.
+Label
+Dimensions (Inches)
+Min
+Typ
+Max
+A
+Fan/Heatsink Depth (off processor thermal plate)
+1.291
+B
+Fan/Heatsink Height above motherboard
+0.485
+C
+Fan/Heatsink Height (see front view)
+2.19
+D
+Fan/Heatsink Width (see front view)
+4.90
+E
+Airflow keepout zones from end of fan/heatsink
+0.40
+F
+Airflow keepout zones from face of fan/heatsink
+0.20
+
+
+===== PAGE 76 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+76
+6.2.2.
+BOXED PROCESSOR FAN/HEATSINK
+WEIGHT
+The Boxed processor fan/heatsink will not weigh
+more than 225 grames. See Section 4.0 and Section
+5.0 for details on the processor weight and heatsink
+requirements.
+6.2.3.
+BOXED PROCESSOR RETENTION
+MECHANISM AND FAN/HEATSINK
+SUPPORT
+The Boxed processor requires a processor retention
+mechanism as described in AP-588, Mechanical and
+Assembly 
+Technology 
+for 
+S.E.C. 
+Cartridge
+Processors (Order Number 243333) to secure the
+processor in Slot 1. The Boxed processor will not
+ship with a retention mechanism. Motherboards
+designed for use by system integrators should
+include a retention mechanism and appropriate
+installation instructions.
+The Boxed processor will ship with its own fan
+heatsink support. The support differs from supports
+for passive 
+heatsinks. 
+The 
+Boxed 
+processor
+fan/heatsink support requires heatsink support holes
+in the motherboard. Location and size of these holes
+are give in Figure 45.
+Any motherboard components placed in the area
+beneath the fan/heatsink supports must recognize
+the clearance (H) give in Table 28 below. Component
+height restrictions for passive heatsink support
+designs, as described in AP-588, Mechanical and
+Assembly 
+Technology 
+for 
+S.E.C. 
+Cartridge
+Processors (Order Number 243333), still apply.
+Motherboards 
+designed 
+for 
+use 
+by 
+system
+integrators should not have objects installed in the
+heatsink 
+support 
+holes. 
+Otherwise, 
+removal
+instructions for objects pre-installed in the heatsink
+support holes should be included in the motherboard
+documentation.
+Table 28. Boxed Processor Fan/Heatsink Support Dimensions1, 2
+Fig. Ref.
+Label
+Dimensions (Inches)
+Min
+Typ
+Max
+G
+Fan/Heatsink support height
+2.261
+H
+Fan/Heatsink support clearance above motherboard
+0.430
+J
+Fan/Heatsink support standoff diameter
+0.275
+0.300
+K
+Fan/Heatsink support front edge to heatsink support hole
+center
+0.240
+L
+Fan/Heatsink support standoff protrusion beneath
+motherboard
+0.06
+M
+Motherboard thickness
+0.05
+0.06
+0.075
+N
+Spacing between fan/heatsink support posts
+4.084
+P
+Fan/Heatsink support width
+0.600
+Q
+Fan/Heatsink support inner edge to heatsink support hole
+0.400
+NOTES:
+1.
+This table applies to the dimensions noted in Figure 45 through Figure 47.
+2.
+All dimensions are in inches. Unless otherwise specified, all x.xxx dimension tolerance is ±0.005 inches. All x.xx dimension
+tolerance is ±0.01 inches.
+
+
+===== PAGE 77 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+77
+0.156 Thru
+0.187 Thru
+2X
+Recommendations:
+0.300 dia. trace keepout
+--all external layers
+0.250 dia. trace keepout
+--all internal layers
+All dimensions in inches.
+1.769
+Slot 1 Connector
+1.950
+2.932
+000875
+Figure 45. Heatsink Support Hole Locations and Sizes
+
+
+===== PAGE 78 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+78
+2.261 (G)
+0.275 DIA (J)
+(0.300 MAX)
+0.240 (K)
+1.769
+0.060 (L)
+0.060 (M)
+0.430 (H)
+000804
+Figure 46. Side View Space Requirements for Boxed Processor Fan/Heatsink Supports
+
+
+===== PAGE 79 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+79
+4.084 (N)
+0.600 (P)
+0.400 (Q)
+000805
+Figure 47. Top View Space Requirements for Boxed Processor Fan/Heatsink Supports
+6.3.
+Boxed Processor
+Requirements
+6.3.1.
+FAN/HEATSINK POWER SUPPLY
+The Boxed processor’s fan/heatsink requires a +12 V
+power supply. A fan power cable will be shipped with
+the Boxed processor to draw power from a power
+header on the motherboard. The power cable
+connector and pinout are shown in Figure 48.
+Motherboards must provide a matched power header
+to support the Boxed processor. Table 29 contains
+specifications for the input and output signals at the
+fan/heatsink connector. The cable length will be 7.0
+inches (±0.25"). The fan/heatsink outputs a SENSE
+signal, which is an open-collector output, that pulses
+at a rate of two pulses per fan revolution. A
+motherboard pull-up resistor provides VOH to match
+the 
+motherboard-mounted 
+fan 
+speed 
+monitor
+requirements, if applicable. Use of the SENSE signal
+is optional. If the SENSE signal is not used, pin 3 of
+the connector should be tied to GND.
+The power header on the baseboard must be
+positioned to allow the fan/heatsink power cable to
+reach it. The power header identification and location
+should 
+be 
+documented 
+in 
+the 
+motherboard
+documentation or on the motherboard. Figure 49
+shows the recommended location of the fan power
+connector relative to the Slot 1 connector. The
+motherboard power header should be positioned
+within 4.75 inches (lateral) of the fan power
+connector.
+
+
+===== PAGE 80 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+80
+Pin
+Signal
+Straight square pin, 3-pin terminal housing with
+polarizing ribs and friction locking ramp.
+0.100" pin pitch, 0.025" square pin width.
+Waldom*/Molex* P/N 22-01-3037 or equivalent.
+Match with straight pin, friction lock header on motherboard
+Waldom/Molex P/N 22-23-2031, AMP* P/N 640456-3,
+or equivalent.
+1
+2
+3
+GND
++12V
+SENSE
+1
+2
+3
+000888
+Figure 48. Boxed Processor Fan/Heatsink Power Cable Connector Description
+Table 29. Fan/Heatsink Power and Signal Specifications
+Description
+Min
+Typ
+Max
++12 V: 12 volt fan power supply
+7 V
+12 V
+13.8 V
+IC: Fan current draw
+100 mA
+SENSE: SENSE frequency (motherboard should pull this
+pin up to appropriate VCC with resistor)
+2 pulses per fan
+revolution
+
+
+===== PAGE 81 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+81
+1.439
+1.449
+r = 4.75 inches
+Fan power connector location
+(1.56 inches above motherboard)
+Motherboard fan power header should be 
+positioned within 4.75 inches of fan power 
+connector (lateral distance)
+Slot 1 Connector
+000913
+Figure 49. Recommended Motherboard Power Header Placement Relative
+to Fan Power Connector and Slot 1
+6.4.
+Thermal Specifications
+This section describes the cooling requirements of
+the fan/heatsink solution utilized by the Boxed
+processor.
+6.4.1.
+BOXED PROCESSOR COOLING
+REQUIREMENTS
+The Boxed processor will be cooled with a
+fan/heatsink. The Boxed processor fan/heatsink will
+keep the thermal plate temperature, TPLATE, within
+the specifications (see Table 20), provided airflow
+through the fan/heatsink is unimpeded and the air
+temperature entering the fan is below 45 °C (see
+Figure 43 for measurement location).
+Airspace is required around the fan to ensure that the
+airflow through the fan/heatsink is not blocked.
+Blocking the airflow to the fan/heatsink reduces the
+cooling efficiency and decreases fan life. Figure 44
+illustrates an acceptable airspace clearance for the
+fan/heatsink.
+
+
+===== PAGE 82 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+82
+7.0.
+ADVANCED FEATURES
+Some 
+nonessential 
+information 
+regarding 
+the
+Pentium II processor is considered Intel confidential
+and proprietary and is not documented in this
+publication. This information is available with the
+appropriate nondisclosure agreements in place.
+Please contact Intel Corporation for details.
+This information is specifically targeted at software
+developers and chipset manufacturers who develop
+the following types of low-level software and
+chipsets:
+•
+operating system kernels
+•
+virtual memory managers
+•
+BIOS and processor test software
+•
+performance monitoring tools
+•
+bus cycle information
+For software developers designing other categories
+of software, this information does not apply. All of the
+required program development details are provided in
+the Intel Architecture Software Developer’s Manual:
+Volume 2, Instruction Set Reference (Order Number
+243191), which is publicly available from the Intel
+Corporation 
+Literature 
+Center. 
+To 
+obtain 
+this
+document, contact the Intel Corporation Literature
+Center at:
+Intel Corporation Literature Center
+P.O. Box 7641
+Mt. Prospect, IL 60056-7641
+or call 1-800-879-4683 and reference
+Order Number 243191
+
+
+===== PAGE 83 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+83
+APPENDIX A
+This appendix provides an alphabetical listing of all
+Pentium II processor signals. The tables at the end of
+this appendix summarize the signals by direction:
+output, input, and I/O.
+A.1
+ALPHABETICAL SIGNALS
+REFERENCE
+A.1.1
+A[35:0]# (I/O)
+The A[35:3]# (Address) signals define a 236-byte
+physical memory address space. When ADS# is
+active, these pins transmit the address of a
+transaction; when ADS# is inactive, these pins
+transmit transaction type information. These signals
+must connect the appropriate pins of all agents on
+the Pentium II processor System Bus. The A[35:24]#
+signals are parity-protected by the AP1# parity
+signal, and the A[23:3]# signals are parity-protected
+by the AP0# parity signal.
+On the active-to-inactive transition of RESET#, the
+processors sample the A[35:3]# pins to determine
+their power-on configuration. See the Pentium® II
+Processor Developer’s Manual (Order Number
+243341) for details.
+A.1.2
+A20M# (I)
+If the A20M# (Address-20 Mask) input signal is
+asserted, the Pentium II processor masks physical
+address bit 20 (A20#) before looking up a line in any
+internal cache and before driving a read/write
+transaction on the bus. Asserting A20M# emulates
+the 8086 processor’s address wrap-around at the
+1-Mbyte boundary. Assertion of A20M# is only
+supported in real mode.
+A20M# is an asynchronous signal. However, to
+ensure recognition of this signal following an I/O write
+instruction, it must be valid along with the TRDY#
+assertion of the corresponding I/O Write bus
+transaction.
+During active RESET#, each processor begins
+sampling the A20M#, IGNNE# , and LINT[1:0] values
+to determine the ratio of core-clock frequency to bus-
+clock frequency. (See Table 1.) On the active-to-
+inactive transition of RESET#, each processor
+latches these signals and freezes the frequency ratio
+internally. System logic must then release these
+signals for normal operation; see Figure 6 for an
+example implementation of this logic.
+A.1.3
+ADS# (I/O)
+The ADS# (Address Strobe) signal is asserted to
+indicate the validity of the transaction address on the
+A[35:3]# pins. All bus agents observe the ADS#
+activation 
+to 
+begin 
+parity 
+checking, 
+protocol
+checking, address decode, internal snoop, or
+deferred reply ID match operations associated with
+the new transaction. This signal must connect the
+appropriate pins on all Pentium II processor System
+Bus agents.
+A.1.4
+AERR# (I/O)
+The AERR# (Address Parity Error) signal is
+observed and driven by all Pentium II processor
+System Bus agents, and if used, must connect the
+appropriate pins on all Pentium II processor System
+Bus agents. AERR# observation is optionally
+enabled during power-on configuration; if enabled, a
+valid assertion of AERR# aborts the current
+transaction.
+If AERR# observation is disabled during power-on
+configuration, a central agent may handle an
+assertion of AERR# as appropriate to the Machine
+Check Architecture (MCA) of the system.
+A.1.5
+AP[1:0]# (I/O)
+The AP[1:0]# (Address Parity) signals are driven by
+the request initiator along with ADS#, A[35:3]#,
+REQ[4:0]#, and RP#. AP1# covers A[35:24]#, and
+
+
+===== PAGE 84 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+84
+AP0# covers A[23:3]#. A correct parity signal is high
+if an even number of covered signals are low and low
+if an odd number of covered signals are low. This
+allows parity to be high when all the covered signals
+are high. AP[1:0]# should connect the appropriate
+pins of all Pentium II processor System Bus agents.
+A.1.6
+BCLK (I)
+The BCLK (Bus Clock) signal determines the bus
+frequency. All Pentium II processor System Bus
+agents must receive this signal to drive their outputs
+and latch their inputs on the BCLK rising edge.
+All external timing parameters are specified with
+respect to the BCLK signal.
+A.1.7
+BERR# (I/O)
+The BERR# (Bus Error) signal is asserted to indicate
+an unrecoverable error without a bus protocol
+violation. It may be driven by all Pentium II processor
+System Bus agents, and must 
+connect 
+the
+appropriate pins of all such agents, if used. However,
+Pentium II processors do not observe assertions of
+the BERR# signal.
+BERR# assertion conditions are configurable at a
+system level. Assertion options are defined by the
+following options:
+•
+Enabled or disabled.
+•
+Asserted optionally for internal errors along with
+IERR#.
+•
+Asserted optionally by the request initiator of a
+bus transaction after it observes an error.
+•
+Asserted by any bus agent when it observes an
+error in a bus transaction.
+A.1.8
+BINIT# (I/O)
+The BINIT# (Bus Initialization) signal may be
+observed and driven by all Pentium II processor
+System Bus agents, and if used must connect the
+appropriate pins of all such agents. If the BINIT#
+driver is enabled during power on configuration,
+BINIT# is asserted to signal any bus condition that
+prevents reliable future information.
+If BINIT# observation is enabled during power-on
+configuration, and BINIT# is sampled asserted, all
+bus state machines are reset and any data which
+was in transit is lost. All agents reset their rotating ID
+for bus arbitration to the state after reset, and internal
+count information is lost. The L1 and L2 caches are
+not affected.
+If BINIT# observation is disabled during power-on
+configuration, a central agent may handle an
+assertion of BINIT# as appropriate to the Machine
+Check Architecture (MCA) of the system.
+A.1.9
+BNR# (I/O)
+The BNR# (Block Next Request) signal is used to
+assert a bus stall by any bus agent who is unable to
+accept new bus transactions. During a bus stall, the
+current 
+bus 
+owner 
+cannot 
+issue 
+any 
+new
+transactions.
+Since multiple agents might need to request a bus
+stall at the same time, BNR# is a wire-OR signal
+which must connect the appropriate pins of all
+Pentium II processor System Bus agents. In order to
+avoid wire-OR glitches associated with simultaneous
+edge transitions driven by multiple drivers, BNR# is
+activated on specific clock edges and sampled on
+specific clock edges.
+A.1.10
+BP[3:2]# (I/O)
+The BP[3:2]# (Breakpoint) signals are outputs from
+the processor that indicate the status of breakpoints.
+A.1.11
+BPM[1:0]# (I/O)
+The BPM[1:0]# (Breakpoint Monitor) signals are
+breakpoint and performance monitor signals. They
+are outputs from the processor which indicate the
+status of breakpoints and programmable counters
+used for monitoring processor performance.
+A.1.12
+BPRI# (I)
+The BPRI# (Bus Priority Request) signal is used to
+arbitrate for ownership of the Pentium II processor
+System Bus. It must connect the appropriate pins of
+
+
+===== PAGE 85 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+85
+all Pentium II processor System Bus agents.
+Observing BPRI# active (as asserted by the priority
+agent) causes all other agents to stop issuing new
+requests, unless such requests are part of an
+ongoing locked operation. The priority agent keeps
+BPRI# asserted until all of its requests are
+completed, then releases the bus by deasserting
+BPRI#.
+A.1.13
+BR0# (I/O), BR1# (I)
+The BR0# and BR1# (Bus Request) pins drive the
+BREQ[1:0]# signals in the system. The BREQ[1:0]#
+signals are interconnected in a rotating manner to
+individual processor pins. Table 30 gives the rotating
+interconnect between the processor and bus signals.
+Table 30. BR0# (I/O) and BR1# Signals
+Rotating Interconnect
+Bus Signal
+Agent 0 Pins
+Agent 1 Pins
+BREQ0#
+BR0#
+BR1#
+BREQ1#
+BR1#
+BR0#
+During power-up configuration, the central agent
+must assert the BR0# bus signal. All symmetric
+agents sample their BR[1:0]# pins on active-to-
+inactive transition of RESET#. The pin on which the
+agent samples an active level determines its agent
+ID. All agents then configure their pins to match the
+appropriate bus signal protocol, as shown in
+Table 31.
+Table 31. BR[1:0]# Signal Agent IDs
+Pin Sampled Active in RESET#
+Agent ID
+BR0#
+0
+BR1#
+1
+A.1.14
+BSEL# (I/O)
+The BSEL# (Bus Select) signal is used for future
+Slot 1 processors and motherboards. This signal
+must be tied to GND for proper processor operation.
+A.1.15
+D[63:0]# (I/O)
+The D[63:0]# (Data) signals are the data signals.
+These signals provide a 64-bit data path between the
+Pentium II processor System Bus agents, and must
+connect the appropriate pins on all such agents. The
+data driver asserts DRDY# to indicate a valid data
+transfer.
+A.1.16
+DBSY# (I/O)
+The DBSY# (Data Bus Busy) signal is asserted by
+the agent responsible for driving data on the
+Pentium II processor System Bus to indicate that the
+data bus is in use. The data bus is released after
+DBSY# is deasserted. This signal must connect the
+appropriate pins on all Pentium II processor System
+Bus agents.
+A.1.17
+DEFER# (I)
+The DEFER# signal is asserted by an agent to
+indicate that a transaction cannot be guaranteed in-
+order completion. Assertion of DEFER# is normally
+the responsibility of the addressed memory or I/O
+agent. This signal must connect the appropriate pins
+of all Pentium II processor System Bus agents.
+A.1.18
+DEP[7:0]# (I/O)
+The DEP[7:0]# (Data Bus ECC Protection) signals
+provide optional ECC protection for the data bus.
+They are driven by the agent responsible for driving
+D[63:0]#, and must connect the appropriate pins of
+all Pentium II processor System Bus agents which
+use them. The DEP[7:0]# signals are enabled or
+disabled for ECC protection during power on
+configuration.
+A.1.19
+DRDY# (I/O)
+The DRDY# (Data Ready) signal is asserted by the
+data driver on each data transfer, indicating valid
+data on the data bus. In a multi-cycle data transfer,
+DRDY# may be deasserted to insert idle clocks. This
+signal must connect the appropriate pins of all
+Pentium II processor System Bus agents.
+
+
+===== PAGE 86 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+86
+A.1.20
+EMI
+EMI pins should be connected to motherboard
+ground and/or to chassis ground through zero ohm
+(0 Ω) resistors. The zero ohm resistors should be
+placed in close proximity to the Slot 1 connector. The
+path to chassis ground should be short in length and
+have a low impedance.
+A.1.21
+FERR# (O)
+The FERR# (Floating-point Error) signal is asserted
+when the processor detects an unmasked floating-
+point error. FERR# is similar to the ERROR# signal
+on the Intel 387 coprocessor, and is included for
+compatibility with systems using MS-DOS*-type
+floating-point error reporting.
+A.1.22
+FLUSH# (I)
+When the FLUSH# input signal is asserted,
+processors write back all data in the Modified state
+from their internal caches and invalidate all internal
+cache lines. At the completion of this operation, the
+processor issues a Flush Acknowledge transaction.
+The processor does not cache any new data while
+the FLUSH# signal remains asserted.
+FLUSH# is an asynchronous signal. However, to
+ensure recognition of this signal following an I/O write
+instruction, it must be valid along with the TRDY#
+assertion of the corresponding I/O Write bus
+transaction.
+On the active-to-inactive transition of RESET#, each
+processor samples FLUSH# to determine its power-
+on configuration. See the Pentium® II Processor
+Developer’s Manual (Order Number 243341) for
+details.
+A.1.23
+FRCERR (I/O)
+If two processors are configured in a Functional
+Redundancy Checking (FRC) master/checker pair,
+as a single “logical” processor, the FRCERR
+(Functional Redundancy Checking Error) signal is
+asserted by the checker if a mismatch is detected
+between the internally sampled outputs and the
+master’s outputs. The checker’s FRCERR output pin
+must be connected with the master’s FRCERR input
+pin in this configuration.
+For point-to-point connections, the checker always
+compares against the master’s outputs. For bussed
+single-driver signals, the checker compares against
+the signal when the master is the only allowed driver.
+For bussed multiple-driver wired-OR signals, the
+checker compares against the signal only if the
+master is expected to drive the signal low.
+When a processor is configured as an FRC checker,
+FRCERR is toggled during its reset action.
+A checker asserts FRCERR for approximately
+1 second after the active-to-inactive transition of
+RESET# if it executes its Built-In Self-Test (BIST).
+When BIST execution completes, the checker
+processor deasserts FRCERR if BIST completed
+successfully, and continues to assert FRCERR if
+BIST fails. If the checker processor does not execute
+the BIST action, then it keeps FRCERR asserted for
+approximately 20 clocks and then deasserts it.
+All 
+asynchronous 
+signals 
+must 
+be 
+externally
+synchronized to BCLK by system logic during FRC
+mode operation.
+A.1.24
+HIT# (I/O), HITM# (I/O)
+The HIT# (Snoop Hit) and HITM# (Hit Modified)
+signals convey transaction snoop operation results,
+and must connect the appropriate pins of all
+Pentium II processor System Bus agents. Any such
+agent may assert both HIT# and HITM# together to
+indicate that it requires a snoop stall, which can be
+continued by reasserting HIT# and HITM# together.
+A.1.25
+IERR# (O)
+The IERR# (Internal Error) signal is asserted by a
+processor as the result of an internal error. Assertion
+of IERR# is usually accompanied by a SHUTDOWN
+transaction on the Pentium II processor System Bus.
+This transaction may optionally be converted to an
+external error signal (e.g., NMI) by system core logic.
+The processor will keep IERR# asserted until it is
+handled in software, or with the assertion of
+RESET#, BINIT#, or INIT#.
+
+
+===== PAGE 87 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+87
+A.1.26
+IGNNE# (I)
+The IGNNE# (Ignore Numeric Error) signal is
+asserted to force the processor to ignore a numeric
+error and continue to execute noncontrol floating-
+point instructions. If IGNNE# is deasserted, the
+processor generates an exception on a noncontrol
+floating-point instruction if a previous floating-point
+instruction caused an error. IGNNE# has no effect
+when the NE bit in control register 0 is set.
+IGNNE# is an asynchronous signal. However, to
+ensure recognition of this signal following an I/O write
+instruction, it must be valid along with the TRDY#
+assertion of the corresponding I/O Write bus
+transaction.
+During active RESET#, the Pentium II processor
+begins sampling the A20M#, IGNNE#, and LINT[1:0]
+values to determine the ratio of core-clock frequency
+to bus-clock frequency. (See Table 1.) On the active-
+to-inactive transition of RESET#, the Pentium II
+processor latches these signals and freezes the
+frequency ratio internally. System logic must then
+release these signals for normal operation; Figure 6
+for an example implementation of this logic.
+A.1.27
+INIT# (I)
+The INIT# (Initialization) signal, when asserted,
+resets integer registers inside all processors without
+affecting their internal (L1 or L2) caches or floating-
+point 
+registers. 
+Each 
+processor 
+then 
+begins
+execution at the power-on reset vector configured
+during 
+power-on 
+configuration. 
+The 
+processor
+continues to handle snoop requests during INIT#
+assertion. INIT# is an asynchronous signal and must
+connect the appropriate pins of all Pentium II
+processor System Bus agents.
+If INIT# is sampled active on the active to inactive
+transition of RESET#, then the processor executes
+its Built-In Self-Test (BIST).
+A.1.28
+LINT[1:0] (I)
+The LINT[1:0] (Local APIC Interrupt) signals must
+connect the appropriate pins of all APIC Bus agents,
+including all processors and the core logic or I/O
+APIC component. When the APIC is disabled, the
+LINT0 signal becomes INTR, a maskable interrupt
+request signal, and LINT1 becomes NMI, a
+nonmaskable interrupt. INTR and NMI are backward
+compatible with the signals of those names on the
+Pentium processor. Both signals are asynchronous.
+Both of these signals must be software configured
+via BIOS programming of the APIC register space to
+be used either as NMI/INTR or LINT[1:0]. Because
+the APIC is enabled by default after reset, operation
+of these pins as LINT[1:0] is the default configuration.
+During active RESET#, the Pentium II processor
+begins sampling the A20M#, IGNNE#, and LINT[1:0]
+values to determine the ratio of core-clock frequency
+to bus-clock frequency. (See Table 1.) On the active-
+to-inactive transition of RESET#, the Pentium II
+processor latches these signals and freezes the
+frequency ratio internally. System logic must then
+release these signals for normal operation; see
+Figure 6 for an example implementation of this logic.
+A.1.29
+LOCK# (I/O)
+The LOCK# signal indicates to the system that a
+transaction must occur atomically. This signal must
+connect the appropriate pins of all Pentium II
+processor System Bus agents. For a locked
+sequence of transactions, LOCK# is asserted from
+the beginning of the first transaction end of the last
+transaction.
+When the priority agent asserts BPRI# to arbitrate for
+ownership of the Pentium II processor System Bus, it
+will wait until it observes LOCK# deasserted. This
+enables symmetric agents to retain ownership of the
+Pentium II processor System Bus throughout the bus
+locked operation and ensure the atomicity of lock.
+A.1.30
+PICCLK (I)
+The PICCLK (APIC Clock) signal is an input clock to
+the processor and core logic or I/O APIC which is
+required for operation of all processors, core logic,
+and I/O APIC components on the APIC bus. During
+FRC mode operation, PICCLK must be ¼ of (and
+synchronous to) BCLK.
+
+
+===== PAGE 88 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+88
+A.1.31
+PICD[1:0] (I/O)
+The PICD[1:0] (APIC Data) signals are used for bi-
+directional serial message passing on the APIC bus,
+and must connect the appropriate pins of all
+processors and core logic or I/O APIC components
+on the APIC bus.
+A.1.32
+PM[1:0]# (O)
+The PM[1:0]# (Performance Monitor) signals are
+outputs from the processor which indicate the status
+of programmable counters used for monitoring
+processor performance.
+A.1.33
+PRDY# (O)
+The PRDY (Probe Ready) signal is a processor
+output used by debug tools to determine processor
+debug readiness. See the Pentium® II Processor
+Developer’s Manual (Order Number 243341) for
+more information on this signal.
+A.1.34
+PREQ# (I)
+The PREQ# (Probe Request) signal is used by
+debug tools to request debug operation of the
+processors. 
+See 
+the 
+Pentium® II 
+Processor
+Developer’s Manual (Order Number 243341) for
+more information on this signal.
+A.1.35
+PWRGOOD (I)
+The PWRGOOD (Power Good) signal is a 2.5 V
+tolerant processor input. The processor requires this
+signal to be a clean indication that the clocks and
+power supplies (VccCORE, etc.) are stable and within
+their specifications. Clean implies that the signal will
+remain low (capable of sinking leakage current),
+without glitches, from the time that the power
+supplies are turned on until they come within
+specification. The signal must then transition
+monotonically to a high (2.5 V) state. Figure 50
+illustrates the relationship of PWRGOOD to other
+system signals. PWRGOOD can be driven inactive
+at any time, but clocks and power must again be
+stable 
+before 
+a 
+subsequent 
+rising 
+edge 
+of
+PWRGOOD. It must also meet the minimum pulse
+width specification in Table 13 and be followed by a
+1 ms RESET# pulse.
+The PWRGOOD signal must be supplied to the
+processor as it is used to protect internal circuits
+against voltage sequencing issues. The PWRGOOD
+signal does not need to be synchronized for FRC
+operation. It should be driven high throughout
+boundary scan operation.
+A.1.36
+REQ[4:0]# (I/O)
+The REQ[4:0]# (Request Command) signals must
+connect the appropriate pins of all Pentium II
+processor System Bus agents. They are asserted by
+the current bus owner over two clock cycles to define
+the currently active transaction type.
+A.1.37
+RESET# (I)
+Asserting the RESET# signal resets all processors to
+known states and invalidates their L1 and L2 caches
+without writing back any of their contents. RESET#
+must remain active for one microsecond for a “warm”
+reset; for a power-on reset, RESET# must stay
+active for at least one millisecond after VccCORE and
+CLK have reached their proper specifications. On
+observing active RESET#, all Pentium II processor
+System Bus agents will deassert their outputs within
+two clocks.
+A number of bus signals are sampled at the active-
+to-inactive transition of RESET# for power-on
+configuration. 
+These 
+configuration 
+options 
+are
+described in the Pentium® II Processor Developer’s
+Manual (Order Number 243341).
+The processor may have its outputs tristated via
+power-on configuration. Otherwise, if INIT# is
+sampled active during the active-to-inactive transition
+of RESET#, the processor will execute its Built-In
+Self-Test (BIST). Whether or not BIST is executed,
+the processor will begin program execution at the
+reset-vector (default 0_FFFF_FFF0h). RESET# must
+connect the appropriate pins of all Pentium II
+processor System Bus agents.
+
+
+===== PAGE 89 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+89
+BCLK
+PWRGOOD
+RESET#
+Clock Ratio
+1 ms
+VCC L2
+V             ,
+CORE
+CC
+000760b
+Figure 50. PWRGOOD Relationship at Power-On
+A.1.38
+RP# (I/O)
+The RP# (Request Parity) signal is driven by the
+request initiator, and provides parity protection on
+ADS# 
+and 
+REQ[4:0]#. 
+It 
+must 
+connect 
+the
+appropriate pins of all Pentium II processor System
+Bus agents.
+A correct parity signal is high if an even number of
+covered signals are low and low if an odd number of
+covered signals are low. This definition allows parity
+to be high when all covered signals are high.
+A.1.39
+RS[2:0]# (I)
+The RS[2:0]# (Response Status) signals are driven
+by the response agent (the agent responsible for
+completion of the current transaction), and must
+connect the appropriate pins of all Pentium II
+processor System Bus agents.
+A.1.40
+RSP# (I)
+The RSP# (Response Parity) signal is driven by the
+response agent (the agent responsible for completion
+of the current transaction) during assertion of
+RS[2:0]#, the signals for which RSP# provides parity
+protection. It must connect the appropriate pins of all
+Pentium II processor System Bus agents.
+A correct parity signal is high if an even number of
+covered signals are low and low if an odd number of
+covered signals are low. While RS[2:0]# = 000,
+RSP# is also high, since this indicates it is not being
+driven by any agent guaranteeing correct parity.
+A.1.41
+SLOTOCC# (O)
+The SLOTOCC# signal is defined to allow a system
+design to detect the presence of a terminator card or
+processor in a Pentium II connector. Combined with
+the VID combination of VID[4:0] = 11111 (see
+Section 2.6.), a system can determine if a Pentium II
+connector is occupied, and whether a processor core
+is present. See Table 32 for states and values for
+determining the type of package in the Slot 1
+connector.
+Table 32. Slot 1 Occupation Truth Table
+Signal
+Value
+Status
+SLOTOCC#
+VID[4:0]
+0
+Anything
+other than
+‘11111’
+Processor with core in
+Slot 1 connector.
+SLOTOCC#
+VID[4:0]
+0
+11111
+Terminator cartridge in
+Slot 1 connector
+(i.e., no core present).
+SLOTOCC#
+VID[4:0]
+1
+Any value
+Slot 1 connector not
+occupied.
+
+
+===== PAGE 90 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+90
+A.1.42
+SLP# (I)
+The SLP# (Sleep) signal, when asserted in Stop
+Grant state, causes processors to enter the Sleep
+state. During Sleep state, the processor stops
+providing internal clock signals to all units, leaving
+only the Phase-Locked Loop (PLL) still operating.
+Processors in this state will not recognize snoops or
+interrupts. The processor 
+will 
+recognize 
+only
+assertions of the SLP#, STPCLK#, and RESET#
+signals while in Sleep state. If SLP# is deasserted,
+the processor exits Sleep state and returns to Stop
+Grant state, restarting its internal clock signals to the
+bus and APIC processor core units.
+A.1.43
+SMI# (I)
+The SMI# (System Management Interrupt) signal is
+asserted asynchronously by system logic. On
+accepting 
+a 
+System 
+Management 
+Interrupt,
+processors save the current state and enter System
+Management Mode (SMM). An SMI Acknowledge
+transaction is issued, and the processor begins
+program execution from the SMM handler.
+A.1.44
+STPCLK# (I)
+The STPCLK# (Stop Clock) signal, when asserted,
+causes processors to enter a low power Stop Grant
+state. 
+The 
+processor 
+issues 
+a 
+Stop 
+Grant
+Acknowledge transaction, and 
+stops 
+providing
+internal clock signals to all processor core units
+except the bus and APIC units. The processor
+continues to snoop bus transactions and service
+interrupts while in Stop Grant state. When STPCLK#
+is deasserted, the processor restarts its internal
+clock to all units and resumes execution. The
+assertion of STPCLK# has no effect on the bus
+clock; STPCLK# is an asynchronous input.
+A.1.454
+TCK (I)
+The TCK (Test Clock) signal provides the clock input
+for the Pentium II processor Test Bus (also known as
+the Test Access Port).
+A.1.46
+TDI (I)
+The TDI (Test Data In) signal transfers serial test
+data into the Pentium II processor. TDI provides the
+serial input needed for JTAG support.
+A.1.47
+TDO (O)
+The TDO (Test Data Out) signal transfers serial test
+data out of the Pentium II processor. TDO provides
+the serial output needed for JTAG support.
+A.1.48
+TESTHI (I)
+The TESTHI signal must be connected to a 2.5 V
+power source through a 1 –10 kΩ resistor for proper
+processor operation.
+A.1.49
+THERMTRIP# (O)
+The processor protects itself from catastrophic
+overheating by use of an internal thermal sensor.
+This sensor is set well above the normal operating
+temperature to ensure that there are no false trips.
+The processor will stop all execution when the
+junction temperature exceeds approximately 130 °C.
+This is signaled to the system by the THERMTRIP#
+(Thermal Trip) pin. Once activated, the signal
+remains latched, and the processor stopped, until
+RESET# goes active. There is no hysteresis built into
+the thermal sensor itself; as long as the die
+temperature drops below the trip level, a RESET#
+pulse will reset the processor and execution will
+continue. If the temperature has not dropped below
+the trip level, the processor will continue to drive
+THERMTRIP# and remain stopped.
+A.1.50
+TMS (I)
+The TMS (Test Mode Select) signal is a JTAG
+support signal used by debug tools.
+A.1.51
+TRDY# (I)
+The TRDY# (Target Ready) signal is asserted by the
+target to indicate that it is ready to receive a write or
+implicit write back data transfer. TRDY# must
+connect the appropriate pins of all Pentium II
+processor System Bus agents.
+A.1.52
+TRST# (I)
+The TRST# (Test Reset) signal resets the Test
+Access Port (TAP) logic. TRST# must be driven low
+during power on reset. This can be accomplished
+with a 680 Ω pull-down resistor.
+
+
+===== PAGE 91 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+91
+A.1.53
+VID[4:0] (O)
+The VID[4:0] (Voltage ID) pins can be used to
+support 
+automatic 
+selection 
+of 
+power 
+supply
+voltages. These pins are not signals, but are either
+an open circuit or a short circuit to VSS on the
+processor. The combination of opens and shorts
+defines the voltage required by the processor. The
+VID pins are needed to cleanly support voltage
+specification variations on Pentium II processors.
+See Table 2 for definitions of these pins. The power
+supply must supply the voltage that is requested by
+these pins, or disable itself.
+A.2
+SIGNAL SUMMARIES
+The following tables list attributes of the Pentium II processor output, input and I/O signals.
+Table 33. Output Signals1
+Name
+Active Level
+Clock
+Signal Group
+FERR#
+Low
+Asynch
+CMOS Output
+IERR#
+Low
+Asynch
+CMOS Output
+PRDY#
+Low
+BCLK
+GTL+ Output
+SLOTOCC#
+Low
+Asynch
+Power/Other
+TDO
+High
+TCK
+JTAG Output
+THERMTRIP#
+Low
+Asynch
+CMOS Output
+VID[4:0]
+High
+Asynch
+Power/Other
+NOTE:
+1.
+Outputs are not checked in FRC mode.
+
+
+===== PAGE 92 =====
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ E
+92
+Table 34. Input Signals1
+Name
+Active Level
+Clock
+Signal Group
+Qualified
+A20M#
+Low
+Asynch
+CMOS Input
+Always2
+BPRI#
+Low
+BCLK
+GTL+ Input
+Always
+BR1#
+Low
+BCLK
+GTL+ Input
+Always
+BCLK
+High
+—
+Clock
+Always
+DEFER#
+Low
+BCLK
+GTL+ Input
+Always
+FLUSH#
+Low
+Asynch
+CMOS Input
+Always2
+IGNNE#
+Low
+Asynch
+CMOS Input
+Always2
+INIT#
+Low
+Asynch
+CMOS Input
+Always2
+INTR
+High
+Asynch
+CMOS Input
+APIC disabled mode
+LINT[1:0]
+High
+Asynch
+CMOS Input
+APIC enabled mode
+NMI
+High
+Asynch
+CMOS Input
+APIC disabled mode
+PICCLK
+High
+—
+APIC Clock
+Always
+PREQ#
+Low
+Asynch
+CMOS Input
+Always
+PWRGOOD
+High
+Asynch
+CMOS Input
+Always
+RESET#
+Low
+BCLK
+GTL+ Input
+Always
+RS[2:0]#
+Low
+BCLK
+GTL+ Input
+Always
+RSP#
+Low
+BCLK
+GTL+ Input
+Always
+SLP#
+Low
+Asynch
+CMOS Input
+During Stop Grant state
+SMI#
+Low
+Asynch
+CMOS Input
+STPCLK#
+Low
+Asynch
+CMOS Input
+TCK
+High
+—
+JTAG Input
+TDI
+High
+TCK
+JTAG Input
+TESTHI
+High
+Asynch
+Power/Other
+Always
+TMS
+High
+TCK
+JTAG Input
+TRST#
+Low
+Asynch
+JTAG Input
+TRDY#
+Low
+BCLK
+GTL+ Input
+NOTES:
+1.
+All asynchronous input signals except PWRGOOD must be synchronous in FRC.
+2.
+Synchronous assertion with active TDRY# ensures synchronization.
+
+
+===== PAGE 93 =====
+E
+PENTIUM® II PROCESSOR AT 233 MHZ, 266 MHZ, 300 MHZ, AND 333 MHZ
+93
+Table 35. Input/Output Signals (Single Driver)
+Name
+Active Level
+Clock
+Signal Group
+Qualified
+A[35:3]#
+Low
+BCLK
+GTL+ I/O
+ADS#, ADS#+1
+ADS#
+Low
+BCLK
+GTL+ I/O
+Always
+AP[1:0]#
+Low
+BCLK
+GTL+ I/O
+ADS#, ADS#+1
+BR0#
+Low
+BCLK
+GTL+ I/O
+Always
+BP[3:2]#
+Low
+BCLK
+GTL+ I/O
+Always
+BPM[1:0]#
+Low
+BCLK
+GTL+ I/O
+Always
+BSEL#
+Low
+Asynch
+Power/Other
+Always
+D[63:0]#
+Low
+BCLK
+GTL+ I/O
+DRDY#
+DBSY#
+Low
+BCLK
+GTL+ I/O
+Always
+DEP[7:0]#
+Low
+BCLK
+GTL+ I/O
+DRDY#
+DRDY#
+Low
+BCLK
+GTL+ I/O
+Always
+FRCERR
+High
+BCLK
+GTL+ I/O
+Always
+LOCK#
+Low
+BCLK
+GTL+ I/O
+Always
+REQ[4:0]#
+Low
+BCLK
+GTL+ I/O
+ADS#, ADS#+1
+RP#
+Low
+BCLK
+GTL+ I/O
+ADS#, ADS#+1
+Table 36. Input/Output Signals (Multiple Driver)
+Name
+Active Level
+Clock
+Signal Group
+Qualified
+AERR#
+Low
+BCLK
+GTL+ I/O
+ADS#+3
+BERR#
+Low
+BCLK
+GTL+ I/O
+Always
+BNR#
+Low
+BCLK
+GTL+ I/O
+Always
+BINIT#
+Low
+BCLK
+GTL+ I/O
+Always
+HIT#
+Low
+BCLK
+GTL+ I/O
+Always
+HITM#
+Low
+BCLK
+GTL+ I/O
+Always
+PICD[1:0]
+High
+PICCLK
+APIC I/O
+Always
+
+
+===== PAGE 94 =====
+UNITED STATES, Intel Corporation
+2200 Mission College Blvd., P.O. Box 58119, Santa Clara, CA  95052-8119
+Tel: +1 408 765-8080
+JAPAN, Intel Japan K.K.
+5-6 Tokodai, Tsukuba-shi, Ibaraki-ken  300-26
+Tel: + 81-29847-8522
+FRANCE, Intel Corporation S.A.R.L.
+1, Quai de Grenelle, 75015  Paris
+Tel: +33 1-45717171
+UNITED KINGDOM, Intel Corporation (U.K.) Ltd.
+Pipers Way, Swindon, Wiltshire, England SN3 1RJ
+Tel: +44 1-793-641440
+GERMANY, Intel GmbH
+Dornacher Strasse 1
+85622 Feldkirchen/ Muenchen
+Tel: +49 89/99143-0
+HONG KONG, Intel Semiconductor Ltd.
+32/F Two Pacific Place, 88 Queensway, Central
+Tel: +852 2844-4555
+CANADA, Intel Semiconductor of Canada, Ltd.
+190 Attwell Drive, Suite 500
+Rexdale, Ontario  M9W 6H8
+Tel: +416 675-2438
