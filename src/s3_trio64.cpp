@@ -805,11 +805,14 @@ static u8 rotate_right8(u8 value, unsigned count) {
     return u8((value >> count) | (value << (8 - count)));
 }
 
-static u32 aperture_offset(u32 off) {
-    off &= 0x1FFFFu;
-    if (off >= 0x18000u) return (off - 0x18000u) & 0x7FFFu; // B8000 text
-    if (off >= 0x10000u) return (off - 0x10000u) & 0x7FFFu; // B0000 mono text
-    return off & 0xFFFFu;                                   // A0000 graphics
+static u32 aperture_offset(u32 off, u8 gr6) {
+    // GR6 selects which part of A0000-BFFFF the VGA responds to.  Reject
+    // unselected addresses before they can alias VRAM or load the latches.
+    constexpr u32 starts[] = {0, 0, 0x10000, 0x18000};
+    constexpr u32 sizes[] = {0x20000, 0x10000, 0x8000, 0x8000};
+    const u32 map = (gr6 >> 2) & 3u;
+    if (off < starts[map] || off - starts[map] >= sizes[map]) return 0xffffffffu;
+    return off - starts[map];
 }
 
 u32 S3Trio64::display_start_word() const {
@@ -994,7 +997,9 @@ void S3Trio64::update_timing() const {
 void S3Trio64::legacy_write(u32 off, u8 data) {
     if (!(misc_output_ & 0x02)) return;
     if (vram_.empty()) return;
-    const u32 eff = aperture_offset(off);
+    // S3 CR31.3 overrides GR6 with a fixed 64 KiB window at A0000h.
+    const u32 eff = aperture_offset(off, (crtc_[0x31] & 0x08) ? 0x04 : gfx_[0x06]);
+    if (eff == 0xffffffffu) return;
     const u32 mask = pow2_mask(u32(vram_.size()));
     const bool chain4 = (seq_[0x04] & 0x08) != 0;
     const bool seq_mode = (seq_[0x04] & 0x04) != 0;
@@ -1093,7 +1098,8 @@ void S3Trio64::legacy_write(u32 off, u8 data) {
 
 u8 S3Trio64::legacy_read(u32 off) const {
     if (!(misc_output_ & 0x02) || vram_.empty()) return 0xFF;
-    const u32 eff = aperture_offset(off);
+    const u32 eff = aperture_offset(off, (crtc_[0x31] & 0x08) ? 0x04 : gfx_[0x06]);
+    if (eff == 0xffffffffu) return 0xff;
     const u32 mask = pow2_mask(u32(vram_.size()));
     auto read_plane = [&](int p, u32 poff) -> u8 {
         const u32 addr = mask ? ((cpu_base() + u32(p) * kVramPlaneSize + poff) & mask)

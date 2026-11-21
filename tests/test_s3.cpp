@@ -309,12 +309,14 @@ TEST(s3_text_mode_plane2_font) {
     f.s3.set_text_mode();
     f.dac(7, 63, 63, 63);
     // Load a custom 8x16 glyph for 'A' into plane 2, offset 0x41*32.
+    f.gfx(0x06, 0x04);                 // enable the A0000 font-access aperture
     f.seq(0x02, 0x04);
     for (int row = 0; row < 16; ++row) {
         const u32 off = u32(0x41 * 32 + row);
         f.bus.write8(0xA0000 + off * 2, u8(row == 0 ? 0x80 : 0x00));
     }
     f.seq(0x02, 0x03);
+    f.gfx(0x06, 0x0e);                 // restore B8000 text access
     f.bus.write8(0xB8000, 'A');
     f.bus.write8(0xB8001, 0x07);
     CHECK_EQ(f.s3.pixel(0, 0), 0x00FFFFFFu);
@@ -627,6 +629,114 @@ TEST(s3_vga_raster_ops) {
     f.gfx(0x05, 0x00);
     f.gfx(0x07, 0x00);
     f.gfx(0x02, 0x00);
+}
+
+TEST(s3_graphics_aperture_selection_blocks_unmapped_aliases) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.s3.write_vram8(0, 0x5a);
+    f.s3.write_vram8(0x10000, 0x6b);
+    f.s3.write_vram8(0x18000, 0x7c);
+
+    // A0000-AFFFF only: B0000/B8000 must not alias framebuffer byte zero.
+    f.gfx(0x06, 0x05);
+    f.bus.write8(0xA0000, 0x11);
+    CHECK_EQ(f.s3.read_vram8(0), 0x11);
+    f.bus.write8(0xB0000, 0x22);
+    f.bus.write8(0xB8000, 0x33);
+    CHECK_EQ(f.s3.read_vram8(0), 0x11);
+    CHECK_EQ(f.s3.read_vram8(0x10000), 0x6b);
+    CHECK_EQ(f.s3.read_vram8(0x18000), 0x7c);
+    CHECK_EQ(f.bus.read8(0xB0000), 0xff);
+
+    // B0000-B7FFF only.
+    f.gfx(0x06, 0x09);
+    f.bus.write8(0xB0000, 0x44);
+    CHECK_EQ(f.s3.read_vram8(0), 0x44);
+    CHECK_EQ(f.bus.read8(0xA0000), 0xff);
+    CHECK_EQ(f.bus.read8(0xB8000), 0xff);
+
+    // B8000-BFFFF only.
+    f.gfx(0x06, 0x0d);
+    f.bus.write8(0xB8000, 0x55);
+    CHECK_EQ(f.s3.read_vram8(0), 0x55);
+    CHECK_EQ(f.bus.read8(0xB0000), 0xff);
+    CHECK_EQ(f.bus.read8(0xA0000), 0xff);
+
+    // A0000-BFFFF spans all three regions in one contiguous 128 KiB aperture.
+    f.gfx(0x06, 0x01);
+    f.bus.write8(0xA0000 + 0x10000, 0x66);
+    f.bus.write8(0xA0000 + 0x18000, 0x77);
+    CHECK_EQ(f.s3.read_vram8(0x10000), 0x66);
+    CHECK_EQ(f.s3.read_vram8(0x18000), 0x77);
+}
+
+TEST(s3_unmapped_aperture_reads_leave_vga_latches_unchanged) {
+    Fix f;
+    f.mode12h();
+    f.seq(0x02, 0x0f);
+    f.bus.write8(0xA0000, 0x12);
+    f.bus.write8(0xA0001, 0x34);
+    (void)f.bus.read8(0xA0000); // load per-plane latches
+
+    f.gfx(0x06, 0x09); // only B0000-B7FFF is decoded
+    CHECK_EQ(f.bus.read8(0xA0001), 0xff);
+    f.gfx(0x06, 0x05); // restore A0000 and overwrite from old latch
+    f.gfx(0x05, 0x01); // write mode 1 copies the latches
+    f.bus.write8(0xA0000, 0x00);
+    CHECK_EQ(f.s3.read_vram8(0), 0x12);
+    CHECK_EQ(f.s3.read_vram8(0x10000), 0x12);
+    f.gfx(0x05, 0x00);
+}
+
+TEST(s3_unmapped_access_straddling_aperture_boundary_is_byte_decoded) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.gfx(0x06, 0x05); // A0000-AFFFF
+    f.bus.write16(0xAFFFF, 0xbbaa);
+    CHECK_EQ(f.s3.read_vram8(0x0ffff), 0xaa);
+    CHECK_EQ(f.s3.read_vram8(0), 0x00); // B0000 byte is outside the aperture
+    CHECK_EQ(f.bus.read16(0xAFFFF), 0xffaa);
+    f.bus.write32(0xAFFFE, 0x44332211);
+    CHECK_EQ(f.bus.read32(0xAFFFE), 0xffff2211u);
+    CHECK_EQ(f.s3.read_vram8(0), 0x00);
+    CHECK_EQ(f.s3.read_vram8(1), 0x00);
+}
+
+TEST(s3_enhanced_mapping_overrides_gr6_with_a0000_only) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.unlock();
+    f.crtc(0x31, 0x08); // ENH MAP overrides GR6, independently of bank enable
+    for (u8 map = 0; map < 4; ++map) {
+        f.gfx(0x06, u8((map << 2) | 1));
+        f.bus.write8(0xA0000, 0x5a);
+        CHECK_EQ(f.bus.read8(0xA0000), 0x5a);
+        f.bus.write32(0xB0000, 0x07000700);
+        f.bus.write16(0xB8000, 0x0f31);
+        CHECK_EQ(f.bus.read32(0xB0000), 0xffffffffu);
+        CHECK_EQ(f.bus.read16(0xB8000), 0xffff);
+        CHECK_EQ(f.s3.read_vram8(0), 0x5a);
+    }
+    f.crtc(0x31, 0x00); // GR6=0Dh selects B8000 again
+    CHECK_EQ(f.bus.read8(0xA0000), 0xff);
+    CHECK_EQ(f.bus.read8(0xB8000), 0x5a);
+}
+
+TEST(s3_megafortress_mono_text_clear_preserves_graphics) {
+    Fix f;
+    f.s3.set_mode13h();
+    for (u32 i = 0; i < 64000; ++i) f.bus.write8(0xA0000 + i, u8(i * 13));
+    const auto frame = f.s3.frame();
+    const std::vector<u32> before(frame.pixels, frame.pixels + frame.width * frame.height);
+    // MEGA writes 2000 monochrome text cells after a menu click, then prints
+    // numbers there.  GR6=05h means none of those writes belong to this VGA.
+    for (u32 cell = 0; cell < 2000; ++cell) f.bus.write16(0xB0000 + cell * 2, 0x0700);
+    f.bus.write32(0xB0000, 0x0f370f31);
+    f.bus.write32(0xB0004, 0x0f330f35);
+    for (u32 i = 0; i < 64000; ++i) CHECK_EQ(f.s3.read_vram8(i), u8(i * 13));
+    const auto after = f.s3.frame();
+    CHECK(std::equal(before.begin(), before.end(), after.pixels));
 }
 
 // ---------------------------------------------------------------------------
