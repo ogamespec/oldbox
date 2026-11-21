@@ -88,7 +88,7 @@ private:
         float phase_inc = 0.0f;    // phase cycles per output sample
 
         // Runtime envelope and phase state.
-        float eg_att = 511.0f;
+        double eg_att = 511.0;
         EgState eg_state = EgState::off;
         bool key = false;
         float phase = 0.0f;        // cycles, 0..1

@@ -114,3 +114,26 @@ TEST(opl_envelope_held_off_preserves_phase_until_retrigger) {
     CHECK(audible(expected));
     CHECK(render(silent, 512) == expected);
 }
+
+TEST(opl_envelope_slow_release_does_not_stall_at_sustain) {
+    Opl3 opl;
+    write(opl, 0x105, 1);
+    write(opl, 0x20, 0x01);
+    write(opl, 0x40, 0x3f);
+    write(opl, 0x23, 0x21); // sustained square carrier
+    write(opl, 0x43, 0x00);
+    write(opl, 0x63, 0xff); // instant attack, fast decay
+    write(opl, 0x83, 0xc1); // sustain at 36 dB, slowest nonzero RR
+    write(opl, 0xe3, 0x06);
+    write(opl, 0xc0, 0x31);
+    write(opl, 0xa0, 0x80);
+    write(opl, 0xb0, 0x20); // block 0, key on
+    (void)render(opl, 4410);
+    const auto held = render(opl, 256);
+    const int initial = std::abs(int(held[0]));
+    CHECK(initial > 10);
+    write(opl, 0xb0, 0x00);
+    (void)render(opl, 44100 * 8);
+    const auto released = render(opl, 256);
+    CHECK(std::abs(int(released[0])) < initial);
+}

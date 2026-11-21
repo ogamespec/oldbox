@@ -85,8 +85,12 @@ echo.
 echo   Boot order: A: = FreeDOS (HIMEMX, DOS=HIGH), B: = Megafortress 720K, C: = 500 MB HDD
 echo   Install the game once:  B:  then  INSTALL  to install to C:.
 echo   Run the installed game:  C:  then  CD \MEGA  then  MEGA
+echo   Sound Blaster: port 220h, DMA 1. Match the IRQ to the game's setup.
+echo   Installed MM5/XEEN expects IRQ 7; the emulator normally uses IRQ 5.
 echo.
-"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%GAMEFLOPPY%" --floppy-b "%GAMEDISK%" --hdd "%HDD%"
+set "SBIRQ=5"
+set /p "SBIRQ=Sound Blaster IRQ [5/7/9/10, Enter=5, MM5=7]: "
+"%EXE%" --bios "%BIOS%" --vga-bios "%VGABIOS%" --floppy "%GAMEFLOPPY%" --floppy-b "%GAMEDISK%" --hdd "%HDD%" --sb-irq "%SBIRQ%"
 goto :eof
 
 :win_memtest

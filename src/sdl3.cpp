@@ -655,19 +655,10 @@ void render_frame(SdlState& st, Machine& machine) {
 void push_audio(SdlState& st, Machine& machine) {
     if (!st.audio || !machine.audio()) return;
     constexpr int frame_samples = 735; // 44100 / 60
-    // Keep about three video frames of audio queued.  A larger queue absorbs
-    // host scheduling jitter and the window-present vsync stall without
-    // adding noticeable latency.  If the queue ran dry (a slow host frame),
-    // refill it in one go; this is the "no stutter" safety net.
-    constexpr int target_queued = frame_samples * 3;
-    int queued_bytes = SDL_GetAudioStreamQueued(st.audio);
-    if (queued_bytes < 0) queued_bytes = 0;
-    const int queued_frames = queued_bytes / int(sizeof(i16) * 2);
-    int frames = frame_samples;
-    if (queued_frames < target_queued) frames += target_queued - queued_frames;
-    frames = std::clamp(frames, frame_samples, frame_samples * 4);
-
-    st.audio_buffer.resize(std::size_t(frames) * 2);
+    // Each guest frame produces only 735 FM frames.  Asking for more when
+    // the SDL queue is low inserts silence into the emulated-time FM stream.
+    // Catch-up runs call this once per guest frame, naturally filling the queue.
+    st.audio_buffer.resize(std::size_t(frame_samples) * 2);
     // render_audio() carries the AudioMix scope (card resampling + speaker).
     machine.render_audio(std::span<i16>(st.audio_buffer), 44100);
     {

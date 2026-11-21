@@ -64,6 +64,12 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--voodoo-memory") c.video.voodoo_memory_mb = parse_u32(need(a), "Voodoo memory");
         else if (a == "--no-voodoo") c.video.voodoo_enabled = false;
         else if (a == "--no-audio") c.audio.enabled = false;
+        else if (a == "--sb-irq") {
+            const u32 irq = parse_u32(need(a), "Sound Blaster IRQ");
+            if (irq != 5 && irq != 7 && irq != 9 && irq != 10)
+                throw Error("--sb-irq expects 5, 7, 9 or 10");
+            c.audio.irq = u8(irq);
+        }
         else if (a == "--no-sdl-audio") c.no_sdl_audio = true;
         else if (a == "--console") c.console = true;
         else if (a == "--no-console") c.no_console = true;
@@ -172,6 +178,7 @@ void print_usage(const char* argv0) {
         "  --hdd FILE             attach raw hard-disk image\n"
         "  --cdrom FILE           attach ISO or BIN/CUE image to secondary master\n"
         "  --floppy FILE          attach 1.44 MiB floppy image\n"
+        "  --sb-irq N             Sound Blaster IRQ: 5, 7, 9 or 10 (default 5)\n"
         "  --boot-menu            start with the built-in boot menu\n"
         "  --screenshot FILE      write the final frame as a PPM file\n"
         "  --headless             no window, no audio device\n"

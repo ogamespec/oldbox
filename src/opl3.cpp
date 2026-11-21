@@ -557,7 +557,7 @@ void Opl3::update_envelope(Operator& op) {
             // current level.  Never make a decaying envelope louder.
             op.eg_state = EgState::sustain;
         } else {
-            op.eg_att = std::min(op.eg_att + op.decay_inc, op.sustain_att);
+            op.eg_att = std::min(op.eg_att + double(op.decay_inc), double(op.sustain_att));
         }
         break;
     case EgState::sustain:
@@ -566,7 +566,7 @@ void Opl3::update_envelope(Operator& op) {
         if (op.egt) break;
         [[fallthrough]];
     case EgState::release:
-        op.eg_att += op.release_inc;
+        op.eg_att += double(op.release_inc);
         if (op.eg_att >= 511.0f) {
             op.eg_att = 511.0f;
             op.eg_state = EgState::off;

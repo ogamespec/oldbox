@@ -640,7 +640,7 @@ TEST(audio_opl3_drum_has_decay_tail) {
     };
     const int early = peak_range(0, size_t(441) * 2);          // 0..10 ms
     const int tail = peak_range(size_t(1764) * 2, size_t(2646) * 2); // 40..60 ms
-    CHECK(early > 500);
+    CHECK(early > 500 / 3);   // unity card mixer, without the former x3 boost
     CHECK(tail > 0);          // a real envelope tail
     CHECK(tail < early);      // and it is decaying
 }

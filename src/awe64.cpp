@@ -1014,7 +1014,8 @@ void Awe64::mix_internal(u32 frames) {
     // Previously render_internal_frame() called both synthesizers one sample
     // at a time and recomputed every mixer gain (and a tanh) per sample,
     // which could not keep up with the audio device.
-    constexpr float output_gain = 3.0f;
+    // Mixer maximum is unity.  An additional fixed boost clips normal PCM
+    // and loud FM/voice combinations before they reach the host volume control.
     while (frames) {
         const u32 n = std::min(frames, mix_block);
         emu_.render(emu_scratch_.data(), n, 44100);
@@ -1039,8 +1040,8 @@ void Awe64::mix_internal(u32 frames) {
             float r = float(emu_scratch_[size_t(i) * 2 + 1]) * music_r_ +
                       float(fm_r) * music_r_ +
                       float(dac_r) * voice_r_;
-            l *= master_l_ * out_gain_l_ * output_gain;
-            r *= master_r_ * out_gain_r_ * output_gain;
+            l *= master_l_ * out_gain_l_;
+            r *= master_r_ * out_gain_r_;
             const u32 idx = u32(mix_generated_ & (mix_ring_size - 1));
             mix_ring_[size_t(idx) * 2] = clamp_i16(l);
             mix_ring_[size_t(idx) * 2 + 1] = clamp_i16(r);
