@@ -66,6 +66,40 @@ void enter_v86(CpuHarness& h, u32 eip = 0x1000, u16 cs = 0, u16 ss = 0x2000,
 
 } // namespace
 
+TEST(audit_parity_flag_is_even_and_jp_uses_it) {
+    for (u8 input : {u8(0x00), u8(0x01), u8(0x03), u8(0x7f), u8(0xff)}) {
+        CpuHarness h;
+        h.set_r(1, input); // CL
+        h.emit(0xf6); h.emit(0xc1); h.emit(0xc0); // test cl, c0h
+        h.emit(0x7a); h.emit(0x04); // jp taken
+        h.emit(0xb0); h.emit(0x01); // mov al, 1 (not taken)
+        h.emit(0xeb); h.emit(0x02); // jmp done
+        h.emit(0xb0); h.emit(0x02); // mov al, 2 (taken)
+        h.cpu.step();
+        const bool even = ((input & 0xc0u) == 0 || (input & 0xc0u) == 0xc0u);
+        CHECK_EQ(h.flag(PF) != 0, even);
+        h.cpu.step();
+        h.cpu.step();
+        CHECK_EQ(h.r(0) & 0xffu, even ? 2u : 1u);
+    }
+}
+
+TEST(audit_parity_covers_all_low_byte_values) {
+    CpuHarness h;
+    h.enter_flat_protected();
+    h.emit(0x85); h.emit(0xc0); // test eax, eax
+    for (u32 high : {0u, 0x12345600u, 0xffffff00u}) {
+        for (u32 low = 0; low < 256; ++low) {
+            h.state().eip = h.code - 2;
+            h.set_r(0, high | low);
+            h.cpu.step();
+            unsigned bits = 0;
+            for (unsigned bit = 0; bit < 8; ++bit) bits += (low >> bit) & 1u;
+            CHECK_EQ(h.flag(PF) != 0, bits % 2 == 0);
+        }
+    }
+}
+
 TEST(audit_mov_from_segment_zero_extends_32bit_register) {
     CpuHarness h;
     h.enter_flat_protected();

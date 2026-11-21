@@ -124,7 +124,12 @@ public:
     [[nodiscard]] u32 physical(u32 linear) { return cpu.translate(linear, false); }
 };
 
-inline bool parity(u32 v) { return (0x6996u >> ((v ^ (v >> 4)) & 0xf)) & 1; }
+inline bool parity(u32 v) {
+    v = (v ^ (v >> 4)) & 0x0fu;
+    v ^= v >> 2;
+    v ^= v >> 1;
+    return (v & 1u) == 0; // x86 PF is set for an even number of low-byte bits.
+}
 
 struct RefFlags {
     bool cf = false, pf = false, af = false, zf = false, sf = false, of = false;

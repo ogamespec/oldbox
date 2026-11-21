@@ -1161,6 +1161,29 @@ TEST(audio_opl3_live_sl_does_not_reverse_decay) {
     CHECK_EQ(peak(buffer), level);
 }
 
+TEST(audio_opl3_idle_fast_path_preserves_lfo_and_noise) {
+    Opl3 idle, reference;
+    // An AR=0 voice on another channel forces the normal synthesis path
+    // without producing any output or affecting channel 0/rhythm state.
+    opl_write(reference, false, 0xb5, 0x20);
+    std::vector<i16> a(size_t(17003) * 2), b(a.size());
+    idle.render(a.data(), 17003);
+    reference.render(b.data(), 17003);
+    CHECK(a == b);
+    CHECK_EQ(peak(a), 0);
+    for (Opl3* opl : {&idle, &reference}) {
+        setup_sustained_voice(*opl, 0x31, 0, 0xe1);
+        opl_write(*opl, false, 0x34, 0xa1); // snare with tremolo
+        opl_write(*opl, false, 0x74, 0xf0);
+        opl_write(*opl, false, 0xc7, 0x30);
+        opl_write(*opl, false, 0xbd, 0xe8); // deep LFOs, rhythm + snare
+    }
+    idle.render(a.data(), 17003);
+    reference.render(b.data(), 17003);
+    CHECK(a == b);
+    CHECK(peak(a) > 100);
+}
+
 TEST(audio_opl3_sustained_note_does_not_stutter) {
     // Emulate the host calling render() once per video frame while the CPU
     // clock ticks in between.  A sustained note must stay continuous: no

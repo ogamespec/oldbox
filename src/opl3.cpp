@@ -444,7 +444,7 @@ void Opl3::set_operator_key(u32 index, bool on) {
         }
     } else if (op.key) {
         op.key = false;
-        op.eg_state = EgState::release;
+        if (op.eg_state != EgState::off) op.eg_state = EgState::release;
     }
 }
 
@@ -641,13 +641,14 @@ float Opl3::render_operator(u32 index, float mod_cycles, const Channel& freq_cha
     Operator& op = ops_[index];
     (void)freq_channel;
 
+    // A held key still advances phase after its percussive envelope goes off.
     if (op.key || op.eg_state != EgState::off) {
         float inc = op.phase_inc;
         if (op.vib) inc *= vib_mul_;
         op.phase += inc;
         op.phase -= std::floor(op.phase);
     }
-    if (op.eg_state == EgState::off && !op.key) {
+    if (op.eg_state == EgState::off) {
         op.out = 0.0f;
         op.out_prev = 0.0f;
         return 0.0f;
@@ -675,7 +676,7 @@ float Opl3::render_operator(u32 index, float mod_cycles, const Channel& freq_cha
 float Opl3::render_noise_operator(u32 index) {
     if (index >= 36) return 0.0f;
     Operator& op = ops_[index];
-    if (op.eg_state == EgState::off && !op.key) {
+    if (op.eg_state == EgState::off) {
         op.out = 0.0f;
         op.out_prev = 0.0f;
         return 0.0f;
@@ -799,6 +800,27 @@ void Opl3::render_rhythm(float& a, float& b, float& c, float& d) {
 
 void Opl3::render(i16* out, u32 frames) {
     if (out == nullptr) return;
+
+    const bool silent = std::all_of(ops_.begin(), ops_.end(), [](const Operator& op) {
+        return !op.key && op.eg_state == EgState::off;
+    });
+    if (silent) {
+        // The chip keeps its free-running clocks while no voice is audible.
+        // Skip the expensive per-channel synthesis, but preserve their phase
+        // progression so the next key-on starts at the same LFO/noise position.
+        const float trem_step = kTremoloHz / float(sample_rate_);
+        const float vib_step = kVibratoHz / float(sample_rate_);
+        for (u32 f = 0; f < frames; ++f) {
+            trem_phase_ += trem_step;
+            if (trem_phase_ >= 1.0f) trem_phase_ -= std::floor(trem_phase_);
+            vib_phase_ += vib_step;
+            if (vib_phase_ >= 1.0f) vib_phase_ -= std::floor(vib_phase_);
+            const u32 feedback = ((noise_ >> 22) ^ (noise_ >> 17)) & 1u;
+            noise_ = ((noise_ << 1) | feedback) & 0x7fffffu;
+        }
+        std::fill_n(out, std::size_t(frames) * 2, i16(0));
+        return;
+    }
 
     for (u32 f = 0; f < frames; ++f) {
         update_lfo();

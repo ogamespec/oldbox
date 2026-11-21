@@ -560,7 +560,7 @@ void Cpu::write_reg_index(int i, u32 v, int size) {
     else state_.gpr[i] = v;
 }
 
-bool Cpu::parity(u8 v) { return (0x6996u >> ((v ^ (v >> 4)) & 0xf)) & 1; }
+bool Cpu::parity(u8 v) { return (0x9669u >> ((v ^ (v >> 4)) & 0xf)) & 1; }
 void Cpu::set_szp(u32 result, int size) {
     result = truncate(result, size);
     set_flag(ZF, result == 0);
