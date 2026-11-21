@@ -51,8 +51,8 @@ constexpr float kMultiple[16] = {
     8.0f, 9.0f, 10.0f, 10.0f, 12.0f, 12.0f, 15.0f, 15.0f,
 };
 
-// Key-scale-level ROM (datasheet page 10), indexed by the top four F-number
-// bits.  One unit is 0.1875 dB, i.e. four units per TL step.
+// Approximate key-scale-level table, indexed by the top four F-number bits.
+// The local datasheet documents slopes, not these absolute ROM values.
 constexpr u8 kKslRom[16] = {
     0, 32, 40, 45, 48, 51, 53, 55, 56, 58, 59, 60, 61, 62, 63, 64,
 };
@@ -68,8 +68,8 @@ constexpr u8 kKsrRof[2][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
 };
 
-// Envelope timing at internal rate 60 (AR/DR/RR=15 with Rof=0): a full
-// 0.1875 dB*512 sweep takes 0.2 ms for attack and 50 ms for release/decay.
+// Model envelope calibration at internal rate 60 (not a Yamaha timing table):
+// a full attack takes 0.2 ms; a 40 dB release/decay takes 50 ms.
 // Each internal rate step is a factor 2^(1/4), so the times grow by that
 // factor as the rate falls.  Rate 0 means "no movement", not the slowest rate.
 constexpr float kAttackSeconds60 = 0.0002f;
@@ -167,23 +167,28 @@ void Opl3::set_sample_rate(u32 hz) {
 // ---------------------------------------------------------------------------
 
 void Opl3::write_index(bool secondary, u8 value) {
-    index_[secondary ? 1 : 0] = value;
+    index_[0] = value;
+    index_[1] = secondary ? 1 : 0;
 }
 
 void Opl3::write_data(bool secondary, u8 value) {
-    const u16 reg = u16((secondary ? 0x100 : 0) | index_[secondary ? 1 : 0]);
+    secondary = index_[1] != 0; // A1 is don't-care during a DATA write.
+    const u16 reg = u16((secondary ? 0x100 : 0) | index_[0]);
+    // NEW is always writable.  Other array-1 writes in OPL2 mode must not
+    // enter the register image and take effect when OPL3 is enabled later.
+    if (secondary && !opl3_mode_ && reg != 0x105) return;
+    if (reg == 0x04) {
+        write_timer_control(value);
+        return;
+    }
     regs_[reg] = value;
     const u8 base = u8(reg & 0xff);
 
     if (secondary) {
-        // NEW (register 105h) is always accepted: it is the bit that turns
-        // OPL3 mode on in the first place.  All other array-1 registers are
-        // OPL3-only and are ignored while the chip runs in OPL2 mode.
         if (base == 0x05) {
             set_opl3_mode((value & 0x01) != 0);
             return;
         }
-        if (!opl3_mode_) return;
         if (base == 0x04) {
             four_op_ = u8(value & 0x3f);
             apply_four_op_state();
@@ -199,10 +204,6 @@ void Opl3::write_data(bool secondary, u8 value) {
             return;
         }
         if (base == 0x02 || base == 0x03) return; // timer presets (stored)
-        if (base == 0x04) {
-            write_timer_control(value);
-            return;
-        }
         if (base == 0x08) {
             // NOTE-SEL.  CSM (bit 7) is not documented for the YMF262 and is
             // ignored, matching the register map.
@@ -395,7 +396,7 @@ void Opl3::refresh_operator(u32 index) {
     const float dt = release_seconds(op.eg_dr);
     const float rt = release_seconds(op.eg_rr);
     // The attack table is the full-scale (silence to full level) time.
-    // The decay/release entries are the documented "one-percent tail" time,
+    // The decay/release entries are the model's "one-percent tail" time,
     // i.e. the time to fall by 40 dB (40 / 0.1875 = 213 attenuation units);
     // a full 96 dB release therefore takes 2.4 times as long.
     constexpr float kAttackSpan = 512.0f;
@@ -404,9 +405,8 @@ void Opl3::refresh_operator(u32 index) {
     op.decay_inc = dt > 0.0f ? kTailSpan / (dt * sr) : 0.0f;
     op.release_inc = rt > 0.0f ? kTailSpan / (rt * sr) : 0.0f;
 
-    // SL is 3 dB per step; SL=15 is the datasheet's full-attenuation (93 dB)
-    // case, i.e. silence.
-    op.sustain_att = op.sl >= 15 ? 511.0f : float(op.sl) * 16.0f;
+    // SL=15 is 93 dB, not the envelope's 95.8125 dB terminal value.
+    op.sustain_att = float(op.sl == 15 ? 31 : op.sl) * 16.0f;
 
     // Total level is 0.75 dB per step (four attenuation units).  KSL comes
     // from the 16-entry ROM and is scaled by the register's dB/octave
@@ -439,9 +439,8 @@ void Opl3::set_operator_key(u32 index, bool on) {
         if (!op.key) {
             op.key = true;
             op.eg_state = EgState::attack;
-            // The phase accumulator keeps running across a retrigger: the
-            // YMF262 does not reset it on key-on.  This avoids the click and
-            // the "stuttering" retrigger sound of a phase reset.
+            // Retain phase in this approximate model.  The local datasheet
+            // does not specify the phase-reset behavior of a retrigger.
         }
     } else if (op.key) {
         op.key = false;
@@ -508,12 +507,10 @@ void Opl3::apply_rhythm_state() {
     }
 
     // Rhythm mode on: the normal KON bits of channels 7..9 are ignored.
-    // Channel 7: BD (both slots) or, when BD is off, the two operators are
-    // released.  Channel 8: HH on slot 14 (op 13), SD on slot 17 (op 16).
-    // Channel 9: TOM on slot 15 (op 14), TC on slot 18 (op 17).
-    key_pair(6, rhythm_key_[0], rhythm_key_[0]);
-    key_pair(7, rhythm_key_[4], rhythm_key_[1]);
-    key_pair(8, rhythm_key_[2], rhythm_key_[3]);
+    // BDh D4..D0: BD, SD, TOM, TC, HH (not the reverse order).
+    key_pair(6, rhythm_key_[4], rhythm_key_[4]);
+    key_pair(7, rhythm_key_[0], rhythm_key_[3]);
+    key_pair(8, rhythm_key_[2], rhythm_key_[1]);
 }
 
 void Opl3::set_opl3_mode(bool on) {
@@ -549,23 +546,25 @@ void Opl3::update_envelope(Operator& op) {
         if (op.eg_att <= 0.0f) {
             op.eg_att = 0.0f;
             if (op.sustain_att <= 0.0f)
-                op.eg_state = op.egt ? EgState::sustain : EgState::release;
+                op.eg_state = EgState::sustain;
             else
                 op.eg_state = EgState::decay;
         }
         break;
     case EgState::decay:
-        op.eg_att += op.decay_inc;
         if (op.eg_att >= op.sustain_att) {
-            op.eg_att = op.sustain_att;
-            // EGT=1 holds the sustain level; EGT=0 selects decay, so the
-            // release rate takes over even while KON remains 1.
-            op.eg_state = op.egt ? EgState::sustain : EgState::release;
+            // A live SL write may already have moved the target above the
+            // current level.  Never make a decaying envelope louder.
+            op.eg_state = EgState::sustain;
+        } else {
+            op.eg_att = std::min(op.eg_att + op.decay_inc, op.sustain_att);
         }
         break;
     case EgState::sustain:
-        if (!op.key || !op.egt) op.eg_state = EgState::release;
-        break;
+        // Percussive sustain uses RR while the key is held, but is not a
+        // key-off release: changing EGT back to 1 must hold the level again.
+        if (op.egt) break;
+        [[fallthrough]];
     case EgState::release:
         op.eg_att += op.release_inc;
         if (op.eg_att >= 511.0f) {
@@ -668,7 +667,7 @@ float Opl3::render_operator(u32 index, float mod_cycles, const Channel& freq_cha
     if (att < 0) att = 0;
 
     const float out = s * attenuation_gain(u32(att));
-    op.out_prev = out;
+    op.out_prev = op.out;
     op.out = out;
     return out;
 }
@@ -688,7 +687,7 @@ float Opl3::render_noise_operator(u32 index) {
     if (att < 0) att = 0;
 
     const float out = noise_sample_ * attenuation_gain(u32(att));
-    op.out_prev = out;
+    op.out_prev = op.out;
     op.out = out;
     return out;
 }
@@ -778,14 +777,20 @@ void Opl3::render_channel_4op(u32 base, u32 second, float& a, float& b, float& c
 
 void Opl3::render_rhythm(float& a, float& b, float& c, float& d) {
     // Bass drum is a normal two-operator channel on channel 7 (0-based 6).
-    if (rhythm_key_[0]) render_channel_2op(6, a, b, c, d);
+    if (ops_[op1_of_channel(6)].eg_state != EgState::off ||
+        ops_[op2_of_channel(6)].eg_state != EgState::off)
+        render_channel_2op(6, a, b, c, d);
 
     // Snare drum (slot 17) and hi-hat (slot 14) are on channel 8; tom tom
     // (slot 15) and top cymbal (slot 18) are on channel 9 (0-based 7/8).
-    if (rhythm_key_[1]) add_output(7, render_noise_operator(16), a, b, c, d);
-    if (rhythm_key_[2]) add_output(8, render_operator(14, 0.0f, channels_[8]), a, b, c, d);
-    if (rhythm_key_[3]) add_output(8, render_noise_operator(17), a, b, c, d);
-    if (rhythm_key_[4]) add_output(7, render_noise_operator(13), a, b, c, d);
+    if (ops_[16].eg_state != EgState::off)
+        add_output(7, render_noise_operator(16), a, b, c, d);
+    if (ops_[14].eg_state != EgState::off)
+        add_output(8, render_operator(14, 0.0f, channels_[8]), a, b, c, d);
+    if (ops_[17].eg_state != EgState::off)
+        add_output(8, render_noise_operator(17), a, b, c, d);
+    if (ops_[13].eg_state != EgState::off)
+        add_output(7, render_noise_operator(13), a, b, c, d);
 }
 
 // ---------------------------------------------------------------------------
@@ -857,9 +862,12 @@ void Opl3::reset_timers() {
 void Opl3::write_timer_control(u8 value) {
     if (value & 0x80) {
         // RST: set /IRQ high and clear both overflow flags.
+        // Preserve the existing command-only interpretation: lower bits of
+        // an RST write do not change masks, start bits or counter phase.
         status_ = 0;
         return;
     }
+    regs_[0x04] = value;
     const bool st1 = (value & 0x01) != 0;
     const bool st2 = (value & 0x02) != 0;
     if (st1 && !t1_start_) {
@@ -879,19 +887,13 @@ void Opl3::write_timer_control(u8 value) {
 }
 
 u8 Opl3::read_status() {
-    // The mask bits suppress only the IRQ output; the overflow flags are
-    // still reported.  Reading the status port clears the flags, which is
-    // the read-to-clear behaviour the AdLib probe and the DOS drivers rely
-    // on; writing RST also clears them.
-    const bool masked1 = (regs_[0x04] & 0x40) != 0;
-    const bool masked2 = (regs_[0x04] & 0x20) != 0;
-    const bool irq = ((status_ & 0x40) && !masked1) || ((status_ & 0x20) && !masked2);
-    const u8 result = u8((status_ & 0x60) | (irq ? 0x80 : 0x00));
-    status_ = 0;
-    return result;
+    return status_;
 }
 
 void Opl3::tick(u64 cpu_cycles) {
+    // Keep 8-bit wraparound (256 - preset ticks), not the datasheet's
+    // inconsistent 255 - N formula.  Assume masks suppress IRQ generation
+    // only, not FT1/FT2; changing masks does not acknowledge a latched IRQ.
     if (t1_period_) {
         t1_acc_ += cpu_cycles;
         while (t1_acc_ >= t1_period_) {
@@ -901,6 +903,7 @@ void Opl3::tick(u64 cpu_cycles) {
                 if (t1_count_ == 0) {
                     t1_count_ = regs_[0x02];
                     status_ |= 0x40;
+                    if (!(regs_[0x04] & 0x40)) status_ |= 0x80;
                 }
             }
         }
@@ -914,6 +917,7 @@ void Opl3::tick(u64 cpu_cycles) {
                 if (t2_count_ == 0) {
                     t2_count_ = regs_[0x03];
                     status_ |= 0x20;
+                    if (!(regs_[0x04] & 0x20)) status_ |= 0x80;
                 }
             }
         }

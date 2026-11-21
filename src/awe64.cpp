@@ -208,6 +208,9 @@ void Awe64::reset() {
     dac_ring_.fill(0);
     dac_written_ = 0;
     dac_read_ = 0;
+    fm_ring_.fill(0);
+    fm_written_ = 0;
+    fm_read_ = 0;
     tick_acc_ = 0;
     dma_tick_clocked_ = false;
 }
@@ -964,6 +967,24 @@ void Awe64::advance_dma(u32 frames) {
     }
 }
 
+void Awe64::advance_fm(u64 frames) {
+    // Discard old queued audio when headless, but synthesize every elapsed
+    // frame so envelopes, oscillators and LFOs never stop at the queue limit.
+    while (frames) {
+        const u32 n = u32(std::min<u64>(frames, mix_block));
+        opl3_.render(fm_scratch_.data(), n);
+        for (u32 i = 0; i < n; ++i) {
+            const u32 idx = u32(fm_written_ & (mix_ring_size - 1));
+            fm_ring_[size_t(idx) * 2] = fm_scratch_[size_t(i) * 2];
+            fm_ring_[size_t(idx) * 2 + 1] = fm_scratch_[size_t(i) * 2 + 1];
+            ++fm_written_;
+            if (fm_written_ - fm_read_ > mix_ring_size)
+                fm_read_ = fm_written_ - mix_ring_size;
+        }
+        frames -= n;
+    }
+}
+
 void Awe64::pop_dac(i16& l, i16& r) {
     if (dac_read_ < dac_written_) {
         const u32 idx = u32(dac_read_ & (mix_ring_size - 1));
@@ -988,8 +1009,8 @@ void Awe64::pop_dac(i16& l, i16& r) {
 }
 
 void Awe64::mix_internal(u32 frames) {
-    // Block synthesis: the EMU8000 and the OPL3 advance an entire block at
-    // once, then the CT1745 mixer and the DSP DAC are applied per sample.
+    // Block synthesis: EMU8000 renders here; tick-clocked FM drains its queue.
+    // The CT1745 mixer and the DSP DAC are then applied per sample.
     // Previously render_internal_frame() called both synthesizers one sample
     // at a time and recomputed every mixer gain (and a tanh) per sample,
     // which could not keep up with the audio device.
@@ -997,15 +1018,26 @@ void Awe64::mix_internal(u32 frames) {
     while (frames) {
         const u32 n = std::min(frames, mix_block);
         emu_.render(emu_scratch_.data(), n, 44100);
-        opl3_.render(fm_scratch_.data(), n);
+        if (!dma_tick_clocked_) opl3_.render(fm_scratch_.data(), n);
         for (u32 i = 0; i < n; ++i) {
+            i16 fm_l = fm_scratch_[size_t(i) * 2];
+            i16 fm_r = fm_scratch_[size_t(i) * 2 + 1];
+            if (dma_tick_clocked_) {
+                fm_l = fm_r = 0;
+                if (fm_read_ < fm_written_) {
+                    const u32 fi = u32(fm_read_ & (mix_ring_size - 1));
+                    fm_l = fm_ring_[size_t(fi) * 2];
+                    fm_r = fm_ring_[size_t(fi) * 2 + 1];
+                    ++fm_read_;
+                }
+            }
             i16 dac_l = 0, dac_r = 0;
             pop_dac(dac_l, dac_r);
             float l = float(emu_scratch_[size_t(i) * 2]) * music_l_ +
-                      float(fm_scratch_[size_t(i) * 2]) * music_l_ +
+                      float(fm_l) * music_l_ +
                       float(dac_l) * voice_l_;
             float r = float(emu_scratch_[size_t(i) * 2 + 1]) * music_r_ +
-                      float(fm_scratch_[size_t(i) * 2 + 1]) * music_r_ +
+                      float(fm_r) * music_r_ +
                       float(dac_r) * voice_r_;
             l *= master_l_ * out_gain_l_ * output_gain;
             r *= master_r_ * out_gain_r_ * output_gain;
@@ -1020,20 +1052,22 @@ void Awe64::mix_internal(u32 frames) {
 }
 
 void Awe64::tick(u64 cpu_cycles) {
-    // OPL3 timers run from emulated CPU time.  The DSP DMA engine does too:
-    // it produces 44.1 kHz frames into dac_ring_ even when no host audio is
-    // consumed, so block boundaries and IRQs stay correct in headless runs.
+    // OPL3 timers, FM synthesis and DSP DMA run from emulated CPU time, even
+    // headless.  Register changes therefore cannot erase an unrendered note.
     opl3_.tick(cpu_cycles);
     dma_tick_clocked_ = true;
     const u64 cycles_per_second = u64(cpu_mhz_) * 1'000'000ull;
     if (cycles_per_second == 0) return;
-    // Fractional sample clock: tick_acc_ is in (cycles * 44100), so the DMA
-    // engine runs at exactly 44.1 kHz instead of a truncated integer divisor
+    // Fractional sample clock: tick_acc_ is in (cycles * 44100), so FM and DMA
+    // run at exactly 44.1 kHz instead of a truncated integer divisor
     // (which would slowly overrun the audio ring on a long session).
     tick_acc_ += cpu_cycles * 44100ull;
     const u64 samples = tick_acc_ / cycles_per_second;
     tick_acc_ %= cycles_per_second;
-    if (samples) advance_dma(u32(std::min<u64>(samples, 65536ull)));
+    if (samples) {
+        advance_fm(samples);
+        advance_dma(u32(std::min<u64>(samples, 65536ull)));
+    }
 }
 
 void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in) {
@@ -1049,15 +1083,15 @@ void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in
                             mixer_gain(mixer_[0x37], 31) * master_r_ * out_gain_r_;
 
     // Generate the internal 44.1 kHz stream in chunks that fit the ring.
-    // Because synthesis is driven from here, every requested host sample has
-    // its source samples ready: no "generate one sample in the middle of the
-    // resampler" branch and no tick-side ring clamping/dropping.
+    // In tick-clocked mode, never synthesize beyond the FM frames produced by
+    // emulated time just to satisfy the resampler's one-sample lookahead.
     u32 done = 0;
     while (done < frames) {
         const u32 chunk = std::min(frames - done, mix_block);
         const double last_pos = mix_pos_ + ratio * double(chunk - 1);
         const u64 last_idx = u64(std::floor(last_pos));
-        const u64 target = last_idx + 2; // interpolation needs idx and idx+1
+        const u64 target = last_idx + 1 +
+            (!dma_tick_clocked_ || mix_generated_ + (fm_written_ - fm_read_) > last_idx + 1);
         if (target > mix_generated_) {
             u64 need = target - mix_generated_;
             need = std::min<u64>(need, mix_ring_size / 2);
@@ -1069,11 +1103,14 @@ void Awe64::render(std::span<i16> out, u32 host_rate, std::span<const i16> cd_in
             const u64 idx = u64(std::floor(mix_pos_));
             const float frac = float(mix_pos_ - double(idx));
             if (idx + 1 >= mix_generated_) {
-                const u64 need = idx + 2 - mix_generated_;
-                if (need) mix_internal(u32(need));
+                const u64 sample_target = idx + 1 +
+                    (!dma_tick_clocked_ || mix_generated_ + (fm_written_ - fm_read_) > idx + 1);
+                if (sample_target > mix_generated_) mix_internal(u32(sample_target - mix_generated_));
             }
             const u32 i0 = u32(idx & (mix_ring_size - 1));
-            const u32 i1 = u32((idx + 1) & (mix_ring_size - 1));
+            // Hold only for missing interpolation lookahead.  Do not cache a
+            // zero at idx+1: it would displace real FM audio on the next tick.
+            const u32 i1 = u32((idx + (idx + 1 < mix_generated_)) & (mix_ring_size - 1));
             float l = float(mix_ring_[size_t(i0) * 2]) * (1.0f - frac) +
                       float(mix_ring_[size_t(i1) * 2]) * frac;
             float r = float(mix_ring_[size_t(i0) * 2 + 1]) * (1.0f - frac) +

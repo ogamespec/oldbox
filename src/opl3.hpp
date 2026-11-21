@@ -9,9 +9,9 @@ namespace oldbox {
 // Yamaha YMF262 (OPL3) FM synthesizer.
 //
 // The model is register-compatible with the YM3812 (OPL2) when NEW=0 and
-// implements the complete YMF262 register file when NEW=1:
+// models the documented YMF262 register file when NEW=1:
 //
-//   * two register arrays (A1 low/high) with independent address latches;
+//   * two register arrays (A1 low/high) with one shared nine-bit address latch;
 //   * 18 two-operator channels / 36 operators and six four-operator channels;
 //   * the four documented four-operator connection schemes (FM-FM, AM-FM,
 //     FM-AM, AM-AM) selected by CNT(Cn) and CNT(Cn+3);
@@ -19,7 +19,7 @@ namespace oldbox {
 //     shapes and the derived square/sawtooth;
 //   * the key-scale level ROM, key-scale rate offsets and NOTE-SEL split;
 //   * a nine-bit attenuation envelope with attack/decay/sustain/release, the
-//     EGT sustain/decay mode and the documented SL=15 full-attenuation case;
+//     EGT sustain/decay mode and the documented SL=15 (93 dB) case;
 //   * the 3.7 Hz tremolo and 6.1 Hz vibrato LFOs with DAM/DVB depths;
 //   * rhythm mode with bass drum, snare drum, tom tom, top cymbal and hi-hat
 //     on slots 13/16, 17, 15, 18 and 14;
@@ -28,10 +28,9 @@ namespace oldbox {
 //     FT1/FT2/IRQ status bits.
 //
 // The envelope runs in the chip's 0.1875 dB attenuation units (0 = loudest,
-// 511 = silence).  Attack, decay and release rates are the documented
-// rate*4 + Rof values and the timing table follows the OPL3 progression
-// (0.2 ms attack / 50 ms release at internal rate 60, 2^(1/4) per rate).
-// Rendering uses a log-sine table and an attenuation-to-gain table, so no
+// 511 = silence).  Rates use the documented rate*4 + Rof values; absolute
+// envelope timings and internal waveform/noise behavior are approximations
+// (see docs/opl3.md). Rendering uses a sine and an attenuation-to-gain table, so no
 // transcendental functions run per operator per sample.
 class Opl3 {
 public:
@@ -41,14 +40,12 @@ public:
     void set_cpu_mhz(u32 mhz);
     void set_sample_rate(u32 hz);
 
-    // Register access as seen from the card.  `secondary` selects the
-    // 0x100-0x1FF register array (A1 = H).  Each array has its own address
-    // latch, exactly like the two index ports of the chip.
+    // Register access as seen from the card.  An index write latches both
+    // the address byte and `secondary` (A1).  A1 is ignored on data writes.
     void write_index(bool secondary, u8 value);
     void write_data(bool secondary, u8 value);
-    // Reading the status port returns IRQ/FT1/FT2.  The flags are cleared by
-    // the read, which is what the AdLib probe sequence in the test suite (and
-    // DOS software generally) expects; writing RST also clears them.
+    // Reading status returns IRQ/FT1/FT2 without clearing them.  Only RST
+    // (or a chip reset) clears these latched flags.
     [[nodiscard]] u8 read_status();
 
     // Advance the two OPL timers by `cpu_cycles` of the host scheduler clock.
@@ -107,7 +104,7 @@ private:
 
     // Register array images: 0x000..0x0FF (A1 low), 0x100..0x1FF (A1 high).
     std::array<u8, 512> regs_{};
-    std::array<u8, 2> index_{};
+    std::array<u8, 2> index_{};     // shared latch: address byte, then A1 (0/1)
     std::array<Operator, 36> ops_{};
     std::array<Channel, 18> channels_{};
 
@@ -126,7 +123,7 @@ private:
     bool t2_running_ = false;
     bool t1_start_ = false;
     bool t2_start_ = false;
-    u8 status_ = 0;                // D6 FT1, D5 FT2
+    u8 status_ = 0;                // latched D7 IRQ, D6 FT1, D5 FT2
     u64 t1_acc_ = 0;
     u64 t2_acc_ = 0;
     u64 t1_period_ = 0;
@@ -148,7 +145,7 @@ private:
 
     // Rhythm mode (register BDh).
     bool rhythm_ = false;
-    std::array<bool, 5> rhythm_key_{};  // BD, SD, TOM, TC, HH
+    std::array<bool, 5> rhythm_key_{};  // BDh D0..D4: HH, TC, TOM, SD, BD
 
     void reset_timers();
     void write_timer_control(u8 value);

@@ -212,6 +212,8 @@ public:
     // Renders the card output.  `cd_in` is the analog CD-DA stream arriving
     // over the drive's 4-pin audio cable; it is mixed through the CT1745 CD
     // input level (registers 0x28/0x36/0x37) just like the real card.
+    // FM/DAC use tick-produced audio after the first tick(); before that,
+    // standalone render-only callers synthesize on demand.
     void render(std::span<i16> out, u32 host_rate,
                 std::span<const i16> cd_in = {});
     [[nodiscard]] u32 sample_rate() const { return output_rate_; }
@@ -312,10 +314,7 @@ private:
     // OPL3-compatible FM synthesizer (separate module).
     Opl3 opl3_;
 
-    // Internal 44100 Hz mix ring and resampler.  Synthesis is driven by
-    // Awe64::render(), i.e. by the samples the audio device actually
-    // consumes; this keeps the ring from under-running or dropping samples
-    // when the host frame rate jitters.
+    // Internal 44100 Hz mix ring and resampler.
     std::array<i16, mix_ring_size * 2> mix_ring_{};
     u64 mix_generated_ = 0;
     double mix_pos_ = 0.0;
@@ -325,7 +324,13 @@ private:
     std::array<i16, mix_ring_size * 2> dac_ring_{};
     u64 dac_written_ = 0;
     u64 dac_read_ = 0;
+    // FM is synthesized at tick time so register writes between host audio
+    // callbacks retain their position in the audio timeline.
+    std::array<i16, mix_ring_size * 2> fm_ring_{};
+    u64 fm_written_ = 0;
+    u64 fm_read_ = 0;
     u64 tick_acc_ = 0;
+    // Shared clock ownership for DAC and FM; render-only callers use fallback.
     bool dma_tick_clocked_ = false;
     static constexpr u32 mix_block = 1024;
     std::array<i16, mix_block * 2> emu_scratch_{};
@@ -361,6 +366,7 @@ private:
     void midi_message(u8 status, u8 d1, u8 d2);
     void mix_internal(u32 frames);
     void advance_dma(u32 frames);
+    void advance_fm(u64 frames);
     void pop_dac(i16& l, i16& r);
     [[nodiscard]] float mixer_gain(u8 value, u8 maximum) const;
     [[nodiscard]] bool port_in_range(u16 port, u16 base, u16 size) const {

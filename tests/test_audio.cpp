@@ -350,7 +350,7 @@ TEST(audio_opl3_adlib_detection_sequence) {
     rig.card.tick(76000); // 326 us: only one tick elapsed so far
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
     rig.card.tick(76000); // 652 us: two ticks elapsed
-    // Timer 2 is masked by bit 5 of register 04h, so only FT2 is set.
+    // MT2 suppresses IRQ generation, but not the overflow flag.
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x20);
 
     // Stopping a timer freezes its counter; restarting reloads the preset.
@@ -368,10 +368,8 @@ TEST(audio_opl3_adlib_detection_sequence) {
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
 }
 
-TEST(audio_opl3_status_read_clears_timer_flags) {
-    // The status port is read-to-clear: a poller must observe each timer
-    // overflow exactly once, and the next read must not report the stale
-    // FT1/IRQ bits again.
+TEST(audio_opl3_status_reads_preserve_timer_flags_until_rst) {
+    // Yamaha specifies that FT1/FT2/IRQ remain set until RST is written.
     Rig rig;
     auto fm_write = [&](u8 reg, u8 value) {
         rig.card.io_write8(0x388, reg);
@@ -383,6 +381,10 @@ TEST(audio_opl3_status_read_clears_timer_flags) {
     rig.card.tick(20000);
 
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+    fm_write(0x04, 0x60); // stopping/masking is not an acknowledge either
+    CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0xC0);
+    fm_write(0x04, 0x80);
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
     CHECK_EQ(rig.card.io_read8(0x388) & 0xE0, 0x00);
 }
@@ -736,14 +738,81 @@ void setup_sustained_voice(Opl3& opl, u8 c0, u8 carrier_tl = 0, u8 carrier_level
 
 } // namespace
 
-TEST(audio_opl3_register_arrays_have_independent_address_latches) {
-    // The two index ports latch independently.  A single shared latch would
-    // let the later bank-0 address write steal the bank-1 data write.
+TEST(audio_opl3_register_arrays_share_address_latch) {
+    // The last index write selects both address and bank; DATA ignores A1.
     Opl3 opl;
     opl.write_index(true, 0x05);  // array 1 index
     opl.write_index(false, 0x01); // array 0 index
-    opl.write_data(true, 0x01);   // NEW=1 must still reach register 105h
+    opl.write_data(true, 0x01);   // reaches 001h, not NEW
+    CHECK(!opl.opl3_mode());
+    opl.write_index(true, 0x05);
+    opl.write_data(false, 0x01);  // reaches NEW even via the primary DATA port
     CHECK(opl.opl3_mode());
+    opl.write_data(true, 0x00);   // DATA does not change the latched address
+    CHECK(!opl.opl3_mode());
+    opl.write_data(false, 0x01);
+    CHECK(opl.opl3_mode());
+
+    opl.set_cpu_mhz(1);
+    opl.write_index(true, 0x03);
+    opl.write_index(false, 0x02);
+    opl.write_data(true, 0xff);   // primary timer 1 preset, not array-1 data
+    opl_write(opl, false, 0x04, 0x01);
+    opl.tick(80);
+    CHECK_EQ(opl.read_status(), 0xc0);
+
+    opl.reset();
+    opl.write_data(true, 0x01);   // reset also clears the shared latch
+    CHECK(!opl.opl3_mode());
+    CHECK_EQ(opl.read_status(), 0x00);
+}
+
+TEST(audio_opl3_timer_mask_and_reset_are_independent) {
+    Opl3 opl;
+    opl.set_cpu_mhz(1);
+    opl_write(opl, false, 0x02, 0xff);
+    opl_write(opl, false, 0x03, 0xff);
+    opl_write(opl, false, 0x04, 0x63); // both running, both masked
+    opl.tick(320);
+    CHECK_EQ(opl.read_status(), 0x60);
+    opl_write(opl, false, 0x04, 0x80); // RST keeps start and mask settings
+    CHECK_EQ(opl.read_status(), 0x00);
+    opl.tick(320);
+    CHECK_EQ(opl.read_status(), 0x60);
+    opl_write(opl, false, 0x04, 0x03); // unmask without restarting
+    CHECK_EQ(opl.read_status(), 0x60); // unmask does not synthesize past IRQ
+    opl.tick(320);
+    CHECK_EQ(opl.read_status(), 0xe0);
+    opl_write(opl, false, 0x04, 0xe3); // RST with low bits set is still reset-only
+    CHECK_EQ(opl.read_status(), 0x00);
+    opl.tick(320);
+    CHECK_EQ(opl.read_status(), 0xe0);
+}
+
+TEST(audio_opl3_secondary_register_writes_require_new_mode) {
+    Opl3 opl;
+    opl_write(opl, true, 0x04, 0x01); // ignored, not deferred
+    opl_write(opl, true, 0x05, 0x01);
+    // If the ignored CONNECTION SEL write leaked into regs_, enabling NEW
+    // would pair channels 1 and 4 and channel 4's independent key would die.
+    opl_write(opl, false, 0x20, 0x01);
+    opl_write(opl, false, 0x40, 0x3f);
+    opl_write(opl, false, 0x23, 0x01);
+    opl_write(opl, false, 0x43, 0x00);
+    opl_write(opl, false, 0x63, 0xf0);
+    opl_write(opl, false, 0x83, 0x00);
+    opl_write(opl, false, 0x28, 0x01);
+    opl_write(opl, false, 0x48, 0x3f);
+    opl_write(opl, false, 0x2b, 0x01);
+    opl_write(opl, false, 0x4b, 0x00);
+    opl_write(opl, false, 0x6b, 0xf0);
+    opl_write(opl, false, 0x8b, 0x00);
+    opl_write(opl, false, 0xc3, 0x30);
+    opl_write(opl, false, 0xa3, 0x80);
+    opl_write(opl, false, 0xb3, 0x32);
+    std::vector<i16> buffer(size_t(4096) * 2);
+    opl.render(buffer.data(), 4096);
+    CHECK(peak(buffer) > 100);
 }
 
 TEST(audio_opl3_opl2_mode_ignores_secondary_bank) {
@@ -892,13 +961,61 @@ TEST(audio_opl3_rhythm_has_all_five_sounds) {
         opl.render(buffer.data(), 8192);
         CHECK(peak(buffer) > 0);
 
-        // Clearing RYT releases the rhythm keys; RR=15 lets the tail fall to
-        // silence within the next 186 ms.
+        // Clearing RYT restores melodic channel routing (KON remains off).
         opl_write(opl, false, 0xbd, u8(1u << bit));
         std::fill(buffer.begin(), buffer.end(), 0);
         opl.render(buffer.data(), 8192);
         CHECK_EQ(peak(buffer), 0);
     }
+}
+
+TEST(audio_opl3_rhythm_bits_select_documented_slots) {
+    // BDh D4..D0 select BD, SD, TOM, TC, HH, respectively.  A lone
+    // programmed slot must stay silent when a different instrument is keyed.
+    const u8 slot[5] = {0x10, 0x14, 0x12, 0x15, 0x11};
+    const u8 bit[5] = {0x10, 0x08, 0x04, 0x02, 0x01};
+    for (u32 instrument = 0; instrument < 5; ++instrument) {
+        for (u32 keyed = 0; keyed < 5; ++keyed) {
+            Opl3 opl;
+            opl_write(opl, true, 0x05, 0x01);
+            opl_write(opl, false, u8(0x20 + slot[instrument]), 0x21);
+            opl_write(opl, false, u8(0x40 + slot[instrument]), 0x00);
+            opl_write(opl, false, u8(0x60 + slot[instrument]), 0xf0);
+            opl_write(opl, false, u8(0x80 + slot[instrument]), 0x00);
+            const u8 ch = instrument == 0 ? 6 : (instrument == 1 || instrument == 4 ? 7 : 8);
+            opl_write(opl, false, u8(0xc0 + ch), 0x31);
+            opl_write(opl, false, u8(0xa0 + ch), 0x80);
+            opl_write(opl, false, u8(0xb0 + ch), 0x10);
+            opl_write(opl, false, 0xbd, u8(0x20 | bit[keyed]));
+            std::vector<i16> buffer(size_t(1024) * 2);
+            opl.render(buffer.data(), 1024);
+            if (instrument == keyed) CHECK(peak(buffer) > 100);
+            else CHECK_EQ(peak(buffer), 0);
+        }
+    }
+}
+
+TEST(audio_opl3_rhythm_release_continues_after_key_off) {
+    Opl3 opl;
+    opl_write(opl, true, 0x05, 0x01);
+    opl_write(opl, false, 0x34, 0x21); // snare slot 17, sustained noise
+    opl_write(opl, false, 0x54, 0x00);
+    opl_write(opl, false, 0x74, 0xf0);
+    opl_write(opl, false, 0x94, 0x08); // release rate 8
+    opl_write(opl, false, 0xc7, 0x31);
+    opl_write(opl, false, 0xa7, 0x80);
+    opl_write(opl, false, 0xb7, 0x10);
+    opl_write(opl, false, 0xbd, 0x28); // RYT + SD
+    std::vector<i16> buffer(size_t(1024) * 2);
+    opl.render(buffer.data(), 1024);
+    CHECK(peak(buffer) > 100);
+    opl_write(opl, false, 0xbd, 0x20); // release SD, keep rhythm enabled
+    opl.render(buffer.data(), 1024);
+    CHECK(peak(buffer) > 0);
+    std::vector<i16> tail(size_t(44100 * 20) * 2);
+    opl.render(tail.data(), 44100 * 20);
+    opl.render(buffer.data(), 1024);
+    CHECK_EQ(peak(buffer), 0);
 }
 
 TEST(audio_opl3_dac_channels_c_and_d) {
@@ -989,6 +1106,59 @@ TEST(audio_opl3_total_level_is_0_75db_per_step) {
     CHECK(full > 500);
     CHECK(minus6db > full * 45 / 100);
     CHECK(minus6db < full * 56 / 100);
+}
+
+TEST(audio_opl3_feedback_retains_two_distinct_samples) {
+    Opl3 opl;
+    setup_sustained_voice(opl, 0x37, 0, 0x21, 0, 0x32);
+    opl_write(opl, false, 0x20, 0x21);
+    opl_write(opl, false, 0x40, 0x00);
+    opl_write(opl, false, 0x63, 0x00); // carrier is still at silence
+    std::vector<i16> buffer(size_t(1024) * 2);
+    opl.render(buffer.data(), 1024);
+    constexpr double scale = 32767.0 * 0.08;
+    const double inc = 512.0 * 49716.0 * std::exp2(-16.0) / 44100.0;
+    int max_error = 0;
+    for (size_t i = 100; i < 1000; ++i) {
+        const double feedback = (buffer[(i - 1) * 2] + buffer[(i - 2) * 2]) /
+                                scale * 0.5 * 0.125; // FB=3: pi/4
+        const double phase = double(i + 1) * inc + feedback;
+        const int expected = int(std::lround(scale * std::sin(6.283185307179586 * phase)));
+        max_error = std::max(max_error, std::abs(expected - int(buffer[i * 2])));
+    }
+    CHECK(max_error <= 3); // quantization and sine-table interpolation
+}
+
+TEST(audio_opl3_live_egt_holds_percussive_sustain) {
+    Opl3 opl;
+    setup_sustained_voice(opl, 0x31, 0, 0x01, 6);
+    opl_write(opl, false, 0x60, 0x00); // truly silent modulator
+    opl_write(opl, false, 0x83, 0x0f);
+    std::vector<i16> buffer(size_t(441) * 2);
+    opl.render(buffer.data(), 441);
+    const int level = std::abs(int(buffer[buffer.size() - 2]));
+    CHECK(level > 100);
+    opl_write(opl, false, 0x23, 0x21); // EGT=1 while KON is still held
+    opl.render(buffer.data(), 441);
+    CHECK_EQ(peak(buffer), level);
+    opl_write(opl, false, 0xb0, 0x0a); // actual key-off still releases
+    opl.render(buffer.data(), 441);
+    CHECK(std::abs(int(buffer[buffer.size() - 2])) < level);
+}
+
+TEST(audio_opl3_live_sl_does_not_reverse_decay) {
+    Opl3 opl;
+    setup_sustained_voice(opl, 0x31, 0, 0x21, 6);
+    opl_write(opl, false, 0x60, 0x00);
+    opl_write(opl, false, 0x63, 0xff);
+    opl_write(opl, false, 0x83, 0xe0);
+    std::vector<i16> buffer(size_t(441) * 2);
+    opl.render(buffer.data(), 441);
+    const int level = std::abs(int(buffer[buffer.size() - 2]));
+    CHECK(level > 100);
+    opl_write(opl, false, 0x83, 0x00); // new target is louder than current EG
+    opl.render(buffer.data(), 441);
+    CHECK_EQ(peak(buffer), level);
 }
 
 TEST(audio_opl3_sustained_note_does_not_stutter) {
