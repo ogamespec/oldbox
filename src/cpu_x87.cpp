@@ -1,6 +1,7 @@
 #include "cpu.hpp"
 #include "cpu_exception.hpp"
 #include <bit>
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -14,10 +15,13 @@ namespace {
     const u16 se = u16(p[8]) | (u16(p[9]) << 8);
     const int exp = se & 0x7fff;
     const bool sign = (se & 0x8000) != 0;
-    if (exp == 0x7fff) return sign ? -INFINITY : INFINITY;
-    if (exp == 0) return sign ? -0.0L : 0.0L;
+    if (exp == 0x7fff) {
+        if (mant != 0x8000000000000000ull) return std::numeric_limits<long double>::quiet_NaN();
+        return sign ? -INFINITY : INFINITY;
+    }
+    if (mant == 0) return sign ? -0.0L : 0.0L;
     long double v = (long double)mant / 9223372036854775808.0L; // mant / 2^63
-    v = std::ldexp(v, exp - 16383);
+    v = std::ldexp(v, (exp ? exp : 1) - 16383);
     return sign ? -v : v;
 }
 [[nodiscard]] long double from_bcd80(const u8* p) {
@@ -43,13 +47,17 @@ void to_bcd80(long double v, u8* p) {
 
 void to_ext80(long double v, u8* p) {
     std::memset(p, 0, 10);
-    if (std::isnan(v)) { std::memset(p, 0, 8); p[8] = 0xff; p[9] = 0x7f; return; }
-    if (std::isinf(v)) { std::memset(p, 0, 8); p[8] = 0; p[9] = (std::signbit(v) ? 0xff : 0x7f); return; }
+    if (std::isnan(v) || std::isinf(v)) {
+        p[7] = std::isnan(v) ? 0xc0 : 0x80; // explicit integer bit and quiet NaN bit
+        p[8] = 0xff; p[9] = std::signbit(v) ? 0xff : 0x7f;
+        return;
+    }
     if (v == 0.0L) { p[9] = std::signbit(v) ? 0x80 : 0; return; }
     int e = 0;
     long double m = std::frexp(std::fabs(v), &e); // [0.5,1)
-    const u16 exp = u16(e - 1 + 16383);
-    const long double scaled = std::ldexp(m, 64); // [2^63,2^64)
+    const int biased = e - 1 + 16383;
+    const u16 exp = u16(std::max(biased, 0));
+    const long double scaled = std::ldexp(m, biased > 0 ? 64 : 63 + biased);
     const u64 mant = u64(scaled);
     for (int i = 0; i < 8; ++i) p[i] = u8(mant >> (i * 8));
     p[8] = u8(exp);
@@ -59,13 +67,20 @@ void to_ext80(long double v, u8* p) {
 
 void Cpu::execute_x87(u8 opcode) {
     if ((state_.cr0 & 0x0cu) != 0) throw CpuException{7, 0, false};
-    // The FPU instruction pointer is architecturally the CS:IP of the last FPU
-    // instruction; the environment formats below expose it.
-    state_.fpu_last_ip = opcode_ip_;
-    state_.fpu_last_cs = state_.seg[unsigned(SegReg::cs)].selector;
-    state_.fpu_last_op = u16(opcode);
     const ModRm m = decode_modrm(4);
     const bool reg_form = m.mod == 3;
+    if (!reg_form && (opcode == 0xdb || opcode == 0xdd || opcode == 0xdf) && m.reg_field == 1)
+        raise_exception(6); // FISTTP belongs to SSE3, not Pentium II
+    if (!reg_form && opcode == 0xdb && m.reg_field == 4) raise_exception(6);
+    const bool control = (!reg_form && ((opcode == 0xd9 && m.reg_field >= 4) ||
+        (opcode == 0xdd && m.reg_field >= 4))) ||
+        (reg_form && ((opcode == 0xdb && m.raw >= 0xe0 && m.raw <= 0xe4) ||
+                      (opcode == 0xdf && m.raw == 0xe0)));
+    if (!control) {
+        state_.fpu_last_ip = opcode_ip_;
+        state_.fpu_last_cs = state_.seg[unsigned(SegReg::cs)].selector;
+        state_.fpu_last_op = u16(((opcode & 7u) << 8) | m.raw);
+    }
     auto& fs = state_.fpu_status;
     auto status_word = [&]() -> u16 { return u16(fs | (u16(state_.fpu_top & 7u) << 11)); };
     // Environment image size: 14 bytes for 16-bit operand size, 28 bytes for
@@ -76,7 +91,7 @@ void Cpu::execute_x87(u8 opcode) {
     const bool env_protected = state_.mode == CpuMode::protected_mode;
     const u32 env_size = env32 ? 28u : 14u;
     auto write_env = [&](u32 base, SegReg seg) {
-        const u16 cw = u16(state_.fpu_control | 0x003fu);
+        const u16 cw = state_.fpu_control;
         const u16 sw = status_word();
         const u16 tw = state_.fpu_tag;
         const u32 ip_off = state_.fpu_last_ip;
@@ -165,19 +180,21 @@ void Cpu::execute_x87(u8 opcode) {
             state_.fpu_last_cs = 0;
             state_.fpu_last_op = u16(hi & 0x07ffu);
         }
+        for (int i = 0; i < 8; ++i)
+            state_.fpu[i].empty = ((state_.fpu_tag >> (i * 2)) & 3) == 3;
     };
     auto set_c = [&](bool c0, bool c2, bool c3) {
         fs = u16((fs & ~0x4700u) | (c0 ? 0x0100u : 0) | (c2 ? 0x0400u : 0) | (c3 ? 0x4000u : 0));
     };
     auto set_fcomi_flags = [&](long double a, long double b) {
         const bool unordered = std::isnan(a) || std::isnan(b);
-        set_flag(CF, !unordered && a < b);
-        set_flag(ZF, !unordered && a == b);
+        set_flag(CF, unordered || a < b);
+        set_flag(ZF, unordered || a == b);
         set_flag(PF, unordered);
         set_flag(OF, false);
         set_flag(SF, false);
         set_flag(AF, false);
-        set_c(unordered ? true : (a < b), unordered, unordered ? true : (a == b));
+        // FCOMI changes EFLAGS, not C0/C2/C3 in the x87 status word.
     };
     auto invalid = [&] { state_.fpu_invalid = true; fs |= 0x0001; };
     auto division_flags = [&](long double num, long double den) {
@@ -200,27 +217,23 @@ void Cpu::execute_x87(u8 opcode) {
         default: return i64(std::nearbyint(v)); // nearest, ties to even
         }
     };
-    auto trunc_to_int = [&](long double v) -> i64 {
-        if (out_of_range(v)) { invalid(); return std::numeric_limits<i64>::min(); }
-        return i64(std::trunc(v));
-    };
-    auto store_i32 = [&](u32 off, SegReg seg, bool truncate, bool popit) {
+    auto store_i32 = [&](u32 off, SegReg seg, bool popit) {
         const long double v = st0();
         if (!std::isfinite(v) || v < -2147483648.0L || v >= 2147483648.0L) {
             invalid();
             write_mem(off, 0x80000000u, 4, seg);
         } else {
-            write_mem(off, u32(truncate ? trunc_to_int(v) : round_to_int(v)), 4, seg);
+            write_mem(off, u32(round_to_int(v)), 4, seg);
         }
         if (popit) pop();
     };
-    auto store_i16 = [&](u32 off, SegReg seg, bool truncate, bool popit) {
+    auto store_i16 = [&](u32 off, SegReg seg, bool popit) {
         const long double v = st0();
         if (!std::isfinite(v) || v < -32768.0L || v >= 32768.0L) {
             invalid();
             write_mem(off, 0x8000u, 2, seg);
         } else {
-            write_mem(off, u32(truncate ? trunc_to_int(v) : round_to_int(v)) & 0xffffu, 2, seg);
+            write_mem(off, u32(round_to_int(v)) & 0xffffu, 2, seg);
         }
         if (popit) pop();
     };
@@ -262,7 +275,7 @@ void Cpu::execute_x87(u8 opcode) {
             case 3: write_rm(m, std::bit_cast<u32>(float(st0())), 4); pop(); break;
             case 4: read_env(m.offset, m.segment); break;
             case 5: state_.fpu_control = u16(read_rm(m, 2)); break;
-            case 6: write_env(m.offset, m.segment); break; // FNSTENV does not change CW
+            case 6: write_env(m.offset, m.segment); state_.fpu_control |= 0x003fu; break;
             case 7: write_rm(m, state_.fpu_control, 2); break;
             default: break;
             }
@@ -319,19 +332,28 @@ void Cpu::execute_x87(u8 opcode) {
             case 0xf5: case 0xf8: { // FPREM / FPREM1
                 const long double x = st0();
                 const long double y = fpu_st(1);
-                if (!std::isfinite(x) || !std::isfinite(y) || y == 0.0L) {
+                if (!std::isfinite(x) || std::isnan(y) || y == 0.0L) {
                     fs |= 0x0001u; // #IA
                     set_c(true, true, false);
-                    fs |= 0x0200u; // C2 = incomplete
                     break;
                 }
-                long double q = opcode == 0xf5 ? std::nearbyint(x / y) : std::trunc(x / y);
-                const long double r = opcode == 0xf5 ? std::remainder(x, y) : std::fmod(x, y);
-                long double qm = std::fmod(q, 8.0L);
-                if (qm < 0) qm += 8.0L;
-                const u32 qi = u32(qm);
-                set_c((qi & 1) != 0, false, (qi & 4) != 0);
-                fs = u16((fs & ~0x0200u) | (((qi >> 1) & 1) ? 0x0200u : 0));
+                if (x != 0 && std::isfinite(y) && std::ilogb(x) - std::ilogb(y) >= 64) {
+                    // Vol. 2 permits an implementation-dependent reduction
+                    // of 32..63 exponent bits per iteration. Choose 32.
+                    const int shift = std::ilogb(x) - std::ilogb(y) - 32;
+                    fpu_set_st(0, std::fmod(x, std::ldexp(y, shift)));
+                    fs |= 0x0400u;
+                    break;
+                }
+                int quotient = 0;
+                long double r = std::remquo(x, y, &quotient);
+                if (m.raw == 0xf8 && r != 0 && std::signbit(r) != std::signbit(x)) {
+                    r += std::copysign(std::fabs(y), x);
+                    quotient -= std::signbit(x) == std::signbit(y) ? 1 : -1;
+                }
+                const u32 qi = u32(quotient) & 7u;
+                set_c((qi & 4) != 0, false, (qi & 2) != 0);
+                fs = u16((fs & ~0x0200u) | ((qi & 1) ? 0x0200u : 0));
                 fpu_set_st(0, r);
                 break;
             }
@@ -354,8 +376,27 @@ void Cpu::execute_x87(u8 opcode) {
                 set_c(false, false, false);
                 break;
             }
-            case 0xfc: fpu_set_st(0, std::round(st0())); break;
-            case 0xfd: { const int e = int(pop()); fpu_set_st(0, std::ldexp(st0(), e)); } break;
+            case 0xfc: { // FRNDINT observes RC and does not narrow to a host integer.
+                long double v = st0();
+                switch (state_.fpu_control & 0x0c00u) {
+                case 0x0400: v = std::floor(v); break;
+                case 0x0800: v = std::ceil(v); break;
+                case 0x0c00: v = std::trunc(v); break;
+                default: v = std::nearbyint(v); break;
+                }
+                if (std::isfinite(st0()) && v != st0()) fs |= 0x20u;
+                fpu_set_st(0, v);
+                break;
+            }
+            case 0xfd: { // FSCALE leaves ST(1) and TOP intact.
+                const long double exponent = std::trunc(fpu_st(1));
+                if (std::isnan(exponent)) fpu_set_st(0, exponent);
+                else {
+                    const int e = int(std::clamp(exponent, -32768.0L, 32768.0L));
+                    fpu_set_st(0, std::ldexp(st0(), e));
+                }
+                break;
+            }
             case 0xfe: if (std::fabs(st0()) >= 9223372036854775808.0L) { fs |= 0x0400u; break; } fpu_set_st(0, std::sin(st0())); break;
             case 0xff: if (std::fabs(st0()) >= 9223372036854775808.0L) { fs |= 0x0400u; break; } fpu_set_st(0, std::cos(st0())); break;
             default: invalid(); break;
@@ -389,10 +430,8 @@ void Cpu::execute_x87(u8 opcode) {
         if (!reg_form) {
             switch (m.reg_field) {
             case 0: fpu_push(i32(read_rm(m, 4))); break;
-            case 1: store_i32(m.offset, m.segment, true, true); break; // FISTTP
-            case 4: { u8 b[10]{}; for (int i = 0; i < 10; ++i) b[i] = u8(read_mem(m.offset + u32(i), 1, m.segment)); fpu_push(from_bcd80(b)); break; }
-            case 2: store_i32(m.offset, m.segment, false, false); break;
-            case 3: store_i32(m.offset, m.segment, false, true); break;
+            case 2: store_i32(m.offset, m.segment, false); break;
+            case 3: store_i32(m.offset, m.segment, true); break;
             case 5: { u8 b[10]{}; for (int i = 0; i < 10; ++i) b[i] = u8(read_mem(m.offset + u32(i), 1, m.segment)); fpu_push(from_ext80(b)); break; }
             case 7: { u8 b[10]; to_ext80(st0(), b); for (int i = 0; i < 10; ++i) write_mem(m.offset + u32(i), b[i], 1, m.segment); pop(); break; }
             default: break;
@@ -405,7 +444,7 @@ void Cpu::execute_x87(u8 opcode) {
             else if (m.raw < 0xd8) take = !cf && !zf;
             else take = !pf;
             if (take) fpu_set_st(0, fpu_st(m.rm));
-        } else if (m.raw == 0xe2) { fs &= ~0x0080u; }
+        } else if (m.raw == 0xe2) { fs &= ~0x80ffu; state_.fpu_invalid = false; }
         else if (m.raw == 0xe3) { // FINIT
             state_.fpu_control = 0x037f; state_.fpu_status = 0; state_.fpu_top = 0; state_.fpu_tag = 0xffff;
             state_.fpu_last_ip = 0; state_.fpu_last_cs = 0; state_.fpu_last_op = 0;
@@ -434,10 +473,10 @@ void Cpu::execute_x87(u8 opcode) {
             switch (m.reg_field) {
             case 0: fpu_set_st(i, fpu_st(i) + st0()); break;
             case 1: fpu_set_st(i, fpu_st(i) * st0()); break;
-            case 4: fpu_set_st(i, fpu_st(i) - st0()); break;
-            case 5: fpu_set_st(i, st0() - fpu_st(i)); break;
-            case 6: division_flags(fpu_st(i), st0()); fpu_set_st(i, fpu_st(i) / st0()); break;
-            case 7: division_flags(st0(), fpu_st(i)); fpu_set_st(i, st0() / fpu_st(i)); break;
+            case 4: fpu_set_st(i, st0() - fpu_st(i)); break;
+            case 5: fpu_set_st(i, fpu_st(i) - st0()); break;
+            case 6: division_flags(st0(), fpu_st(i)); fpu_set_st(i, st0() / fpu_st(i)); break;
+            case 7: division_flags(fpu_st(i), st0()); fpu_set_st(i, fpu_st(i) / st0()); break;
             }
         }
         break;
@@ -445,7 +484,6 @@ void Cpu::execute_x87(u8 opcode) {
         if (!reg_form) {
             switch (m.reg_field) {
             case 0: { const u64 v = u64(read_mem(m.offset, 4, m.segment)) | (u64(read_mem(m.offset + 4, 4, m.segment)) << 32); fpu_push(std::bit_cast<double>(v)); break; }
-            case 1: { const i64 v = trunc_to_int(st0()); write_mem(m.offset, u32(v), 4, m.segment); write_mem(m.offset + 4, u32(u64(v) >> 32), 4, m.segment); pop(); break; } // FISTTP
             case 2: { const double d = double(st0()); const u64 v = std::bit_cast<u64>(d); write_mem(m.offset, u32(v), 4, m.segment); write_mem(m.offset + 4, u32(v >> 32), 4, m.segment); break; }
             case 3: { const double d = double(st0()); const u64 v = std::bit_cast<u64>(d); write_mem(m.offset, u32(v), 4, m.segment); write_mem(m.offset + 4, u32(v >> 32), 4, m.segment); pop(); break; }
             case 4: { // FRSTOR
@@ -485,7 +523,7 @@ void Cpu::execute_x87(u8 opcode) {
             }
         } else {
             const u8 sub = m.raw & 0xf8;
-            if (sub == 0xc0) state_.fpu[m.rm].empty = true;
+            if (sub == 0xc0) state_.fpu[(state_.fpu_top + m.rm) & 7].empty = true;
             else if (sub == 0xd0) fpu_set_st(m.rm, st0());
             else if (sub == 0xd8) { fpu_set_st(m.rm, st0()); pop(); }
             else if (sub == 0xe0) set_c(std::isnan(st0()) || std::isnan(fpu_st(m.rm)), false, st0() == fpu_st(m.rm));
@@ -523,9 +561,9 @@ void Cpu::execute_x87(u8 opcode) {
         if (!reg_form) {
             switch (m.reg_field) {
             case 0: fpu_push(i16(u16(read_rm(m, 2)))); break;
-            case 1: store_i16(m.offset, m.segment, true, true); break; // FISTTP
-            case 2: store_i16(m.offset, m.segment, false, false); break;
-            case 3: store_i16(m.offset, m.segment, false, true); break;
+            case 2: store_i16(m.offset, m.segment, false); break;
+            case 3: store_i16(m.offset, m.segment, true); break;
+            case 4: { u8 b[10]{}; for (int i = 0; i < 10; ++i) b[i] = u8(read_mem(m.offset + u32(i), 1, m.segment)); fpu_push(from_bcd80(b)); break; }
             case 5: { const u64 v = u64(read_mem(m.offset, 4, m.segment)) | (u64(read_mem(m.offset + 4, 4, m.segment)) << 32); fpu_push(i64(v)); break; }
             case 6: { u8 b[10]; to_bcd80(st0(), b); for (int i = 0; i < 10; ++i) write_mem(m.offset + u32(i), b[i], 1, m.segment); pop(); break; }
             case 7: { const i64 v = round_to_int(st0()); write_mem(m.offset, u32(v), 4, m.segment); write_mem(m.offset + 4, u32(u64(v) >> 32), 4, m.segment); pop(); break; }

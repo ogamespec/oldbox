@@ -144,7 +144,7 @@ TEST(cpu_io_bitmap_controls_ring3_access) {
     // TSS at 0x2000, I/O bitmap at 0x68, limit 0xFF; GDT[5] selector 0x28.
     h.bus.write16(0x528, 0x00ff); h.bus.write16(0x52a, 0x2000);
     h.bus.write8(0x52c, 0x00); h.bus.write8(0x52d, 0x89); h.bus.write8(0x52e, 0x00); h.bus.write8(0x52f, 0x00);
-    h.bus.write16(0x2064, 0x0068);
+    h.bus.write16(0x2066, 0x0068);
     h.state().gdtr_limit = 0x2f;
     h.state().idtr_base = 0x600; h.state().idtr_limit = 0x7ff;
     const u32 gate = 0x600 + 13 * 8;

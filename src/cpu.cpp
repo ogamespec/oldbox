@@ -109,7 +109,7 @@ void Cpu::update_mode_from_cr0() {
 // Called only after the inline TLB probe in cpu.hpp missed.
 u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
     const u32 page = (linear >> 12) & 0x3ff;
-    const u32 tag = (state_.cr3 & ~0xfffu) | (linear >> 12);
+    const u32 tag = linear >> 12;
     const bool user = !supervisor && cpl() == 3;
     u32 pd = state_.cr3 & ~0xfffu;
     if (state_.cr4 & 0x20u) {
@@ -117,7 +117,7 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         const u32 pdpt = (state_.cr3 & ~0x1fu) + (((linear >> 30) & 3) * 8);
         const u64 pdpe = bus_.read32(pdpt) | (u64(bus_.read32(pdpt + 4)) << 32);
         if (!(pdpe & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
-        if (user && !(pdpe & 4)) { state_.cr2 = linear; throw CpuException{14, u32(4 | (write ? 2 : 0)), true}; }
+        // Legacy PAE PDPTEs have no U/S, R/W, accessed or dirty bits.
         const u64 pde_addr = (pdpe & 0x000ffffffffff000ull) + (((linear >> 21) & 0x1ff) * 8);
         const u64 pde = bus_.read32(u32(pde_addr)) | (u64(bus_.read32(u32(pde_addr + 4))) << 32);
         if (!(pde & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
@@ -125,8 +125,10 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
             if (user && !(pde & 4)) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
             if (write && !(pde & 2) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
             const u32 phys = u32(pde & 0x000fffffffe00000ull) | (linear & 0x1fffffu);
+            bus_.write32(u32(pde_addr), u32(pde) | 0x20u | (write ? 0x40u : 0));
+            tlb_leaf_[page] = u32(pde_addr);
             tlb_tag_[page] = tag; tlb_phys_[page] = phys & ~0xfffu;
-            tlb_flags_[page] = 1 | ((pde & 2) ? 2 : 0) | ((pde & 4) ? 4 : 0) | ((pde & 0x100) ? 8 : 0);
+            tlb_flags_[page] = 1 | ((pde & 2) ? 2 : 0) | ((pde & 4) ? 4 : 0) | ((pde & 0x100) ? 8 : 0) | (write ? 16 : 0);
             return phys;
         }
         const u64 pte_addr = (pde & 0x000ffffffffff000ull) + (((linear >> 12) & 0x1ff) * 8);
@@ -135,11 +137,15 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         if (user && (!(pde & 4) || !(pte & 4))) { state_.cr2 = linear; throw CpuException{14, u32(5 | (write ? 2 : 0)), true}; }
         if (write && (!(pde & 2) || !(pte & 2)) && (user || (state_.cr0 & 0x10000u))) { state_.cr2 = linear; throw CpuException{14, u32(3 | (user ? 4 : 0)), true}; }
         const u32 phys = u32(pte & 0x000ffffffffff000ull) | (linear & 0xfffu);
+        bus_.write32(u32(pde_addr), u32(pde) | 0x20u);
+        bus_.write32(u32(pte_addr), u32(pte) | 0x20u | (write ? 0x40u : 0));
+        tlb_leaf_[page] = u32(pte_addr);
         tlb_tag_[page] = tag; tlb_phys_[page] = phys & ~0xfffu;
-        tlb_flags_[page] = 1 | (((pde & pte) & 2) ? 2 : 0) | (((pde & pte) & 4) ? 4 : 0) | ((pte & 0x100) ? 8 : 0);
+        tlb_flags_[page] = 1 | (((pde & pte) & 2) ? 2 : 0) | (((pde & pte) & 4) ? 4 : 0) | ((pte & 0x100) ? 8 : 0) | (write ? 16 : 0);
         return phys;
     }
-    u32 pde = bus_.read32(pd + ((linear >> 22) * 4));
+    const u32 pde_addr = pd + ((linear >> 22) * 4);
+    u32 pde = bus_.read32(pde_addr);
     if (!(pde & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
     u32 phys;
     bool is_user, writable;
@@ -151,6 +157,8 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         phys = (pde & 0xffc00000u) | (linear & 0x3fffffu);
         is_user = (pde & 4) != 0;
         writable = (pde & 2) != 0;
+        bus_.write32(pde_addr, pde | 0x20u | (write ? 0x40u : 0));
+        tlb_leaf_[page] = pde_addr;
     } else {
         pte = bus_.read32((pde & 0xfffff000u) + (((linear >> 12) & 0x3ff) * 4));
         if (!(pte & 1)) { state_.cr2 = linear; throw CpuException{14, u32((write ? 2u : 0u) | (user ? 4u : 0u)), true}; }
@@ -159,11 +167,15 @@ u32 Cpu::translate_slow(u32 linear, bool write, bool supervisor) {
         phys = (pte & 0xfffff000u) | (linear & 0xfffu);
         is_user = ((pde & pte) & 4) != 0;
         writable = ((pde & pte) & 2) != 0;
+        bus_.write32(pde_addr, pde | 0x20u);
+        bus_.write32((pde & 0xfffff000u) + (((linear >> 12) & 0x3ff) * 4),
+                     pte | 0x20u | (write ? 0x40u : 0));
+        tlb_leaf_[page] = (pde & 0xfffff000u) + (((linear >> 12) & 0x3ff) * 4);
     }
     tlb_tag_[page] = tag;
     tlb_phys_[page] = phys & ~0xfffu;
     const u32 global = (is_4m ? (pde & 0x100u) : (pte & 0x100u)) != 0;
-    tlb_flags_[page] = 1 | (writable ? 2 : 0) | (is_user ? 4 : 0) | (global ? 8 : 0);
+    tlb_flags_[page] = 1 | (writable ? 2 : 0) | (is_user ? 4 : 0) | (global ? 8 : 0) | (write ? 16 : 0);
     return phys;
 }
 
@@ -363,6 +375,8 @@ void Cpu::raise_exception(int vector, u32 error, bool has_error) {
 }
 
 u8 Cpu::fetch8() {
+    if (instruction_bytes_ == 15) exception_gp(0);
+    ++instruction_bytes_;
     const auto& cs = state_.seg[unsigned(SegReg::cs)];
     // Real-address and virtual-8086 mode are native 16-bit environments; the
     // D bit of a cached CS descriptor is irrelevant there.
@@ -453,6 +467,17 @@ ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
     m.mod = m.raw >> 6;
     m.reg_field = (m.raw >> 3) & 7;
     m.rm = m.raw & 7;
+    if (lock_) {
+        const u32 op = last_opcode_;
+        const bool group1 = op == 0x80 || op == 0x81 || op == 0x82 || op == 0x83;
+        const bool group3 = op == 0xf6 || op == 0xf7;
+        const bool group45 = op == 0xfe || op == 0xff;
+        if (m.mod == 3 || (group1 && m.reg_field == 7) ||
+            (group3 && m.reg_field != 2 && m.reg_field != 3) ||
+            (group45 && m.reg_field > 1) ||
+            (op == 0x0fba && m.reg_field < 5) ||
+            (op == 0x0fc7 && m.reg_field != 1)) raise_exception(6);
+    }
     m.size = operand_size;
     m.address_size = addrsize32_ ? 4 : 2;
     m.segment = SegReg::ds;
@@ -1122,7 +1147,8 @@ bool Cpu::v86_redirect_bit(u8 vector) {
     // TSS I/O permission bitmap.  A set bit means "handle through the
     // protected-mode IDT".  A missing map behaves like all bits set.
     if ((state_.cr4 & 1u) == 0 || tr_selector_ == 0 || tr_limit_ < 0x67) return true;
-    const u16 iobase = u16(read_linear16_super(tr_base_ + 0x64) & 0xfffeu);
+    if (!tr_32bit_) return true;
+    const u16 iobase = read_linear16_super(tr_base_ + 0x66);
     if (iobase < 0x68) return true;
     if (u32(iobase) > tr_limit_ + 1u) return true;
     const u32 map_base = u32(iobase) - 32u;
@@ -1399,9 +1425,11 @@ bool Cpu::io_allowed(u16 port) {
     if (state_.mode != CpuMode::virtual86 && cpl() <= int((state_.eflags >> 12) & 3)) return true;
     if (tr_selector_ == 0) return false;
     if (tr_limit_ < (tr_32bit_ ? 0x67u : 0x2bu)) return false;
-    // 32-bit TSSs have an I/O map base field; a 16-bit TSS starts the map at 2Ch.
-    const u16 iobase = tr_32bit_ ? u16(read_linear16_super(tr_base_ + 0x64) & 0xfffeu) : 0x002cu;
-    if (iobase >= tr_limit_) return false;
+    // The 286 TSS has no I/O bitmap. In a 386 TSS byte 64h holds T,
+    // while the independent 16-bit bitmap offset starts at 66h (Vol. 3, 6-2).
+    if (!tr_32bit_) return false;
+    const u16 iobase = read_linear16_super(tr_base_ + 0x66);
+    if (iobase > tr_limit_) return false;
     const u32 off = u32(iobase) + (port >> 3);
     if (off > tr_limit_) return false;
     const u8 bits = read_linear8_super(tr_base_ + off);
@@ -1555,6 +1583,7 @@ void Cpu::step() {
     pc_ring_[pc_ring_pos_++ & 63u] = (u32(state_.seg[1].selector) << 16) | (state_.eip & 0xffffu);
     opcode_ip_ = state_.eip;
     opcode_cs_ = state_.seg[1].selector;
+    instruction_bytes_ = 0;
     clear_prefixes();
     debug_pending_ = 0;
     const u32 ibp = debug_instruction_breakpoint();
@@ -1627,6 +1656,14 @@ void Cpu::execute_one() {
     const u8 op = fetch8();
     last_opcode_ = op;
     cycles_ += 2;
+    if (lock_) {
+        const bool prefix = op == 0x66 || op == 0x67 || op == 0xf0 || op == 0xf2 || op == 0xf3 ||
+                            op == 0x26 || op == 0x2e || op == 0x36 || op == 0x3e || op == 0x64 || op == 0x65;
+        const bool alu_memory = op <= 0x31 && (op & 7) <= 1;
+        if (!prefix && !alu_memory && op != 0x0f && op != 0x80 && op != 0x81 && op != 0x82 &&
+            op != 0x83 && op != 0x86 && op != 0x87 && op != 0xf6 && op != 0xf7 &&
+            op != 0xfe && op != 0xff) raise_exception(6);
+    }
     switch (op) {
     // A prefix marks its attribute as overridden; a repeated prefix of the
     // same group does not toggle the attribute back (the effective size is

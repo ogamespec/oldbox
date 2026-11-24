@@ -179,7 +179,7 @@ void Cpu::do_task_switch(u16 selector, bool call, bool interrupt, bool iret) {
             write_linear32_super(old + 0x20, state_.eip);
             write_linear32_super(old + 0x24, old_saved_flags);
             for (int i = 0; i < 8; ++i) write_linear32_super(old + 0x28 + u32(i) * 4, state_.gpr[i]);
-            for (int i = 0; i < 6; ++i) write_linear16_super(old + 0x48 + u32(i) * 2, state_.seg[i].selector);
+            for (int i = 0; i < 6; ++i) write_linear16_super(old + 0x48 + u32(i) * 4, state_.seg[i].selector);
             write_linear16_super(old + 0x60, state_.ldtr);
         } else {
             write_linear16_super(old + 0x0e, u16(state_.eip));
@@ -208,8 +208,8 @@ void Cpu::do_task_switch(u16 selector, bool call, bool interrupt, bool iret) {
         new_eip = r32(0x20);
         new_eflags = r32(0x24);
         for (int i = 0; i < 8; ++i) new_gpr[i] = r32(0x28 + u32(i) * 4);
-        new_es = r16(0x48); new_cs = r16(0x4a); new_ss = r16(0x4c);
-        new_ds = r16(0x4e); new_fs = r16(0x50); new_gs = r16(0x52);
+        new_es = r16(0x48); new_cs = r16(0x4c); new_ss = r16(0x50);
+        new_ds = r16(0x54); new_fs = r16(0x58); new_gs = r16(0x5c);
         new_ldt = r16(0x60);
         state_.cr3 = r32(0x1c);
     } else {
@@ -353,6 +353,7 @@ void Cpu::enter_smm() {
     // 9.5).  The original CR0 stays in the state-save area and is restored
     // by RSM.
     state_.cr0 &= ~(1u | 0x80000000u);
+    flush_tlb();
     state_.mode = CpuMode::real;
     state_.seg[1].selector = 0;
     state_.seg[1].base = b;
@@ -397,6 +398,7 @@ void Cpu::resume_smm() {
     tr_32bit_ = smm_saved_tr_32bit_;
     if (bus_.read16(b + 0x7f02) != 0) state_.halted = true;
     update_mode_from_cr0();
+    flush_tlb();
 }
 
 

@@ -220,14 +220,14 @@ TEST(mmx_packed_multiply_add_sad_and_saturation) {
         h.halt(); h.run(2);
         CHECK_EQ(h.state().mmx[0], 0x00000002'00000003ull);
     }
-    // PMULHUW 0xffff * 0xffff -> 0xfffe.
+    // PMULHUW is an SSE extension, absent on Pentium II.
     {
         CpuHarness h;
         h.state().mmx[0] = 0xffffffffffffffffull;
         h.state().mmx[1] = 0xffffffffffffffffull;
         h.emit(0x0f); h.emit(0xe4); h.emit(0xc1);
-        h.halt(); h.run(2);
-        CHECK_EQ(h.state().mmx[0], 0xfffefffefffefffeull);
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6);
     }
     // PMULHW -2 * 3 = -6 -> high word 0xffff.
     {
@@ -244,8 +244,8 @@ TEST(mmx_packed_multiply_add_sad_and_saturation) {
         h.state().mmx[0] = 0x0403020104030201ull;
         h.state().mmx[1] = 0x0706050407060504ull;
         h.emit(0x0f); h.emit(0xf6); h.emit(0xc1);
-        h.halt(); h.run(2);
-        CHECK_EQ(h.state().mmx[0], 0x00000000000c000cull);
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6); // PSADBW requires SSE
     }
     // PSUBSW saturates at -32768.
     {
@@ -262,8 +262,8 @@ TEST(mmx_packed_multiply_add_sad_and_saturation) {
         h.state().mmx[0] = 0x0002000200020002ull;
         h.state().mmx[1] = 0x0005000500050005ull;
         h.emit(0x0f); h.emit(0xe3); h.emit(0xc1);
-        h.halt(); h.run(2);
-        CHECK_EQ(h.state().mmx[0], 0x0004000400040004ull);
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6); // PAVGW requires SSE
     }
     // PMINSW signed: min(-5, 3) = -5.
     {
@@ -271,8 +271,8 @@ TEST(mmx_packed_multiply_add_sad_and_saturation) {
         h.state().mmx[0] = 0xfffbfffbfffbfffbull;
         h.state().mmx[1] = 0x0003000300030003ull;
         h.emit(0x0f); h.emit(0xea); h.emit(0xc1);
-        h.halt(); h.run(2);
-        CHECK_EQ(h.state().mmx[0], 0xfffbfffbfffbfffbull);
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6); // PMINSW requires SSE
     }
 }
 
@@ -280,8 +280,8 @@ TEST(mmx_pshufw_packuswb_movmskb_and_byte_shifts) {
     CpuHarness h;
     h.state().mmx[0] = 0x4444333322221111ull;
     h.emit(0x0f); h.emit(0x70); h.emit(0xc0); h.emit(0x1b); // pshufw mm0,mm0,0x1b
-    h.halt(); h.run(2);
-    CHECK_EQ(h.state().mmx[0], 0x1111222233334444ull);
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 6); // PSHUFW requires SSE
 
     CpuHarness p;
     p.state().mmx[0] = 0x000200010000ffffull;
@@ -293,14 +293,14 @@ TEST(mmx_pshufw_packuswb_movmskb_and_byte_shifts) {
     CpuHarness m;
     m.state().mmx[0] = 0x8080808000000001ull;
     m.emit(0x0f); m.emit(0xd7); m.emit(0xc0); // pmovmskb eax, mm0
-    m.halt(); m.run(2);
-    CHECK_EQ(m.r(0), 0xf0u);
+    m.cpu.step();
+    CHECK_EQ(m.cpu.last_exception_vector(), 6); // PMOVMSKB requires SSE
 
     CpuHarness d;
     d.state().mmx[0] = 0x1122334455667788ull;
     d.emit(0x0f); d.emit(0x73); d.emit(0xd8); d.emit(0x02); // psrldq mm0,2
-    d.halt(); d.run(2);
-    CHECK_EQ(d.state().mmx[0], 0x0000112233445566ull);
+    d.cpu.step();
+    CHECK_EQ(d.cpu.last_exception_vector(), 6); // no MMX PSRLDQ
 }
 
 TEST(fpu_fbld_fbstp_bcd_roundtrip) {
@@ -308,7 +308,7 @@ TEST(fpu_fbld_fbstp_bcd_roundtrip) {
     h.bus.write32(0x3000, 123456789);
     h.emit(0xdb); h.emit(0x05); h.emit32(0x3000); // fild dword 123456789
     h.emit(0xdf); h.emit(0x35); h.emit32(0x3000); // fbstp [0x3000]
-    h.emit(0xdb); h.emit(0x25); h.emit32(0x3000); // fbld [0x3000]
+    h.emit(0xdf); h.emit(0x25); h.emit32(0x3000); // fbld [0x3000]
     h.emit(0xdd); h.emit(0x1d); h.emit32(0x3010); // fstp qword
     h.emit(0xf4); h.run(10);
     CHECK_EQ(h.bus.read8(0x3000), 0x89u);
@@ -348,13 +348,14 @@ TEST(fpu_fild_negative_and_fist_rounding) {
             CHECK_EQ(i32(h.bus.read32(0x3020)), i32(expected));
         }
     }
-    // FISTTP always truncates toward zero.
+    // FISTTP belongs to SSE3 and must fault on Pentium II.
     CpuHarness h;
     h.bus.write64(0x3010, std::bit_cast<u64>(-2.9));
     h.emit(0xdd); h.emit(0x05); h.emit32(0x3010); // fld qword
     h.emit(0xdb); h.emit(0x0d); h.emit32(0x3020); // fisttp dword
-    h.halt(); h.run(4);
-    CHECK_EQ(i32(h.bus.read32(0x3020)), -2);
+    h.cpu.step(); h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), 6);
+    CHECK_EQ(h.bus.read32(0x3020), 0u);
 }
 
 TEST(fpu_fcomi_clears_of_sf_af) {
@@ -371,15 +372,15 @@ TEST(fpu_fcomi_clears_of_sf_af) {
     CHECK_EQ(h.flag(PF) != 0, false);
 }
 
-TEST(fpu_fstenv_masks_stored_control_word) {
+TEST(fpu_fstenv_saves_control_word_then_masks_exceptions) {
     CpuHarness h;
     h.bus.write16(0x3000, 0x0300); // all exception masks clear
     h.emit(0xd9); h.emit(0x2d); h.emit32(0x3000); // fldcw
     h.emit(0xd9); h.emit(0x35); h.emit32(0x3010); // fnstenv
     h.emit(0xd9); h.emit(0x3d); h.emit32(0x3020); // fnstcw
     h.halt(); h.run(5);
-    CHECK_EQ(h.bus.read16(0x3010), 0x033fu); // stored CW has all exceptions masked
-    CHECK_EQ(h.bus.read16(0x3020), 0x0300u); // internal CW is unchanged
+    CHECK_EQ(h.bus.read16(0x3010), 0x0300u); // saved CW is the original
+    CHECK_EQ(h.bus.read16(0x3020), 0x033fu); // internal CW now masks exceptions
 }
 
 TEST(fpu_fprem_and_fprem1_quotient_bits) {
@@ -392,10 +393,10 @@ TEST(fpu_fprem_and_fprem1_quotient_bits) {
     h.emit(0xdd); h.emit(0x1d); h.emit32(0x3010);  // fstp qword
     h.emit(0xf4); h.run(8);
     CHECK(std::fabs(read_double(h, 0x3010) - 1.0) < 1e-12);
-    CHECK(h.state().fpu_status & 0x0100u); // C0 = quotient bit 0
-    CHECK(h.state().fpu_status & 0x0200u); // C1 = quotient bit 1
+    CHECK(!(h.state().fpu_status & 0x0100u)); // C0 = quotient bit 2
+    CHECK(h.state().fpu_status & 0x0200u); // C1 = quotient bit 0
     CHECK(!(h.state().fpu_status & 0x0400u)); // C2 = 0 (complete)
-    CHECK(!(h.state().fpu_status & 0x4000u)); // C3 = quotient bit 2
+    CHECK(h.state().fpu_status & 0x4000u); // C3 = quotient bit 1
 
     CpuHarness g;
     g.bus.write32(0x3000, 4);

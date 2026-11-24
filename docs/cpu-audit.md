@@ -1,5 +1,9 @@
 # Аудит набора инструкций IA-32
 
+**Актуальный повторный аудит:** [pentium2-spec-audit.md](pentium2-spec-audit.md).
+Он уточняет ошибки прежних тестов и документации (особенно FNSTENV и TSS),
+перечисляет новые исправления и оставшиеся препятствия полному соответствию.
+
 Аудит выполнен по первичным документам из `specs/`:
 
 - `specs/242690-001.pdf` — Pentium Pro Family Developer’s Manual, Volume 1
@@ -54,7 +58,7 @@
 | 14 | Возобновление после исключения | `opcode_ip_` не записывался | `#GP/#PF` возвращались на адрес 0 | проверяется тестами исключений/режимов |
 | 15 | `FILD m32int` | 32-битное значение читалось как беззнаковое | отрицательные целые превращались в большие положительные | `fpu_fild_negative_and_fist_rounding` |
 | 16 | `FIST/FISTP` | округление делалось через `trunc`, игнорируя CW[11:10] | неверные целые при round/floor/ceil; отсутствовал `FISTTP` | `fpu_fild_negative_and_fist_rounding` |
-| 17 | `FNSTENV`/`FSTENV`, `FCOMI` | сохранялся немаскированный CW и менялся внутренний CW; FCOMI не очищал OF/SF/AF | неверный env-образ и флаги после сравнения | `fpu_fstenv_masks_stored_control_word`, `fpu_fcomi_clears_of_sf_af` |
+| 17 | `FNSTENV`/`FSTENV`, `FCOMI` | прежнее исправление CW было ошибочным: нужно сохранить исходный CW, затем маскировать внутренний; FCOMI очищает OF/SF/AF | исправлено повторным аудитом | `fpu_fstenv_saves_control_word_then_masks_exceptions`, `fpu_fcomi_clears_of_sf_af` |
 | 18 | `LAR`/`LSL` | результат `LAR` собирался не в тех битах (нужно: 16-битная форма — байт доступа в AH; 32-битная — байт 6 дескриптора в 23:16), `LSL` повторно масштабировал G-limit, не было проверок CPL/RPL и таблиц допустимых типов | DOS-extender Windows 95 standard mode неверно проверял селекторы и уходил в «Standard Mode: Bad Fault in MS-DOS Extender» | `system_lar_lsl_descriptor_access_rights`, `system_lar32_and_lsl32_use_descriptor_bytes` |
 | 19 | `CMOVcc` | память читалась только при истинном условии | ложное условие скрывало возможный page fault | покрыто `cpu_condition_codes_setcc_cmovcc` |
 | 20 | V86: сегментация, CPL, стек прерываний | V86-загрузки сегментов шли через GDT/LDT, `CPL` брался из 16-битного селектора, умолчания были 32-битными, прерывание сбрасывало CPU в real mode и не переключало стек | DOS-программы не могли работать в V86; неверные page-права и IOPL | `mode_v86_*` + `mode_task_switch_enters_virtual86` (16 тестов) |
@@ -67,7 +71,7 @@
 | 27 | FAR JMP/CALL/RETF, near-переходы, `BT` | FAR-переход разрешал эскалацию привилегий; RETF не восстанавливал SS:ESP; 16-битные near-ветви и LOOP не маскировали EIP; BT не поддерживал отрицательные смещения | межкольцевые переходы и битовые строки работали неверно | `mode_far_transfer_cannot_escalate_privilege`, `mode_retf_interprivilege_restores_stack`, `cpu_near_branch_16bit_operand_masks_eip`, `cpu_loop_uses_operand_size_for_eip_mask`, `cpu_bit_test_memory_signed_and_immediate_offsets` |
 | 28 | Call gates | FAR CALL/JMP не распознавали call gate/task gate/TSS; не было копирования параметров и переключения стека | межкольцевые вызовы и 16/32-битные интерфейсы не работали | `mode_call_gate_*`, `mode_16bit_call_gate_pushes_word_frame` |
 | 29 | Task switching | `switch_to_task` не вёл busy/NT/link, не сохранял CR3/LDT, не поддерживал 16-битный TSS и возврат по IRET NT | вложенные задачи и возврат в приостановленную задачу ломались | `mode_far_call_task_switch_links_and_iret_returns`, `mode_16bit_tss_task_switch`, `mode_task_switch_tss_debug_trap_sets_bt` |
-| 30 | TSS-офсеты | CS/SS/DS/FS/GS в 32-битном TSS читались со сдвигом на 2 байта; I/O map base читался с 0x66 вместо 0x64 | неверные сегменты после task switch и bitmap I/O | `mode_far_call_task_switch_links_and_iret_returns`, `mode_v86_io_permission_bitmap_is_checked` |
+| 30 | TSS-офсеты | прежнее исправление было ошибочным: шаг селекторов должен быть 4 байта, I/O map base находится по 0x66, T — по 0x64 | исправлено повторным аудитом | `audit_pii_tss_selector_slots_and_io_map_are_independent`, task-switch/V86-тесты |
 | 31 | Debug | DR6/DR7 не имели reset-значений; не было data/instruction breakpoints, TF, RF, GD, DR4/5 alias, BT | отладчики и single-step не работали | `system_debug_*`, `system_icebp_and_debug_register_access` |
 | 32 | PGE/INVLPG | не было global-бита TLB и выборочного INVLPG | CR3 не сохранял global-страницы, INVLPG сбрасывал весь TLB | `system_pge_keeps_global_tlb_entries` |
 | 33 | Alignment check | CR0.AM/EFLAGS.AC/CPL3 не давали #AC | отсутствовала диагностика невыровненных обращений | `system_alignment_check_raises_ac` |
@@ -151,7 +155,7 @@ FreeDOS, пункты 20–22 — тестами `mode_v86_*`, пункты 28�
   выставляет; `FXSAVE/FXRSTOR` не реализованы;
 - x87-трансцендентные функции (`FSIN`, `FCOS`, `F2XM1`, `FYL2X`, `FYL2XP1`,
   `FSINCOS`, `FPATAN`) считаются через `long double` хоста, а не по таблицам
-  Intel; `FPREM/FPREM1` не выполняют пошаговое уменьшение; маски/исключения
+   Intel; `FPREM/FPREM1` выполняют пошаговое уменьшение с C2; маски/исключения
   FPU моделируются частично (IE/UD флаги, без полного набора);
 - V86-monitor и VME работают для DOS-сценария: 8086-сегментация, IDT/TSS,
   IOPL-проверки, redirection bitmap, VIF/VIP и method 6 для исключений и
@@ -163,9 +167,9 @@ FreeDOS, пункты 20–22 — тестами `mode_v86_*`, пункты 28�
 - IDT-вектор за пределом таблицы или отсутствующий (P=0) гейт приводят к
   shutdown, а не к полноценной цепочке #DF/#NP; вложенная доставка
   исключения внутри обработчика поддерживается только на один уровень;
-- `SYSENTER`/`SYSEXIT` загружают CS/SS из GDT упрощённо: тип/present/DPL
-  целевых дескрипторов проверяются не полностью; page-table A/D-биты
-  (в отличие от accessed-bit сегментных дескрипторов) не выставляются;
+- `SYSENTER`/`SYSEXIT` исправлены: фиксированные flat CS/SS без чтения GDT.
+   Page-table A/D выставляются для успешных доступов, включая TLB hit;
+   reserved-bit faults и полный порядок эффектов при неуспешном обходе остаются;
 - FPU: #MF не доставляется, статусные флаги OE/UE/PE и округление
   арифметики по CW моделируются частично;
 - APIC: один CPU, без APIC bus/arbitration и полного MP protocol;
@@ -174,18 +178,16 @@ FreeDOS, пункты 20–22 — тестами `mode_v86_*`, пункты 28�
   HW_INT_RX; overflow/PMI и остальные события не моделируются;
 - SMM и Local APIC — упрощённые модели, достаточные для тестов, но не
   для произвольного системного ПО;
-- часть редких MMX-форм и недокументированных опкодов не реализована;
-  неизвестный опкод логируется, а не исполняется;
+- MMX/x87 данные пока не разделяют физическое хранилище; EMMS очищает теги.
+   Неизвестные основные/0F опкоды дают #UD; SSE/SSE2 packed-расширения исключены;
 - MSR-пространство ниже `0x200` (PII BBL/L2, fixed-MTRR, last-branch/ROB)
   хранится как обычные регистры, а не проверяется по битовым полям; `#GP`
   для неизвестных MSR выдаётся выше этого диапазона. Это компромисс:
   BIOS/ядро FreeDOS читают PII-специфичные BBL MSR, отсутствующие в
   приложении C Pentium Pro;
-- `FISTTP` (`DB/DD/DF /1`) оставлен как расширение, хотя на Klamath/
-  Deschutes эта форма не определена;
-- FPU data pointer не отслеживается (в env-образе пишется 0), а указатели
-  обновляются и для control-инструкций x87; для FSTENV/FSAVE это влияет
-  только на диагностические поля.
+- `FISTTP` (`DB/DD/DF /1`) теперь даёт #UD, как и требуется для Pentium II;
+- FPU data pointer не отслеживается (в env-образе пишется 0); FIP/FOP
+   больше не перезаписываются control-инструкциями x87.
 
 ## Как воспроизвести
 

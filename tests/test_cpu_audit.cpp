@@ -1,5 +1,6 @@
 #include "tests/cpu_harness.hpp"
 #include <cmath>
+#include <limits>
 
 using namespace oldbox;
 using namespace oldbox::test;
@@ -310,9 +311,9 @@ TEST(audit_mmx_shift_counts_at_or_above_lane_width) {
     {
         CpuHarness h;
         h.state().mmx[0] = 0x8000000000000000ull;
-        h.emit(0x0f); h.emit(0x73); h.emit(0xe0); h.emit(64); // psraq mm0,64
+        h.emit(0x0f); h.emit(0x72); h.emit(0xe0); h.emit(64); // psrad mm0,64
         h.cpu.step();
-        CHECK_EQ(h.state().mmx[0], 0xffffffffffffffffull);
+        CHECK_EQ(h.state().mmx[0], 0xffffffff00000000ull);
     }
     {
         CpuHarness h;
@@ -654,9 +655,9 @@ TEST(audit_task_switch_accepts_expand_down_stack) {
     h.bus.write32(0x2400 + 0x20, 0x2000);  // EIP
     h.bus.write32(0x2400 + 0x24, 2u | IF); // EFLAGS
     h.bus.write32(0x2400 + 0x38, 0x9000);  // ESP
-    h.bus.write16(0x2400 + 0x4a, 0x0008);  // CS
-    h.bus.write16(0x2400 + 0x4c, 0x0028);  // SS: expand-down data
-    for (int off : {0x48, 0x4e, 0x50, 0x52}) h.bus.write16(0x2400 + off, 0);
+    h.bus.write16(0x2400 + 0x4c, 0x0008);  // CS
+    h.bus.write16(0x2400 + 0x50, 0x0028);  // SS: expand-down data
+    for (int off : {0x48, 0x54, 0x58, 0x5c}) h.bus.write16(0x2400 + off, 0);
     h.bus.write16(0x2400 + 0x60, 0);       // LDT
 
     // GDT[5] -> 0x528: expand-down writable stack, B=1.
@@ -752,7 +753,7 @@ TEST(audit_fpu_status_scale_and_transcendentals) {
     }
 }
 
-TEST(audit_mmx_unpack_pack_paddq_and_byte_shift) {
+TEST(audit_mmx_unpack_pack_and_reject_later_extensions) {
     {
         CpuHarness h;
         h.state().mmx[0] = 0x1111222233334444ull;
@@ -783,14 +784,16 @@ TEST(audit_mmx_unpack_pack_paddq_and_byte_shift) {
         h.state().mmx[1] = 1;
         h.emit(0x0f); h.emit(0xd4); h.emit(0xc1); // paddq
         h.cpu.step();
-        CHECK_EQ(h.state().mmx[0], 0ull);
+        CHECK_EQ(h.cpu.last_exception_vector(), 6);
+        CHECK_EQ(h.state().mmx[0], 0xffffffffffffffffull);
     }
     {
         CpuHarness h;
         h.state().mmx[0] = 0x1122334455667788ull;
         h.emit(0x0f); h.emit(0x73); h.emit(0xf8); h.emit(0x02); // pslldq mm0,2
         h.cpu.step();
-        CHECK_EQ(h.state().mmx[0], 0x3344556677880000ull);
+        CHECK_EQ(h.cpu.last_exception_vector(), 6);
+        CHECK_EQ(h.state().mmx[0], 0x1122334455667788ull);
     }
 }
 
@@ -831,4 +834,404 @@ TEST(audit_fpu_16bit_environment_and_save_layout) {
     CHECK_EQ(s.bus.read8(0x3100 + 14 + 8), 0xffu); // exponent low
     CHECK_EQ(s.bus.read8(0x3100 + 14 + 9), 0x3fu); // exponent high/sign
     CHECK_EQ(s.bus.read8(0x3100 + 94), 0xa5u);     // 94-byte image only
+}
+
+TEST(audit_pii_lmsw_cannot_clear_pe) {
+    CpuHarness h;
+    h.set_r(0, 0x0e);
+    h.bytes({0x0f, 0x01, 0xf0});
+    h.cpu.step();
+    CHECK_EQ(h.state().cr0 & 15u, 15u);
+    CHECK(h.state().mode == CpuMode::protected_mode);
+}
+
+TEST(audit_pii_rdpmc_checks_pce_and_full_counter_index) {
+    for (u32 cr4 : {0u, 4u, 0x100u, 0x104u}) {
+        CpuHarness h;
+        h.enter_flat_protected(true);
+        h.state().cr4 = cr4;
+        h.set_r(1, 0);
+        h.bytes({0x0f, 0x33});
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), (cr4 & 0x100) ? -1 : 13);
+    }
+    for (u32 index : {2u, 3u, 4u, 0x10000u, 0xffffffffu}) {
+        CpuHarness h;
+        install_idt(h, {13});
+        h.set_r(0, 0xabcdef);
+        h.set_r(1, index);
+        h.bytes({0x0f, 0x33});
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 13);
+        CHECK_EQ(h.cpu.last_exception_error(), 0u);
+        CHECK_EQ(h.r(0), 0xabcdefu);
+    }
+}
+
+TEST(audit_pii_instruction_length_includes_immediates) {
+    for (bool real : {false, true}) {
+        for (unsigned length : {15u, 16u}) {
+            CpuHarness h;
+            if (real) h.reset_real();
+            else install_idt(h, {13});
+            h.set_r(0, 0x12345678);
+            const unsigned immediate = real ? 2 : 4;
+            for (unsigned i = 0; i < length - 1 - immediate; ++i) h.emit(0x2e);
+            h.emit(0xb8);
+            if (real) h.emit16(0x4321); else h.emit32(0x87654321);
+            h.cpu.step();
+            CHECK_EQ(h.cpu.last_exception_vector(), length == 15 ? -1 : 13);
+            CHECK_EQ(h.r(0), length == 16 ? 0x12345678u : (real ? 0x12344321u : 0x87654321u));
+        }
+    }
+}
+
+TEST(audit_pii_lock_rejects_invalid_forms_before_side_effects) {
+    for (auto bytes : {std::initializer_list<u8>{0xf0, 0x90}, {0xf0, 0x01, 0xc8},
+                      {0xf0, 0x03, 0x08}, {0xf0, 0x83, 0x38, 0},
+                      {0xf0, 0x0f, 0xa3, 0x08}, {0xf0, 0xff, 0x30},
+                      {0xf0, 0xf7, 0x20}, {0xf0, 0x0f, 0xba, 0x20, 1},
+                      {0xf0, 0x0f, 0x77}}) {
+        CpuHarness h;
+        install_idt(h, {6});
+        h.set_r(0, 0x4000);
+        h.bus.write32(0x4000, 0x12345678);
+        h.bytes(bytes);
+        h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6);
+        CHECK_EQ(h.bus.read32(0x4000), 0x12345678u);
+        CHECK_EQ(h.bus.read32(h.r(4)), 0x1000u); // fault returns to LOCK
+    }
+    CpuHarness h;
+    h.set_r(0, 0x4000); h.set_r(1, 7);
+    h.bus.write32(0x4000, 9);
+    h.bytes({0xf0, 0x01, 0x08}); // lock add [eax],ecx
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), -1);
+    CHECK_EQ(h.bus.read32(0x4000), 16u);
+}
+
+TEST(audit_pii_paging_sets_accessed_and_dirty_on_tlb_hit) {
+    for (bool pae : {false, true}) for (bool large : {false, true}) {
+        CpuHarness h;
+        h.enter_flat_protected(true);
+        h.state().cr0 |= 0x80010000u;
+        h.state().cr3 = 0x10000;
+        h.state().cr4 = pae ? 0x20 : (large ? 0x10 : 0);
+        const u32 directory = pae ? 0x11000 : 0x10000;
+        const u32 leaf = large ? directory : 0x12000;
+        if (pae) h.bus.write64(0x10000, 0x11001); // PDPTE has no U/S bit
+        h.bus.write32(directory, large ? 0x87 : 0x12007);
+        if (!large) h.bus.write32(leaf, 0x30007);
+        const u32 physical = large ? 0x100 : 0x30100;
+        h.bus.write32(physical, 0x11223344);
+        CHECK_EQ(h.cpu.read_linear32(0x100), 0x11223344u);
+        CHECK_EQ(h.bus.read32(directory) & 0x20u, 0x20u);
+        CHECK_EQ(h.bus.read32(leaf) & 0x60u, 0x20u);
+        h.cpu.write_linear32(0x100, 0xaabbccdd); // same cached translation
+        CHECK_EQ(h.bus.read32(leaf) & 0x60u, 0x60u);
+        CHECK_EQ(h.bus.read32(physical), 0xaabbccddu);
+        if (pae) CHECK_EQ(h.bus.read64(0x10000), 0x11001ull);
+    }
+}
+
+TEST(audit_pii_paging_denied_write_does_not_set_dirty) {
+    CpuHarness h;
+    h.enter_flat_protected(true);
+    h.state().cr0 |= 0x80010000u;
+    h.state().cr3 = 0x10000;
+    h.bus.write32(0x10000, 0x11007);
+    h.bus.write32(0x11000, 0x30005); // user read-only
+    CHECK_EQ(h.cpu.read_linear32(0), 0u);
+    bool fault = false;
+    try { h.cpu.write_linear32(0, 0x1234); }
+    catch (const CpuException& e) { fault = true; CHECK_EQ(e.vector, 14); CHECK_EQ(e.error, 7u); }
+    CHECK(fault);
+    CHECK_EQ(h.bus.read32(0x11000) & 0x40u, 0u);
+    CHECK_EQ(h.bus.read32(0x30000), 0u);
+}
+
+TEST(audit_pii_tlb_tags_do_not_alias_linear_pages) {
+    CpuHarness h;
+    h.state().cr0 |= 0x80000000u;
+    h.state().cr3 = 0x10000; // used to collide with linear page bit 16
+    h.bus.write32(0x10000, 0x11003);
+    h.bus.write32(0x10100, 0x12003); // PDE for linear 10000000h
+    h.bus.write32(0x11000, 0x30003);
+    h.bus.write32(0x12000, 0x31003);
+    h.bus.write32(0x30000, 1); h.bus.write32(0x31000, 2);
+    CHECK_EQ(h.cpu.read_linear32(0), 1u);
+    CHECK_EQ(h.cpu.read_linear32(0x10000000), 2u);
+    CHECK_EQ(h.cpu.read_linear32(0), 1u);
+}
+
+TEST(audit_pii_mmx_unsigned_saturation_and_pandn) {
+    for (u8 op : {u8(0xd8), u8(0xd9), u8(0xdc), u8(0xdd)}) {
+        const bool words = op & 1;
+        const bool add = op & 4;
+        const u32 max = words ? 65535 : 255;
+        for (u32 a : {0u, 1u, max - 1, max}) for (u32 b : {0u, 1u, max - 1, max}) {
+            CpuHarness h;
+            const u64 broadcast = words ? 0x0001000100010001ull : 0x0101010101010101ull;
+            h.state().mmx[0] = a * broadcast; h.state().mmx[1] = b * broadcast;
+            h.bytes({0x0f, op, 0xc1}); h.cpu.step();
+            const u32 result = add ? std::min(max, a + b) : (a < b ? 0 : a - b);
+            CHECK_EQ(h.state().mmx[0], result * broadcast);
+        }
+    }
+    CpuHarness h;
+    h.state().mmx[0] = 0xff00ff00ff00ff00ull;
+    h.state().mmx[1] = 0x123456789abcdef0ull;
+    h.bytes({0x0f, 0xdf, 0xc1}); h.cpu.step();
+    CHECK_EQ(h.state().mmx[0], 0x0034007800bc00f0ull);
+}
+
+TEST(audit_pii_mmx_availability_and_emms_tags) {
+    for (u32 cr0 : {4u, 8u, 12u}) for (u8 op : {u8(0x6f), u8(0x77)}) {
+        CpuHarness h;
+        install_idt(h, {6, 7});
+        h.state().cr0 |= cr0;
+        h.bytes({0x0f, op, 0xc1}); h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), (cr0 & 4) ? 6 : 7);
+        CHECK_EQ(h.state().fpu_tag, 0xffffu);
+    }
+    CpuHarness h;
+    h.cpu.fpu_push(1);
+    h.bytes({0x0f, 0xef, 0xc0, 0x0f, 0x77});
+    h.cpu.step();
+    CHECK_EQ(h.state().fpu_tag, 0u); CHECK_EQ(h.state().fpu_top, 0);
+    h.cpu.step();
+    CHECK_EQ(h.state().fpu_tag, 0xffffu);
+    for (const auto& r : h.state().fpu) CHECK(r.empty);
+}
+
+TEST(audit_pii_rejects_post_pii_integer_extensions) {
+    for (int op : {0x70, 0xd4, 0xd7, 0xda, 0xde, 0xe0, 0xe3, 0xe4, 0xe7,
+                  0xea, 0xee, 0xf4, 0xf6, 0xf7, 0xfb}) {
+        CpuHarness h;
+        install_idt(h, {6});
+        h.state().mmx[0] = 0x12345678;
+        h.bytes({0x0f, u8(op), 0xc1, 0}); h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 6);
+        CHECK_EQ(h.state().mmx[0], 0x12345678ull);
+    }
+}
+
+TEST(audit_pii_x87_scale_round_and_register_arithmetic) {
+    CpuHarness h;
+    h.cpu.fpu_push(-2.75L); h.cpu.fpu_push(3.0L);
+    h.bytes({0xd9, 0xfd}); h.cpu.step(); // FSCALE
+    CHECK_EQ(h.state().fpu_top, 6);
+    CHECK(h.cpu.fpu_st(0) == 0.75L); CHECK(h.cpu.fpu_st(1) == -2.75L);
+    for (u32 rc : {0u, 0x400u, 0x800u, 0xc00u}) {
+        CpuHarness g;
+        g.state().fpu_control = u16(0x37f | rc);
+        g.cpu.fpu_push(-2.5L); g.bytes({0xd9, 0xfc}); g.cpu.step();
+        CHECK(g.cpu.fpu_st(0) == (rc == 0x400 ? -3.0L : -2.0L));
+        CHECK_EQ(g.state().fpu_top, 7);
+    }
+    const long double results[] = {-6, 6, 0.25L, 4};
+    for (int i = 0; i < 4; ++i) {
+        CpuHarness g;
+        g.cpu.fpu_push(8); g.cpu.fpu_push(2);
+        g.bytes({0xdc, u8(0xe1 + i * 8)}); g.cpu.step();
+        CHECK(g.cpu.fpu_st(1) == results[i]); CHECK(g.cpu.fpu_st(0) == 2);
+    }
+}
+
+TEST(audit_pii_x87_remainders_use_correct_rounding_and_quotient_bits) {
+    for (u8 op : {u8(0xf5), u8(0xf8)}) for (int q = 0; q < 8; ++q) {
+        CpuHarness h;
+        h.cpu.fpu_push(4); h.cpu.fpu_push(q * 4 + 3);
+        h.bytes({0xd9, op}); h.cpu.step();
+        const unsigned quotient = op == 0xf5 ? (q + 1) & 7 : q;
+        CHECK(h.cpu.fpu_st(0) == (op == 0xf5 ? -1.0L : 3.0L));
+        CHECK_EQ(h.state().fpu_status & 0x4500u,
+                 ((quotient & 4) ? 0x100u : 0) | ((quotient & 2) ? 0x4000u : 0));
+        CHECK_EQ((h.state().fpu_status >> 9) & 1u, quotient & 1u);
+    }
+}
+
+TEST(audit_pii_x87_environment_preserves_last_instruction_and_clears_exceptions) {
+    CpuHarness h;
+    h.bytes({0xd9, 0xe8, 0xd9, 0x35}); h.emit32(0x4000); // FLD1; FNSTENV
+    h.cpu.step(); h.cpu.step();
+    CHECK_EQ(h.bus.read32(0x400c), 0x1000u);
+    CHECK_EQ(h.bus.read16(0x4012), 0x1e8u);
+    h.state().fpu_status = 0xc7ff;
+    h.state().fpu_invalid = true;
+    h.bytes({0xdb, 0xe2}); h.cpu.step();
+    CHECK_EQ(h.state().fpu_status & 0x80ffu, 0u);
+    CHECK_EQ(h.state().fpu_status & 0x4700u, 0x4700u);
+    CHECK(!h.state().fpu_invalid);
+}
+
+TEST(audit_pii_x87_extended_special_values_and_free_register) {
+    for (bool nan : {false, true}) {
+        CpuHarness h;
+        h.bus.write64(0x4000, nan ? 0xc000000000000000ull : 0x8000000000000000ull);
+        h.bus.write16(0x4008, 0x7fff);
+        h.bytes({0xdb, 0x2d}); h.emit32(0x4000);
+        h.bytes({0xdb, 0x3d}); h.emit32(0x4010);
+        h.cpu.step();
+        CHECK(nan ? std::isnan(h.cpu.fpu_st(0)) : std::isinf(h.cpu.fpu_st(0)));
+        h.cpu.step();
+        CHECK_EQ(h.bus.read64(0x4010), nan ? 0xc000000000000000ull : 0x8000000000000000ull);
+        CHECK_EQ(h.bus.read16(0x4018) & 0x7fffu, 0x7fffu);
+    }
+    CpuHarness h;
+    h.cpu.fpu_push(1); h.cpu.fpu_push(2);
+    h.bytes({0xdd, 0xc1}); h.cpu.step(); // FFREE ST(1) = physical R7
+    CHECK(h.state().fpu[7].empty); CHECK(!h.state().fpu[6].empty);
+    CHECK_EQ(h.state().fpu_top, 6);
+}
+
+TEST(audit_pii_tss_selector_slots_and_io_map_are_independent) {
+    CpuHarness h;
+    h.state().gdtr_limit = 0x37;
+    segment_desc(h, 0x528, 0x2000, 0x100, 0x89);
+    segment_desc(h, 0x530, 0x2400, 0x100, 0x89);
+    h.set_r(0, 0x28); h.bytes({0x0f, 0x00, 0xd8}); h.cpu.step();
+    for (u32 off : {0x4au, 0x4eu, 0x52u, 0x56u, 0x5au, 0x5eu}) {
+        h.bus.write16(0x2000 + off, 0xa5a5);
+        h.bus.write16(0x2400 + off, 0xa5a5); // reserved halves are not selectors
+    }
+    h.bus.write32(0x2420, 0x1800); h.bus.write32(0x2424, 2);
+    h.bus.write32(0x2438, 0x9000);
+    h.bus.write16(0x244c, 8); h.bus.write16(0x2450, 0x10);
+    for (u32 off : {0x48u, 0x54u, 0x58u, 0x5cu}) h.bus.write16(0x2400 + off, 0x10);
+    h.bus.write16(0x2464, 0); // T independent of I/O map
+    h.bus.write16(0x2466, 0x81); // an odd bitmap offset must be preserved
+    h.bus.write8(0x2480, 0xff); h.bus.write8(0x2481, 0x02);
+    h.bytes({0xea}); h.emit32(0); h.emit16(0x30); h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), -1);
+    CHECK_EQ(h.state().tr, 0x30u);
+    CHECK_EQ(h.state().eip, 0x1800u);
+    for (unsigned i = 0; i < 6; ++i) {
+        CHECK_EQ(h.bus.read16(0x2048 + i * 4), i == 1 ? 8u : 0x10u);
+        CHECK_EQ(h.bus.read16(0x204a + i * 4), 0xa5a5u);
+        CHECK_EQ(h.state().seg[i].selector, i == 1 ? 8u : 0x10u);
+    }
+    h.state().seg[1].access = 0xfa; // CPL3 consults the bitmap
+    CHECK(h.cpu.io_allowed(0));
+    CHECK(!h.cpu.io_allowed(1));
+}
+
+TEST(audit_pii_global_translation_and_dirty_survive_cr3_reload) {
+    CpuHarness h;
+    h.state().cr0 |= 0x80000000u;
+    h.state().cr4 = 0x80;
+    h.state().cr3 = 0x10000;
+    h.bus.write32(0x10000, 0x11003);
+    h.bus.write32(0x11004, 0x1003); // code
+    h.bus.write32(0x11010, 0x30103); // global data
+    h.bus.write32(0x11014, 0x31003); // non-global data
+    h.bus.write32(0x20000, 0x21003);
+    h.bus.write32(0x21010, 0x32103); h.bus.write32(0x21014, 0x33003);
+    CHECK_EQ(h.cpu.translate(0x4000, false), 0x30000u);
+    CHECK_EQ(h.cpu.translate(0x5000, false), 0x31000u);
+    h.set_r(0, 0x20000); h.bytes({0x0f, 0x22, 0xd8}); h.cpu.step(); // MOV CR3,EAX
+    CHECK_EQ(h.cpu.translate(0x4000, true), 0x30000u);
+    CHECK_EQ(h.bus.read32(0x11010) & 0x40u, 0x40u);
+    CHECK_EQ(h.bus.read32(0x21010) & 0x60u, 0u);
+    CHECK_EQ(h.cpu.translate(0x5000, false), 0x33000u);
+    h.cpu.invalidate_tlb_page(0x4000);
+    CHECK_EQ(h.cpu.translate(0x4000, false), 0x32000u);
+}
+
+TEST(audit_pii_shld_shrd_define_overflow_for_count_one) {
+    for (u8 op : {u8(0xa4), u8(0xac)}) for (u32 value : {0u, 0x40000000u, 0x80000000u, 0xffffffffu}) {
+        CpuHarness h;
+        h.set_r(0, value); h.set_r(1, 1);
+        h.bytes({0x0f, op, 0xc8, 1}); h.cpu.step();
+        const u32 result = op == 0xa4 ? value << 1 : (value >> 1) | 0x80000000u;
+        CHECK_EQ(h.r(0), result);
+        CHECK_EQ(h.flag(OF) != 0, ((value ^ result) & 0x80000000u) != 0);
+    }
+}
+
+TEST(audit_pii_verr_verw_ignore_present_bit) {
+    for (u8 modrm : {u8(0xe0), u8(0xe8)}) {
+        CpuHarness h;
+        segment_desc(h, 0x510, 0, 0xffff, 0x12);
+        h.set_r(0, 0x10); h.bytes({0x0f, 0x00, modrm}); h.cpu.step();
+        CHECK(h.flag(ZF));
+        CHECK_EQ(h.cpu.last_exception_vector(), -1);
+    }
+}
+
+TEST(audit_pii_x87_partial_remainder_requires_multiple_steps) {
+    for (u8 op : {u8(0xf5), u8(0xf8)}) {
+        CpuHarness h;
+        h.cpu.fpu_push(3); h.cpu.fpu_push(std::ldexp(1.0L, 100));
+        h.bytes({0xd9, op}); h.cpu.step();
+        CHECK(h.state().fpu_status & 0x0400u);
+        for (int i = 0; i < 8 && (h.state().fpu_status & 0x0400u); ++i) {
+            h.state().eip = 0x1000; h.cpu.step();
+        }
+        CHECK_EQ(h.state().fpu_status & 0x0400u, 0u);
+        CHECK(h.cpu.fpu_st(0) == 1.0L);
+        CHECK_EQ(h.state().fpu_top, 6);
+    }
+}
+
+TEST(audit_pii_fucomi_nan_sets_all_three_flags_without_changing_c0_c2_c3) {
+    CpuHarness h;
+    h.cpu.fpu_push(1); h.cpu.fpu_push(std::numeric_limits<long double>::quiet_NaN());
+    h.state().fpu_status = 0x4100;
+    h.state().eflags |= OF | SF | AF;
+    h.bytes({0xdb, 0xe9}); h.cpu.step();
+    CHECK_EQ(h.state().eflags & (ZF | PF | CF | OF | SF | AF), u32(ZF | PF | CF));
+    CHECK_EQ(h.state().fpu_status & 0x4500u, 0x4100u);
+}
+
+TEST(audit_pii_sysenter_sysexit_use_flat_caches_without_gdt_access) {
+    CpuHarness h;
+    h.enter_flat_protected(true);
+    h.state().gdtr_base = 0xffff0000; h.state().gdtr_limit = 0;
+    h.state().sysenter_cs = 8;
+    h.state().sysenter_eip = 0x2000; h.state().sysenter_esp = 0x9000;
+    h.state().eflags = 2 | IF | CF;
+    h.bytes({0x0f, 0x34}); h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), -1);
+    CHECK_EQ(h.cpu.cpl(), 0); CHECK_EQ(h.r(4), 0x9000u);
+    CHECK_EQ(h.state().eflags, 2u | CF);
+    CHECK_EQ(h.state().seg[1].base, 0u); CHECK_EQ(h.state().seg[1].limit, 0xffffffffu);
+    CHECK_EQ(h.state().seg[2].base, 0u); CHECK_EQ(h.state().seg[2].limit, 0xffffffffu);
+    h.set_eip(0x2000); h.bytes({0x0f, 0x35}); h.set_r(2, 0x3000); h.set_r(1, 0x7000);
+    h.cpu.step();
+    CHECK_EQ(h.cpu.last_exception_vector(), -1);
+    CHECK_EQ(h.cpu.cpl(), 3); CHECK_EQ(h.r(4), 0x7000u); CHECK_EQ(h.eip(), 0x3000u);
+    CHECK_EQ(h.state().eflags, 2u | CF); // SYSEXIT does not force IF
+    CHECK_EQ(h.state().seg[1].selector, 0x1bu); CHECK_EQ(h.state().seg[2].selector, 0x23u);
+}
+
+TEST(audit_pii_sysenter_sysexit_reject_real_mode_and_zero_cs) {
+    for (bool real : {false, true}) for (u8 op : {u8(0x34), u8(0x35)}) {
+        CpuHarness h;
+        if (real) h.reset_real();
+        h.state().sysenter_cs = real ? 8 : 0;
+        h.bytes({0x0f, op}); h.cpu.step();
+        CHECK_EQ(h.cpu.last_exception_vector(), 13);
+        CHECK_EQ(h.cpu.last_exception_error(), 0u);
+    }
+}
+
+TEST(audit_pii_smm_return_invalidates_cached_translation) {
+    CpuHarness h;
+    h.state().cr0 |= 0x80000000u; h.state().cr3 = 0x10000;
+    h.bus.write32(0x10000, 0x11003); h.bus.write32(0x11000, 0x20003);
+    CHECK_EQ(h.cpu.translate(0, false), 0x20000u);
+    h.cpu.enter_smm();
+    h.bus.write32(0x11000, 0x21003);
+    h.cpu.resume_smm();
+    CHECK_EQ(h.cpu.translate(0, false), 0x21000u);
+}
+
+TEST(audit_pii_pmullw_high_unsigned_products_wrap_without_signed_overflow) {
+    CpuHarness h;
+    h.state().mmx[0] = 0xffffffffffffffffull;
+    h.state().mmx[1] = 0xffffffffffffffffull;
+    h.bytes({0x0f, 0xd5, 0xc1}); h.cpu.step();
+    CHECK_EQ(h.state().mmx[0], 0x0001000100010001ull);
 }

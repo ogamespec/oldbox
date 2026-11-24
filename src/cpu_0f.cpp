@@ -14,6 +14,26 @@ void Cpu::execute_0f() {
     const u8 op = fetch8();
     last_opcode_ = 0x0f00u | op;
     cycles_ += 2;
+    if (lock_ && op != 0xab && op != 0xb3 && op != 0xbb && op != 0xba &&
+        op != 0xb0 && op != 0xb1 && op != 0xc0 && op != 0xc1 && op != 0xc7)
+        raise_exception(6);
+
+    // Original MMX instruction map. Later SSE/SSE2 integer instructions are
+    // not part of the Pentium II, even when their operands are MM registers.
+    const bool mmx = (op >= 0x60 && op <= 0x6b) || op == 0x6e || op == 0x6f ||
+        (op >= 0x71 && op <= 0x77) || op == 0x7e || op == 0x7f ||
+        (op >= 0xd1 && op <= 0xd3) || op == 0xd5 || op == 0xd8 || op == 0xd9 ||
+        op == 0xdb || op == 0xdc || op == 0xdd || op == 0xdf || op == 0xe1 || op == 0xe2 ||
+        op == 0xe5 || op == 0xe8 || op == 0xe9 || op == 0xeb || op == 0xec || op == 0xed ||
+        op == 0xef || (op >= 0xf1 && op <= 0xf3) || op == 0xf5 ||
+        (op >= 0xf8 && op <= 0xfa) || (op >= 0xfc && op <= 0xfe);
+    if (op == 0x18 || op == 0x70 || op == 0xd4 || op == 0xd7 || op == 0xda || op == 0xde ||
+        op == 0xe0 || op == 0xe3 || op == 0xe4 || op == 0xe7 || op == 0xea || op == 0xee ||
+        op == 0xf4 || op == 0xf6 || op == 0xf7 || op == 0xfb) raise_exception(6);
+    if (mmx) {
+        if (state_.cr0 & 4u) raise_exception(6); // EM: MMX has no software emulation trap
+        if (state_.cr0 & 8u) raise_exception(7);
+    }
 
     auto read64 = [&](const ModRm& m) -> u64 {
         if (m.is_register) return state_.mmx[m.rm];
@@ -64,7 +84,7 @@ void Cpu::execute_0f() {
                 const bool data = !system && !code;
                 const bool conforming = code && (dtype & 0x04) != 0;
                 const int dpl = (d.access >> 5) & 3;
-                const bool access_ok = (d.access & 0x80) && !system &&
+                const bool access_ok = !system &&
                                        (conforming || (cpl() <= dpl && int(sel & 3) <= dpl));
                 if (access_ok) {
                     if (m.reg_field == 4) ok = data || (code && (dtype & 0x02));
@@ -121,7 +141,7 @@ void Cpu::execute_0f() {
         case 6: { // LMSW
             if (cpl() != 0) exception_gp(0);
             const u16 v = u16(read_rm(m, 2));
-            state_.cr0 = (state_.cr0 & ~0x0fu) | (v & 0x0f);
+            state_.cr0 = (state_.cr0 & ~0x0eu) | (v & 0x0f); // PE is sticky for LMSW
             update_mode_from_cr0();
             flush_tlb();
             break;
@@ -186,7 +206,6 @@ void Cpu::execute_0f() {
     case 0x08: if (cpl() != 0) exception_gp(0); flush_tlb(); break;          // INVD
     case 0x09: if (cpl() != 0) exception_gp(0); flush_tlb(); break;          // WBINVD
     case 0x0b: raise_exception(6); break;   // UD2
-    case 0x18: { const ModRm m = decode_modrm(1); (void)m; break; } // prefetch hints
     case 0x1f: { const ModRm m = decode_modrm(1); (void)m; break; }
     case 0x20: case 0x21: { // MOV reg,CR/DR
         if (cpl() != 0) exception_gp(0);
@@ -279,36 +298,19 @@ void Cpu::execute_0f() {
         break;
     }
     case 0x33: { // RDPMC
-        if ((state_.cr4 & 0x4u) == 0 && cpl() != 0) exception_gp(0);
-        const u64 v = perf_[state_.gpr[1] & 3];
+        if ((state_.cr4 & 0x100u) == 0 && cpl() != 0) exception_gp(0);
+        if (state_.gpr[1] > 1) exception_gp(0);
+        const u64 v = perf_[state_.gpr[1]];
         state_.gpr[0] = u32(v); state_.gpr[2] = u32(v >> 32);
         break;
     }
     case 0x34: { // SYSENTER
-        const u16 cs = u16(state_.sysenter_cs);
-        if ((cs & ~7u) == 0 || (cs & ~7u) + 7 > state_.gdtr_limit) exception_gp(0);
-        const Descriptor d = read_descriptor(state_.gdtr_base, cs);
-        if (!(d.access & 0x08)) exception_gp(0);
-        if (!(d.access & 0x80)) throw CpuException{11, u32(cs & ~3u), true};
-        set_descriptor_accessed(cs);
-        state_.seg[unsigned(SegReg::cs)].selector = cs;
-        state_.seg[unsigned(SegReg::cs)].base = d.base;
-        state_.seg[unsigned(SegReg::cs)].limit = d.limit;
-        state_.seg[unsigned(SegReg::cs)].access = d.access;
-        state_.seg[unsigned(SegReg::cs)].flags = d.flags;
-        state_.seg[unsigned(SegReg::cs)].valid = true;
-        const u16 ss = u16(cs + 8);
-        if ((ss & ~7u) + 7 <= state_.gdtr_limit) {
-            const Descriptor sd = read_descriptor(state_.gdtr_base, ss);
-            set_descriptor_accessed(ss);
-            state_.seg[unsigned(SegReg::ss)].selector = ss;
-            state_.seg[unsigned(SegReg::ss)].base = sd.base;
-            state_.seg[unsigned(SegReg::ss)].limit = sd.limit;
-            state_.seg[unsigned(SegReg::ss)].access = sd.access;
-            state_.seg[unsigned(SegReg::ss)].flags = sd.flags;
-            state_.seg[unsigned(SegReg::ss)].valid = true;
-        }
-        state_.eflags &= ~(VM | RF);
+        const u16 cs = u16(state_.sysenter_cs & ~3u);
+        if (!(state_.cr0 & 1u) || cs == 0) exception_gp(0);
+        // Fast system calls synthesize flat descriptor caches; no GDT fetch.
+        state_.seg[unsigned(SegReg::cs)] = Segment{cs, 0, 0xffffffffu, 0x9b, 0xc0, true};
+        state_.seg[unsigned(SegReg::ss)] = Segment{u16(cs + 8), 0, 0xffffffffu, 0x93, 0xc0, true};
+        state_.eflags &= ~(VM | RF | IF);
         state_.eip = state_.sysenter_eip;
         state_.gpr[4] = state_.sysenter_esp;
         update_mode_from_cr0();
@@ -316,19 +318,13 @@ void Cpu::execute_0f() {
         break;
     }
     case 0x35: { // SYSEXIT
-        if (cpl() != 0) exception_gp(0);
+        if (!(state_.cr0 & 1u) || cpl() != 0 || (state_.sysenter_cs & 0xfffcu) == 0) exception_gp(0);
         const u16 cs = u16((state_.sysenter_cs + 16) | 3u);
         const u16 ss = u16((state_.sysenter_cs + 24) | 3u);
-        if ((cs & ~7u) + 7 > state_.gdtr_limit || (ss & ~7u) + 7 > state_.gdtr_limit) exception_gp(0);
-        const Descriptor cd = read_descriptor(state_.gdtr_base, cs);
-        const Descriptor sd = read_descriptor(state_.gdtr_base, ss);
-        set_descriptor_accessed(cs);
-        set_descriptor_accessed(ss);
-        state_.seg[unsigned(SegReg::cs)] = Segment{cs, cd.base, cd.limit, cd.access, cd.flags, true};
-        state_.seg[unsigned(SegReg::ss)] = Segment{ss, sd.base, sd.limit, sd.access, sd.flags, true};
+        state_.seg[unsigned(SegReg::cs)] = Segment{cs, 0, 0xffffffffu, 0xfb, 0xc0, true};
+        state_.seg[unsigned(SegReg::ss)] = Segment{ss, 0, 0xffffffffu, 0xf3, 0xc0, true};
         state_.eip = state_.gpr[2];
         state_.gpr[4] = state_.gpr[1];
-        state_.eflags |= 0x00000200u;
         update_mode_from_cr0();
         clear_prefixes();
         break;
@@ -452,6 +448,7 @@ void Cpu::execute_0f() {
                     set_flag(CF, ((dst >> (bits - count)) & 1) != 0);
                 }
                 set_szp(u32(r), size);
+                if (count == 1) set_flag(OF, ((dst ^ u32(r)) & sign_bit(size)) != 0);
                 write_rm(m, u32(r), size);
             } else {
                 u64 r;
@@ -461,6 +458,7 @@ void Cpu::execute_0f() {
                     set_flag(CF, ((dst >> (count - 1)) & 1) != 0);
                 }
                 set_szp(u32(r), size);
+                if (count == 1) set_flag(OF, ((dst ^ u32(r)) & sign_bit(size)) != 0);
                 write_rm(m, u32(r), size);
             }
         }
@@ -590,7 +588,7 @@ void Cpu::execute_0f() {
         break;
     }
 
-    // MMX / SSE integer subset. Pentium II provides MMX, not SSE.
+    // Original MMX integer instructions.
     case 0x60: case 0x61: case 0x62: case 0x68: case 0x69: case 0x6a: { // PUNPCK
         const ModRm m = decode_modrm(4);
         const u64 a = state_.mmx[m.reg_field], b = read64(m);
@@ -675,18 +673,6 @@ void Cpu::execute_0f() {
         write_mmx_field(m, read64(m));
         break;
     }
-    case 0x70: { // PSHUFW
-        const ModRm m = decode_modrm(4);
-        const u64 src = read64(m);
-        const u8 imm = fetch8();
-        u64 r = 0;
-        for (int i = 0; i < 4; ++i) {
-            const int sel = (imm >> (i * 2)) & 3;
-            r |= ((src >> (sel * 16)) & 0xffff) << (i * 16);
-        }
-        write_mmx_field(m, r);
-        break;
-    }
     case 0x71: case 0x72: case 0x73: { // shift groups by imm8
         const ModRm m = decode_modrm(4);
         if (!m.is_register) raise_exception(6); // immediate form requires an MMX register
@@ -704,6 +690,7 @@ void Cpu::execute_0f() {
             }
             break;
         case 4: // PSRA: shifts in the sign bit
+            if (op == 0x73) raise_exception(6); // no PSRAQ in original MMX
             for (int i = 0; i < 64 / bits; ++i) {
                 i64 lane = bits == 64 ? i64(v >> (i * bits))
                                       : i64((v >> (i * bits)) & mask);
@@ -715,13 +702,8 @@ void Cpu::execute_0f() {
             }
             break;
         case 3: // PSRLDQ (only opcode 73)
-            if (op != 0x73) raise_exception(6);
-            v = count >= 8 ? 0 : (v >> (count * 8));
-            break;
         case 7: // PSLLDQ (only opcode 73)
-            if (op != 0x73) raise_exception(6);
-            v = count >= 8 ? 0 : (v << (count * 8));
-            break;
+            raise_exception(6); // SSE2 XMM-only encodings, not MMX
         case 6: // PSLL: a count at or above the lane width shifts in zeros
             for (int i = 0; i < 64 / bits; ++i) {
                 u64 lane = (v >> (i * bits)) & mask;
@@ -734,7 +716,10 @@ void Cpu::execute_0f() {
         state_.mmx[m.rm] = v;
         break;
     }
-    case 0x77: break; // EMMS
+    case 0x77: // EMMS
+        for (auto& r : state_.fpu) r.empty = true;
+        state_.fpu_tag = 0xffff;
+        break;
     case 0x7e: { // MOVD r/m32, mm
         const ModRm m = decode_modrm(4);
         write_rm(m, u32(state_.mmx[m.reg_field]), 4);
@@ -770,87 +755,36 @@ void Cpu::execute_0f() {
         write_mmx_field(m, v);
         break;
     }
-    case 0xd7: { // PMOVMSKB r32, mm
-        const ModRm m = decode_modrm(4);
-        u32 r = 0;
-        for (int i = 0; i < 8; ++i) r |= u32((state_.mmx[m.rm] >> (i * 8 + 7)) & 1u) << i;
-        set_reg(m.reg_field, r);
-        break;
-    }
-    case 0xe7: { // MOVNTQ m64, mm
-        const ModRm m = decode_modrm(4);
-        if (m.is_register) exception_gp(0);
-        write64(m, state_.mmx[m.reg_field]);
-        break;
-    }
-    case 0xf7: { // MASKMOVQ mm, mm (store selected bytes at ES:DI)
-        const ModRm m = decode_modrm(4);
-        const u64 data = state_.mmx[m.reg_field], mask = state_.mmx[m.rm];
-        for (int i = 0; i < 8; ++i) {
-            if (mask & (1ull << (i * 8 + 7)))
-                write_mem(state_.gpr[7] + u32(i), u8(data >> (i * 8)), 1, SegReg::es);
-        }
-        break;
-    }
-    case 0xd4: { // PADDQ
-        const ModRm m = decode_modrm(4);
-        write_mmx_field(m, state_.mmx[m.reg_field] + read64(m));
-        break;
-    }
     case 0xd5: { // PMULLW
         const ModRm m = decode_modrm(4);
         const u64 a = state_.mmx[m.reg_field], b = read64(m);
         u64 r = 0;
-        for (int i = 0; i < 4; ++i) r |= u64(u16(u16(a >> (i * 16)) * u16(b >> (i * 16)))) << (i * 16);
+        for (int i = 0; i < 4; ++i) r |= u64(u16(u32(u16(a >> (i * 16))) * u32(u16(b >> (i * 16))))) << (i * 16);
         write_mmx_field(m, r);
         break;
     }
-    case 0xd8: case 0xd9: case 0xda: case 0xdb: case 0xdc: case 0xdd: case 0xde: case 0xdf:
-    case 0xe0: case 0xe3: case 0xe4: case 0xe5: case 0xe8: case 0xe9: case 0xea: case 0xeb:
-    case 0xec: case 0xed: case 0xee: case 0xef: case 0xf4: case 0xf5: case 0xf6: case 0xf8:
-    case 0xf9: case 0xfa: case 0xfb: case 0xfc: case 0xfd: case 0xfe: {
+    case 0xd8: case 0xd9: case 0xdb: case 0xdc: case 0xdd: case 0xdf:
+    case 0xe5: case 0xe8: case 0xe9: case 0xeb:
+    case 0xec: case 0xed: case 0xef: case 0xf5: case 0xf8:
+    case 0xf9: case 0xfa: case 0xfc: case 0xfd: case 0xfe: {
         const ModRm m = decode_modrm(4);
         const u64 a = state_.mmx[m.reg_field], b = read64(m);
         u64 r = 0;
         switch (op) {
-        case 0xd8: // PSUBB
-            for (int i = 0; i < 8; ++i) r |= u64(u8(u8(a >> (i * 8)) - u8(b >> (i * 8)))) << (i * 8);
+        case 0xd8: // PSUBUSB
+            for (int i = 0; i < 8; ++i) r |= u64(sat_u8(i16(u8(a >> (i * 8))) - i16(u8(b >> (i * 8))))) << (i * 8);
             break;
-        case 0xd9: // PSUBW
-            for (int i = 0; i < 4; ++i) r |= u64(u16(u16(a >> (i * 16)) - u16(b >> (i * 16)))) << (i * 16);
-            break;
-        case 0xda: // PMINUB
-            for (int i = 0; i < 8; ++i) r |= u64(std::min(u8(a >> (i * 8)), u8(b >> (i * 8)))) << (i * 8);
+        case 0xd9: // PSUBUSW
+            for (int i = 0; i < 4; ++i) r |= u64(std::max(0, int(u16(a >> (i * 16))) - int(u16(b >> (i * 16))))) << (i * 16);
             break;
         case 0xdb: r = a & b; break;
-        case 0xdc: // PADDB
-            for (int i = 0; i < 8; ++i) r |= u64(u8(u8(a >> (i * 8)) + u8(b >> (i * 8)))) << (i * 8);
+        case 0xdc: // PADDUSB
+            for (int i = 0; i < 8; ++i) r |= u64(sat_u8(i16(u8(a >> (i * 8))) + i16(u8(b >> (i * 8))))) << (i * 8);
             break;
-        case 0xdd: // PADDW
-            for (int i = 0; i < 4; ++i) r |= u64(u16(u16(a >> (i * 16)) + u16(b >> (i * 16)))) << (i * 16);
+        case 0xdd: // PADDUSW
+            for (int i = 0; i < 4; ++i) r |= u64(std::min(65535, int(u16(a >> (i * 16))) + int(u16(b >> (i * 16))))) << (i * 16);
             break;
-        case 0xde: // PMAXUB
-            for (int i = 0; i < 8; ++i) r |= u64(std::max(u8(a >> (i * 8)), u8(b >> (i * 8)))) << (i * 8);
-            break;
-        case 0xdf: r = a & ~b; break;
-        case 0xe0: // PAVGB
-            for (int i = 0; i < 8; ++i) {
-                const u32 av = u8(a >> (i * 8)), bv = u8(b >> (i * 8));
-                r |= u64((av + bv + 1) / 2) << (i * 8);
-            }
-            break;
-        case 0xe3: // PAVGW
-            for (int i = 0; i < 4; ++i) {
-                const u32 av = u16(a >> (i * 16)), bv = u16(b >> (i * 16));
-                r |= u64((av + bv + 1) / 2) << (i * 16);
-            }
-            break;
-        case 0xe4: // PMULHUW
-            for (int i = 0; i < 4; ++i) {
-                const u32 av = u16(a >> (i * 16)), bv = u16(b >> (i * 16));
-                r |= u64((av * bv) >> 16) << (i * 16);
-            }
-            break;
+        case 0xdf: r = ~a & b; break; // PANDN complements the destination
         case 0xe5: // PMULHW
             for (int i = 0; i < 4; ++i) {
                 const i32 av = i16(u16(a >> (i * 16))), bv = i16(u16(b >> (i * 16)));
@@ -869,12 +803,6 @@ void Cpu::execute_0f() {
                 r |= u64(u16(sat_s16(av - bv))) << (i * 16);
             }
             break;
-        case 0xea: // PMINSW
-            for (int i = 0; i < 4; ++i) {
-                const i16 av = i16(u16(a >> (i * 16))), bv = i16(u16(b >> (i * 16)));
-                r |= u64(u16(std::min(av, bv))) << (i * 16);
-            }
-            break;
         case 0xeb: r = a | b; break;
         case 0xec: // PADDSB
             for (int i = 0; i < 8; ++i) {
@@ -888,33 +816,13 @@ void Cpu::execute_0f() {
                 r |= u64(u16(sat_s16(av + bv))) << (i * 16);
             }
             break;
-        case 0xee: // PMAXSW
-            for (int i = 0; i < 4; ++i) {
-                const i16 av = i16(u16(a >> (i * 16))), bv = i16(u16(b >> (i * 16)));
-                r |= u64(u16(std::max(av, bv))) << (i * 16);
-            }
-            break;
         case 0xef: r = a ^ b; break;
-        case 0xf4: // PMULUDQ
-            r = u64(u32(a)) * u64(u32(b));
-            break;
         case 0xf5: { // PMADDWD: the two 32-bit products are added with modulo-2^32 wrap
             for (int i = 0; i < 2; ++i) {
                 const i64 p0 = i64(i16(u16(a >> (i * 32)))) * i64(i16(u16(b >> (i * 32))));
                 const i64 p1 = i64(i16(u16(a >> (i * 32 + 16)))) * i64(i16(u16(b >> (i * 32 + 16))));
                 r |= u64(u32(p0 + p1)) << (i * 32);
             }
-            break;
-        }
-        case 0xf6: { // PSADBW: two independent 16-bit sums
-            u32 lo = 0, hi = 0;
-            for (int i = 0; i < 4; ++i) {
-                const i32 d0 = i32(i8(a >> (i * 8))) - i32(i8(b >> (i * 8)));
-                const i32 d1 = i32(i8(a >> ((i + 4) * 8))) - i32(i8(b >> ((i + 4) * 8)));
-                lo += u32(d0 < 0 ? -d0 : d0);
-                hi += u32(d1 < 0 ? -d1 : d1);
-            }
-            r = u64(lo & 0xffffu) | (u64(hi & 0xffffu) << 16);
             break;
         }
         case 0xf8: // PSUBB
@@ -926,7 +834,6 @@ void Cpu::execute_0f() {
         case 0xfa: // PSUBD
             for (int i = 0; i < 2; ++i) r |= u64(u32(u32(a >> (i * 32)) - u32(b >> (i * 32)))) << (i * 32);
             break;
-        case 0xfb: r = a - b; break; // PSUBQ
         case 0xfc: // PADDB
             for (int i = 0; i < 8; ++i) r |= u64(u8(u8(a >> (i * 8)) + u8(b >> (i * 8)))) << (i * 8);
             break;
@@ -943,6 +850,11 @@ void Cpu::execute_0f() {
     }
     default:
         raise_exception(6); // Unsupported or reserved opcode: #UD, never silently skip it.
+    }
+    if (mmx && op != 0x77) {
+        state_.fpu_top = 0;
+        state_.fpu_tag = 0;
+        for (auto& r : state_.fpu) r.empty = false;
     }
 }
 

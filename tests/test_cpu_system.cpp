@@ -136,7 +136,7 @@ TEST(system_rdtsc_rdpmc_and_privilege) {
     p.state().seg[1].selector = 0x1b; p.state().seg[1].access = 0xfa;
     p.state().seg[2].selector = 0x23; p.state().seg[2].access = 0xf2;
     p.state().seg[3] = p.state().seg[2]; p.state().seg[0] = p.state().seg[2];
-    p.state().cr4 |= 0x4;
+    p.state().cr4 |= 0x100; // PCE, not TSD
     p.set_r(1, 0);
     p.emit(0x0f); p.emit(0x33);
     p.halt(); p.run(1);

@@ -273,7 +273,7 @@ ATAPI-устройством и отвечает `NOT READY / 3Ah`, пока л�
 ./build/oldbox_tests
 ```
 
-Покрытие: 439 тестов — ALU/флаги всех размеров с эталонной моделью,
+Покрытие: 495 тестов — ALU/флаги всех размеров с эталонной моделью,
 ADC/SBB с граничным переносом, MUL/IMUL/DIV/IDIV, BCD (DAA/DAS полным
 перебором, AAA/AAS/AAM/AAD), сдвиги/вращения и их флаги, bit scan и
 BT/BTS/BTR/BTC со знаковыми смещениями, SETcc/CMOVcc, строковые операции
@@ -297,6 +297,8 @@ SB16/EMU8000/OPL3, CMOS/NVRAM (оба банка PIIX4, RTCCFG/lock, сохра�
 (`freedos_boots_to_command_prompt_with_reference_bios`).
 
 Аудит инструкций и найденные ошибки: [docs/cpu-audit.md](docs/cpu-audit.md).
+Повторная сверка Pentium II со спецификациями, исправления TSS/paging/MMX/x87
+и оценка оставшихся пробелов: [docs/pentium2-spec-audit.md](docs/pentium2-spec-audit.md).
 
 ## Документация
 

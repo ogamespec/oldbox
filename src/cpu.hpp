@@ -192,7 +192,9 @@ public:
     [[nodiscard]] u32 translate(u32 linear, bool write, bool supervisor = false) {
         if (!(state_.cr0 & 0x80000000u)) return linear;
         const u32 page = (linear >> 12) & 0x3ff;
-        const u32 tag = (state_.cr3 & ~0xfffu) | (linear >> 12);
+        // CR3 changes invalidate non-global entries; including it in the tag
+        // both aliases unrelated pages (bitwise OR) and defeats PGE.
+        const u32 tag = linear >> 12;
         const u32 flags = tlb_flags_[page];
         const bool user = !supervisor && cpl() == 3;
         if (flags && tlb_tag_[page] == tag) [[likely]] {
@@ -203,6 +205,11 @@ public:
             if (user && !(flags & 4)) {
                 state_.cr2 = linear;
                 throw CpuException{14, u32(5 | (write ? 2 : 0)), true};
+            }
+            // Keep the original leaf even for a global entry surviving CR3.
+            if (write && !(flags & 16u)) {
+                bus_.write32(tlb_leaf_[page], bus_.read32(tlb_leaf_[page]) | 0x40u);
+                tlb_flags_[page] |= 16u;
             }
             return tlb_phys_[page] | (linear & 0xfffu);
         }
@@ -320,6 +327,7 @@ private:
     // Decoder state.
     u32 opcode_ip_ = 0;
     u16 opcode_cs_ = 0;
+    unsigned instruction_bytes_ = 0;
     int cycles_ = 0;
     u8 fetch8();
     u16 fetch16();
@@ -445,6 +453,7 @@ private:
     void load_tr(u16 selector);
     std::array<u32, 1024> tlb_tag_{};
     std::array<u32, 1024> tlb_phys_{};
+    std::array<u32, 1024> tlb_leaf_{};
     std::array<u8, 1024> tlb_flags_{};
 };
 

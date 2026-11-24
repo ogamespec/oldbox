@@ -2,8 +2,9 @@
 
 `oldbox` моделирует архитектурно видимое поведение Pentium II, а не
 микроархитектуру (суперскалярность, предсказание переходов и т.п. не
-воспроизводятся). Основная модель — интерпретатор с точным набором регистров,
-флагов, сегментов, таблиц страниц и MSR.
+воспроизводятся). Основная модель — функциональный интерпретатор регистров,
+флагов, сегментов, таблиц страниц и MSR. Полное архитектурное соответствие
+пока не достигнуто; см. [повторный аудит](pentium2-spec-audit.md).
 
 ## Модели
 
@@ -34,7 +35,7 @@ CMOV, PAT, PSE36, MMX; SSE/SSE2/FXSR не выставляются.
   и method-4 кадр для аппаратных прерываний. V86-задача может быть запущена
   через IRET или task gate.
 - **Paging**: 4 KiB, PSE 4 MiB, PAE (3 уровня, 2 MiB/4 KiB), CR0.WP, U/S,
-  page-fault error code (P/W/U), CR2, TLB с учётом CR3/CR4.
+  page-fault error code (P/W/U), CR2, A/D-биты, TLB с учётом CR3/CR4/PGE.
 - **SMM**: вход по SMI, state-save в SMRAM (`SMBASE`, по умолчанию
   `0x30000`), handler на `SMBASE+8000`, `RSM` с восстановлением контекста,
   LDT base, auto-HALT restart, отложенным NMI и возможностью изменить
@@ -63,22 +64,21 @@ CMOV, PAT, PSE36, MMX; SSE/SSE2/FXSR не выставляются.
   Jcc rel32, CMPXCHG/CMPXCHG8B, XADD, BSWAP, MOVZX/MOVSX, MMX (частично,
   основные packed-операции);
 - x87: загрузка/сохранение 32/64/80-bit и целых форматов, арифметика,
-  сравнения, FCOMI/FCOMIP/FUCOMI/FUCOMIP, FCMOVcc (по x87 C0/C2/C3, а не
-  по EFLAGS), константы, FABS/FCHS/FSQRT/FSIN/FCOS/FSCALE,
+  сравнения, FCOMI/FCOMIP/FUCOMI/FUCOMIP, FCMOVcc по EFLAGS,
+  константы, FABS/FCHS/FSQRT/FSIN/FCOS/FSCALE,
   FNSTSW/FNSTCW/FLDCW, FSTENV/FLDENV/FNSAVE/FRSTOR, FBLD/FBSTP;
-- MMX: PADDB/W/D/Q, PSUBB/W/D/Q, PADDSB/W, PSUBSB/W, PAVGB/W, PMINUB,
-  PMAXUB, PMINSW, PMAXSW, PMULHUW, PMULHW, PMULLW, PMULUDQ, PMADDWD,
-  PSADBW, PAND/POR/PXOR/PANDN, PUNPCK*, PACKSS/PACKUS, PCMPEQ/GT,
-  PSLL/PSRL/PSRA, PSLLDQ/PSRLDQ, PSHUFW, PMOVMSKB, MOVD/MOVQ, MOVNTQ,
-  MASKMOVQ, EMMS.
+- MMX: PADDB/W/D, PSUBB/W/D, PADDSB/W, PSUBSB/W, PADDUSB/W,
+  PSUBUSB/W, PMULHW, PMULLW, PMADDWD, PAND/POR/PXOR/PANDN,
+  PUNPCK*, PACKSS/PACKUS, PCMPEQ/GT, PSLL/PSRL/PSRA, MOVD/MOVQ, EMMS.
+  Поздние SSE/SSE2 packed-расширения и FISTTP дают #UD.
 
 Известные пробелы CPU (не маскируются): FXSAVE/FXRSTOR (у PII нет SSE,
 но FXSR-check отдельный), часть редких MMX-форм, а также трансцендентные x87
 считаются через host long double, а не по таблицам Intel; FPREM/FPREM1
-выполняют полное уменьшение за один шаг, а не пошагово; #MF не доставляется,
+выполняют пошаговое уменьшение с C2; #MF не доставляется,
 флаги OE/UE/PE и округление арифметики по CW моделируются частично.
-`FISTTP` (`DB/DD/DF /1`) реализован как удобное расширение, хотя на
-Pentium II эта форма не определена. MSR-пространство ниже `0x200` (включая
+`FISTTP` (`DB/DD/DF /1`) не определён на Pentium II и даёт #UD.
+MSR-пространство ниже `0x200` (включая
 PII BBL/L2 MSR) хранится как обычные регистры, поскольку у модели нет
 кэша; `#GP` для неизвестных MSR выдаётся выше этого диапазона.
 `FF /7` даёт #UD. VME method-6 для исключений реализован; порядок редких
@@ -126,11 +126,13 @@ fixed-MTRR (0x250–0x26F). Пространство ниже 0x200 (включ�
 
 x87-стек хранится как `long double` + теги; 80-битные форматы
 преобразуются в/из x87 extended. MMX-регистры — отдельный массив `u64`.
-MMX не разделяет физические регистры с x87 (упрощение); EMMS — no-op.
+MMX не разделяет физические данные с x87 (ограничение); MMX выставляет
+TOP=0 и valid-теги, EMMS очищает теги. На MSVC `long double` не обеспечивает
+точности/диапазона Intel extended. Полный MMX FSAVE/FRSTOR ещё не реализован.
 
 ## Тесты
 
-387 тестов: `tests/test_cpu*.cpp` (CPU-инструкции, режимы, система, FPU/MMX),
+CPU-тесты: `tests/test_cpu*.cpp` (инструкции, режимы, система, FPU/MMX),
 `tests/test_cpu_audit.cpp` (регрессии аудита 2026), `tests/test_io.cpp`
 (I/O-привилегии и A20) и `tests/test_machine.cpp` (сквозная
 загрузка FreeDOS интерпретатором). Полный список — `./build/oldbox_tests`.

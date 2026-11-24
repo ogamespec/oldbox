@@ -6,6 +6,10 @@
 что именно моделируется архитектурно, что упрощено и что принципиально не
 имеет наблюдаемого эффекта в эмуляторе без кэша и реального системного bus.
 
+Уточнения и регрессии: [повторный аудит](pentium2-spec-audit.md).
+«Реализовано» ниже означает наличие функциональной модели, а не доказанную
+полноту всех исключений и пограничных случаев.
+
 ## Режимы и сегментация
 
 | Возможность | Статус |
@@ -14,6 +18,7 @@
 | Protected mode: GDT/LDT, DPL/RPL/CPL, expand-down, conforming | реализовано |
 | Загрузка сегментов, null-селекторы, hidden-часть | реализовано; accessed-bit выставляется, code-сегмент нельзя загрузить в SS |
 | Operand/address-size префиксы 66h/67h | реализовано; повторный префикс идемпотентен, стек определяется SS.B, а не 67h |
+| LOCK и максимальная длина инструкции | проверяются допустимые memory RMW-формы; длина более 15 байт даёт #GP(0) |
 | Descriptor #NP/#SS/#TS | реализовано для загрузки сегментов, LLDT/LTR, CS/IDT-target; порядок редких ошибок TSS упрощён |
 | Virtual-8086: 8086-сегментация, CPL=3, IDT/TSS, IRET | реализовано |
 | VME: redirection bitmap, VIF/VIP, method 4/5/6 | реализовано, method 3 для аппаратных прерываний упрощён |
@@ -32,6 +37,7 @@
 | 4K, PSE 4M, PAE (2M/4K), CR0.WP, U/S, PCD/PWT-биты | реализовано |
 | Page-fault error code (P/W/U), CR2 | реализовано |
 | PGE и global-бит TLB, INVLPG, CR3 flush | реализовано |
+| Page-table A/D | выставляются при успешных доступах для 4K/PSE/PAE, включая первую запись через TLB |
 | Alignment check (CR0.AM + EFLAGS.AC + CPL3) | реализовано |
 | PSE-36 (36-бит physical) | не наблюдаемо: Bus 32-битный, физической RAM >4G нет |
 | Кэши L1/L2, write buffer, когерентность | не моделируются |
@@ -44,7 +50,8 @@
 | Возможность | Статус |
 |---|---|
 | IDT interrupt/trap/task gates, DPL, #NP/#GP/#TS/#SS | реализовано |
-| TSS esp0/ss0, I/O permission bitmap (32/16-бит TSS) | реализовано |
+| TSS esp0/ss0, I/O permission bitmap | реализовано; bitmap только в 32-битном TSS, offset по 66h; selector slots с шагом 4 |
+| SYSENTER/SYSEXIT | фиксированные flat caches без GDT, проверки режима/привилегий и IF |
 | SMM: state save map, SMBASE, RSM, auto HALT restart, NMI latch | реализовано, I/O restart field не используется |
 | Machine Check: MCG_CAP/STATUS, 5 банков MCi_CTL/STATUS/ADDR/MISC, #MC | реализовано |
 | Debug: DR0-7, DR4/5 alias/DE, GD, data/instruction breakpoints, TF, RF, BT | реализовано; exact/IO breakpoints не моделируются |
@@ -74,7 +81,8 @@
 | FPREM/FPREM1, FSINCOS, FPTAN, FXTRACT, FYL2XP1 | реализовано |
 | FPU status IE/ZE/ES, диапазоны FIST/FSQRT/FYL2X | частично (без точного #MF и полного набора OE/UE/PE) |
 | Округление по CW для арифметики и store | частично (host long double) |
-| MMX: packed arithmetic, saturation, compare, pack/unpack, shifts, PSHUFW, PMOVMSKB, MASKMOVQ | реализовано; сдвиги с count ≥ ширины lane дают 0/знак, PMADDWD с 32-битным wrap |
+| MMX: packed arithmetic, saturation, compare, pack/unpack, shifts, MOVD/Q | исходный MMX; исправлены unsigned saturation, PANDN, EM/TS, TOP/tags и EMMS; aliasing данных с x87 не реализован |
+| PSHUFW/PMOVMSKB/MASKMOVQ, другие SSE packed-расширения, FISTTP | #UD: отсутствуют у Pentium II |
 | SSE/SSE2/FXSR | отсутствуют у Klamath/Deschutes, CPUID не выставляет |
 
 ## Не моделируется сознательно
