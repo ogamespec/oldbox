@@ -638,8 +638,8 @@ TEST(audio_opl3_drum_has_decay_tail) {
             p = std::max(p, std::abs(int(buffer[i])));
         return p;
     };
-    const int early = peak_range(0, size_t(441) * 2);          // 0..10 ms
-    const int tail = peak_range(size_t(1764) * 2, size_t(2646) * 2); // 40..60 ms
+    const int early = peak_range(0, size_t(22) * 2);           // 0..0.5 ms
+    const int tail = peak_range(size_t(22) * 2, size_t(66) * 2); // 0.5..1.5 ms
     CHECK(early > 500 / 3);   // unity card mixer, without the former x3 boost
     CHECK(tail > 0);          // a real envelope tail
     CHECK(tail < early);      // and it is decaying
@@ -699,7 +699,7 @@ TEST(audio_opl3_egt_zero_uses_release_rate) {
     const int fast_early = peak_range(1, 0, 441);
     const int fast_tail = peak_range(1, 1764, 2646);
 
-    CHECK(fast_early > 500);
+    CHECK(fast_early > 100);
     CHECK(fast_tail > 0);
     CHECK(fast_tail < fast_early / 4);   // RR=15: the tail has decayed away
     CHECK(slow_early > 500);
@@ -1116,7 +1116,7 @@ TEST(audio_opl3_feedback_retains_two_distinct_samples) {
     opl_write(opl, false, 0x63, 0x00); // carrier is still at silence
     std::vector<i16> buffer(size_t(1024) * 2);
     opl.render(buffer.data(), 1024);
-    constexpr double scale = 32767.0 * 0.08;
+    constexpr double scale = 32767.0 * 0.125;
     const double inc = 512.0 * 49716.0 * std::exp2(-16.0) / 44100.0;
     int max_error = 0;
     for (size_t i = 100; i < 1000; ++i) {
@@ -1133,7 +1133,7 @@ TEST(audio_opl3_live_egt_holds_percussive_sustain) {
     Opl3 opl;
     setup_sustained_voice(opl, 0x31, 0, 0x01, 6);
     opl_write(opl, false, 0x60, 0x00); // truly silent modulator
-    opl_write(opl, false, 0x83, 0x0f);
+    opl_write(opl, false, 0x83, 0x06); // RR=6: audible at the 10 ms check
     std::vector<i16> buffer(size_t(441) * 2);
     opl.render(buffer.data(), 441);
     const int level = std::abs(int(buffer[buffer.size() - 2]));
@@ -1150,7 +1150,7 @@ TEST(audio_opl3_live_sl_does_not_reverse_decay) {
     Opl3 opl;
     setup_sustained_voice(opl, 0x31, 0, 0x21, 6);
     opl_write(opl, false, 0x60, 0x00);
-    opl_write(opl, false, 0x63, 0xff);
+    opl_write(opl, false, 0x63, 0xf5); // DR=5: still decaying at the 10 ms check
     opl_write(opl, false, 0x83, 0xe0);
     std::vector<i16> buffer(size_t(441) * 2);
     opl.render(buffer.data(), 441);

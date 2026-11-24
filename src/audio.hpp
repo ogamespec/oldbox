@@ -221,6 +221,7 @@ public:
     [[nodiscard]] std::string status() const;
     void load_rom(std::span<const u8> rom) { emu_.set_rom(rom); }
     [[nodiscard]] Emu8000& emu() { return emu_; }
+    [[nodiscard]] Opl3& opl3() { return opl3_; }
     [[nodiscard]] bool irq_pending() const { return irq_pending_; }
 
     u8 io_read8(u16 port) override;

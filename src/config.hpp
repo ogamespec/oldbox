@@ -103,6 +103,7 @@ struct SystemConfig {
     bool cmos_image_enabled = true;
     std::string instr_log_path;
     std::string screenshot_path;
+    std::string dump_opl_regs;   // log OPL register writes (sample, reg, value)
     bool dump_text = false;
     std::string dump_ram_path;
     std::string demo;

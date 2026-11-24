@@ -109,6 +109,7 @@ CommandLine parse_command_line(int argc, char** argv) {
         else if (a == "--cmos-image") c.cmos_image_path = need(a);
         else if (a == "--no-cmos-image") c.cmos_image_enabled = false;
         else if (a == "--instr-log") c.instr_log_path = need(a);
+        else if (a == "--dump-opl-regs") c.dump_opl_regs = need(a);
         else if (a == "--boot-menu") c.boot_menu = true;
         else if (a == "--screenshot") c.screenshot_path = need(a);
         else if (a == "--dump-text") c.dump_text = true;
@@ -199,6 +200,7 @@ void print_usage(const char* argv0) {
         "  --save-state FILE      write a core save state on exit\n"
         "  --max-instructions N   stop after N CPU instructions\n"
         "  --instr-log FILE       log every executed instruction to FILE\n"
+        "  --dump-opl-regs FILE    log OPL register writes (sample, reg, value)\n"
         "  --trace-cs HEX         keep an instruction trace of one CS selector\n"
         "  --trace-file FILE      write the --trace-cs trace to FILE on exit\n"
         "  --exc-trace            log exceptions with CS:IP, opcode and segments\n"

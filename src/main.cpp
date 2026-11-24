@@ -43,6 +43,8 @@ int main(int argc, char** argv) {
             return ok ? 0 : 1;
         }
         machine.reset();
+        if (machine.audio() && !cli.config.dump_opl_regs.empty())
+            machine.audio()->opl3().enable_trace();
         if (!cli.config.cmos_path.empty()) {
             std::ifstream in(cli.config.cmos_path, std::ios::binary);
             if (!in) throw Error("cannot open CMOS file: " + cli.config.cmos_path);
@@ -276,6 +278,18 @@ int main(int argc, char** argv) {
                 while (!line.empty() && line.back() == ' ') line.pop_back();
                 std::printf("%s\n", line.c_str());
             }
+        }
+        if (!cli.config.dump_opl_regs.empty() && machine.audio()) {
+            std::ofstream out(cli.config.dump_opl_regs, std::ios::binary);
+            const auto& t = machine.audio()->opl3().trace();
+            out << "# oldbox OPL3 register trace\n";
+            out << "# total_samples " << machine.audio()->opl3().sample_position() << "\n";
+            for (const auto& e : t)
+                out << std::dec << e.sample << " 0x" << std::hex << e.reg << " 0x"
+                    << unsigned(e.value) << std::dec << '\n';
+            std::fprintf(stderr, "oldbox: wrote OPL register trace %s (%zu writes, %llu samples)\n",
+                         cli.config.dump_opl_regs.c_str(), t.size(),
+                         (unsigned long long)machine.audio()->opl3().sample_position());
         }
         std::printf("%s\n", machine.status_text().c_str());
         if (cli.config.perf) std::printf("\n%s", perf().report().c_str());

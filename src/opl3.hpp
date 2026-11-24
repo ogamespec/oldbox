@@ -57,6 +57,20 @@ public:
     [[nodiscard]] bool opl3_mode() const { return opl3_mode_; }
     [[nodiscard]] u32 sample_rate() const { return sample_rate_; }
 
+    // Optional register-trace capture.  Each entry records the render sample
+    // index (in samples at the configured rate) at which the write takes
+    // effect, so a separate tool can replay the exact same writes through a
+    // reference OPL core at the same rate.  `reg` is the 9-bit register
+    // address (0x000..0x1FF); reg == 0xFFFF marks a chip reset.
+    struct TraceEntry {
+        u64 sample;
+        u16 reg;
+        u8 value;
+    };
+    void enable_trace() { trace_enabled_ = true; }
+    [[nodiscard]] const std::vector<TraceEntry>& trace() const { return trace_; }
+    [[nodiscard]] u64 sample_position() const { return render_samples_; }
+
 private:
     enum class EgState : u8 { off, attack, decay, sustain, release };
 
@@ -128,6 +142,11 @@ private:
     u64 t2_acc_ = 0;
     u64 t1_period_ = 0;
     u64 t2_period_ = 0;
+
+    // Register-trace capture (see enable_trace()).
+    bool trace_enabled_ = false;
+    u64 render_samples_ = 0;
+    std::vector<TraceEntry> trace_;
 
     // Free-running LFOs: tremolo 3.7 Hz, vibrato 6.1 Hz (datasheet page 9).
     float trem_phase_ = 0.0f;

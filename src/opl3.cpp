@@ -12,13 +12,10 @@ constexpr float kTwoPi = 6.28318530717958647692f;
 // interpolation between the last and first phase straightforward.
 constexpr u32 kSineEntries = 1024;
 
-// Operator register offsets inside one register array.  The register file is
-// not linear: operators 6..8 and 12..17 live at 08h..0Dh and 10h..15h.
-constexpr u8 kOpOffsets[18] = {
-    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x08, 0x09, 0x0A,
-    0x0B, 0x0C, 0x0D, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15,
-};
-
+// Operator register offsets inside one register array, mapped back to the
+// linear local operator index 0..17.  The register file is not linear:
+// operators 6..8 and 12..17 live at 08h..0Dh and 10h..15h, and the gaps
+// (06h/07h/0Eh/0Fh and above 15h) are unused.
 constexpr u8 kOffsetToLocal[32] = {
     0, 1, 2, 3, 4, 5, 0xFF, 0xFF, 6, 7, 8, 9, 10, 11, 0xFF, 0xFF,
     12, 13, 14, 15, 16, 17, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
@@ -36,10 +33,15 @@ constexpr u8 kFourOpPairs[6][2] = {
     {0, 3}, {1, 4}, {2, 5}, {9, 12}, {10, 13}, {11, 14},
 };
 
-// Operator output to phase modulation.  A full-scale operator output shifts
-// the carrier phase by one cycle.  The feedback table below is expressed in
-// cycles: FB=1 .. FB=7 produce pi/16 .. 4pi radians, i.e. 1/32 .. 2 cycles.
-constexpr float kFmPhaseScale = 1.0f;
+// Operator output to phase modulation, in cycles per full-scale output.
+// The datasheet FB table (FB=1..7 -> pi/16..4pi radians for the shifted
+// feedback sum) pins the operator's full-scale output at 2^12 = 4096 phase
+// units: the hardware feedback is (out[n-1]+out[n-2]) >> (9-FB), and FB=7
+// (>>2) must reach 4pi = 2 cycles = 2048 units, so the two-sample sum is
+// 8192, i.e. one sample is 4096 units.  The phase accumulator is 10 bits
+// (1024 units per cycle), so a full-scale operator output shifts the carrier
+// phase by 4096/1024 = 4 cycles (beta = 8*pi).
+constexpr float kFmPhaseScale = 4.0f;
 constexpr float kFeedbackCycles[8] = {
     0.0f, 1.0f / 32.0f, 1.0f / 16.0f, 1.0f / 8.0f,
     1.0f / 4.0f, 0.5f, 1.0f, 2.0f,
@@ -68,12 +70,13 @@ constexpr u8 kKsrRof[2][16] = {
     {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15},
 };
 
-// Model envelope calibration at internal rate 60 (not a Yamaha timing table):
-// a full attack takes 0.2 ms; a 40 dB release/decay takes 50 ms.
-// Each internal rate step is a factor 2^(1/4), so the times grow by that
-// factor as the rate falls.  Rate 0 means "no movement", not the slowest rate.
-constexpr float kAttackSeconds60 = 0.0002f;
-constexpr float kReleaseSeconds60 = 0.05f;
+// Model envelope calibration at internal rate 60 (not a Yamaha timing table).
+// The per-step factor 2^(1/4) is the hardware's; the absolute times were
+// fitted against the reference OPL3 output (see docs/opl3.md): a full attack
+// takes ~0.15 ms, a 40 dB release/decay ~1 ms.  Rate 0 means "no movement",
+// not the slowest rate.
+constexpr float kAttackSeconds60 = 0.00015f;
+constexpr float kReleaseSeconds60 = 0.001f;
 
 // LFO frequencies and depths (datasheet pages 9 and 11).
 constexpr float kTremoloHz = 3.7f;
@@ -81,10 +84,12 @@ constexpr float kVibratoHz = 6.1f;
 constexpr float kTremoloDepthDb[2] = {1.0f, 4.8f};   // DAM=0, DAM=1
 constexpr float kVibratoDepthCents[2] = {7.0f, 14.0f}; // DVB=0, DVB=1
 
-// The OPL output stage sums many operators.  A single full-scale sine is
-// scaled to roughly -22 dBFS here so 18 channels and the card mixer below
-// have headroom; this matches the level the SB16/AWE64 tests expect.
-constexpr float kOutputScale = 0.08f;
+// The OPL output stage sums operators into 16-bit DAC words.  The YMF262
+// operator's full-scale output is 2^12 = 4096 units on a 2^15 DAC half-scale,
+// i.e. -18 dBFS per full-scale sine; a single full-scale operator therefore
+// lands at 4096/32768 = 1/8.  Clipping under many simultaneous channels is
+// exactly what the real chip does.
+constexpr float kOutputScale = 0.125f;
 
 // Envelope attenuation is in 0.1875 dB units: TL is four units per step and
 // SL is sixteen units (3 dB) per step.  The sine table and the attenuation
@@ -126,6 +131,7 @@ Opl3::Opl3() {
 }
 
 void Opl3::reset() {
+    if (trace_enabled_) trace_.push_back(TraceEntry{render_samples_, 0xFFFF, 0});
     regs_.fill(0);
     index_.fill(0);
     ops_.fill(Operator{});
@@ -174,6 +180,7 @@ void Opl3::write_index(bool secondary, u8 value) {
 void Opl3::write_data(bool secondary, u8 value) {
     secondary = index_[1] != 0; // A1 is don't-care during a DATA write.
     const u16 reg = u16((secondary ? 0x100 : 0) | index_[0]);
+    if (trace_enabled_) trace_.push_back(TraceEntry{render_samples_, reg, value});
     // NEW is always writable.  Other array-1 writes in OPL2 mode must not
     // enter the register image and take effect when OPL3 is enabled later.
     if (secondary && !opl3_mode_ && reg != 0x105) return;
@@ -800,6 +807,7 @@ void Opl3::render_rhythm(float& a, float& b, float& c, float& d) {
 
 void Opl3::render(i16* out, u32 frames) {
     if (out == nullptr) return;
+    render_samples_ += frames;
 
     const bool silent = std::all_of(ops_.begin(), ops_.end(), [](const Operator& op) {
         return !op.key && op.eg_state == EgState::off;
