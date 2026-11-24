@@ -658,8 +658,21 @@ u8 S3Trio64::crtc_read(u8 index) const {
 }
 
 void S3Trio64::crtc_write(u8 index, u8 value) {
-    // Standard VGA: CR11 bit 7 protects CR0-CR7.
-    if (index <= 0x07 && (crtc_[0x11] & 0x80)) return;
+    // CR11 bit 7 (LOCK RO-7) write-protects CR0-CR7, but the Trio64 keeps
+    // bit 4 of CR7 (LCM8, line-compare bit 8) writable (datasheet 14-28).
+    // Kyrandia enables its split screen by clearing LCM8 while the VGA BIOS
+    // mode set has already locked the registers; dropping that one write kept
+    // line compare at 480 scan lines, so the bottom third of the title screen
+    // read past the 64K display page instead of the second screen at 0.
+    // CR33 bit 1 additionally unlocks bits 1 and 6 of CR7.
+    if (index <= 0x07 && (crtc_[0x11] & 0x80)) {
+        if (index != 0x07) return;
+        u8 mask = 0x10;
+        if (crtc_[0x33] & 0x02) mask |= 0x42;
+        crtc_[0x07] = u8((crtc_[0x07] & ~mask) | (value & mask));
+        dirty();
+        return;
+    }
     if (index == 0x11) {
         crtc_[0x11] = value;
         dirty();

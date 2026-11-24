@@ -546,6 +546,55 @@ TEST(s3_line_compare_fetches_screen_b_from_zero) {
     CHECK_EQ(f.s3.pixel(0, 40), 0x00000000u);
 }
 
+// CR11 bit 7 (LOCK RO-7) protects CR0-CR7, but the Trio64 keeps bit 4 of
+// CR7 (LCM8) writable (datasheet 14-28).  Kyrandia enables its split screen
+// by clearing LCM8 while the mode set has already locked the registers;
+// ignoring that byte write left line compare at 480 scan lines.
+TEST(s3_cr11_lock_keeps_only_cr7_line_compare_writable) {
+    Fix f;
+    f.s3.set_mode13h();                  // CR11 = 8Eh: LOCK RO-7 set
+    CHECK_EQ(f.crtcr(0x11), 0x8Eu);
+    CHECK_EQ(f.crtcr(0x07), 0x1Fu);
+    f.crtc(0x07, 0x00);                  // only LCM8 gets through
+    CHECK_EQ(f.crtcr(0x07), 0x0Fu);
+    f.crtc(0x07, 0xFF);                  // the other CR7 bits stay locked
+    CHECK_EQ(f.crtcr(0x07), 0x1Fu);
+    f.crtc(0x09, 0x01);                  // only CR0-CR7 are locked, not CR9
+    CHECK_EQ(f.crtcr(0x09), 0x01u);
+    f.crtc(0x09, 0x41);
+    f.crtc(0x18, 0xE0);                  // line compare low byte is not locked
+    CHECK_EQ(f.crtcr(0x18), 0xE0u);
+    // CR33 bit 1 additionally unlocks bits 1 and 6 of CR7.
+    f.unlock();
+    f.crtc(0x33, 0x02);
+    f.crtc(0x07, 0xFF);
+    CHECK_EQ(f.crtcr(0x07), 0x5Fu);
+}
+
+// The Kyrandia title screen keeps its 320x200 page at 0x6540 and puts the
+// static lower part (mountain, copyright line) at address 0, then splits at
+// scan line 224 (row 112) with CR11 still locked.  Without the LCM8 write the
+// split never happened and the bottom third of the frame read unrelated VRAM
+// (solid brown bands) - the "torn screen" the 4.x frontends showed.
+TEST(s3_locked_cr7_line_compare_splits_screen) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.crtc(0x0C, 0x19);                  // display start 1950h dwords = 6540h
+    f.crtc(0x0D, 0x50);
+    f.crtc(0x18, 0xE0);                  // line compare 224 scan lines
+    f.crtc(0x07, 0x0F);                  // LCM8 = 0 while CR11.7 is set
+    f.crtc(0x09, 0x01);                  // LC9 = 0, as the game does
+    CHECK_EQ(f.crtcr(0x07), 0x0Fu);
+    f.dac(1, 63, 0, 0);                  // screen A = red
+    f.dac(2, 0, 63, 0);                  // screen B = green
+    f.s3.write_vram8(0x6540, 1);
+    f.s3.write_vram8(0x0000, 2);
+    (void)f.s3.frame();
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);   // start page row 0
+    CHECK_EQ(f.s3.pixel(0, 111), 0x00000000u); // last row of screen A
+    CHECK_EQ(f.s3.pixel(0, 112), 0x0000FF00u); // screen B restarts at 0
+}
+
 TEST(s3_vga_raster_ops) {
     Fix f;
     f.mode12h();
