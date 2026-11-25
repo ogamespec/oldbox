@@ -514,6 +514,7 @@ ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
             } else {
                 off = state_.gpr[base] + idx;
                 default_seg = (base == 4 || base == 5) ? SegReg::ss : SegReg::ds;
+                if (base == 4) m.esp_base = true;
                 if (m.mod == 1) off += u32(i32(i8(fetch8())));
                 else if (m.mod == 2) off += fetch32();
             }
@@ -1910,7 +1911,26 @@ void Cpu::execute_one() {
     }
     case 0x8d: { const ModRm m = decode_modrm(opsize(), false); if (m.is_register) raise_exception(6); write_reg_field(m, m.offset, opsize()); break; }
     case 0x8e: { const ModRm m = decode_modrm(2); if (m.reg_field > 5 || m.reg_field == 1) raise_exception(6); load_segment(SegReg(m.reg_field), u16(read_rm(m, 2))); break; }
-    case 0x8f: { const ModRm m = decode_modrm(opsize()); write_rm(m, pop_value(opsize()), opsize()); break; }
+    case 0x8f: { // POP r/m
+        // The destination's effective address is calculated after the stack
+        // pointer is incremented.  Decode the ModRM (and displacement) first,
+        // but defer the memory limit check and the write until the pop has
+        // updated ESP; otherwise "pop [esp+8]" stores to [esp+8] instead of
+        // [esp+12] and corrupts the far-return frame used by KRNL386.
+        const int size = opsize();
+        ModRm m = decode_modrm(size, false);
+        if (m.is_register) {
+            write_rm(m, pop_value(size), size);
+        } else {
+            // Use the full ESP value: with a 16-bit SS the stack pointer wraps
+            // in its low 16 bits while the upper half of ESP is preserved.
+            const u32 old_esp = state_.gpr[4];
+            const u32 v = pop_value(size);
+            if (m.esp_base) m.offset += state_.gpr[4] - old_esp;
+            write_rm(m, v, size);
+        }
+        break;
+    }
     case 0x90: break;
     case 0x91: case 0x92: case 0x93: case 0x94: case 0x95: case 0x96: case 0x97: {
         const int i = op & 7; const int size = opsize(); u32 a = read_reg_index(0, size), b = read_reg_index(i, size);

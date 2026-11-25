@@ -104,6 +104,11 @@ struct ModRm {
     u32 offset = 0;
     u32 linear = 0;
     SegReg segment = SegReg::ds;
+    // True when the effective address uses ESP as its base.  POP r/m must
+    // compute such an address *after* the stack pointer is incremented
+    // (Intel SDM Vol. 2B, POP): Windows 95's KRNL386 relies on it for
+    // "pop [esp+8]" while it rewrites a far-return frame.
+    bool esp_base = false;
 };
 
 class Cpu {

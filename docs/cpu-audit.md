@@ -105,10 +105,11 @@
 | 61 | Call gate/task switch, SS | expand-down стековый сегмент отвергался проверкой `access & 0Ch` | корректный expand-down SS давал #TS | `audit_call_gate_accepts_expand_down_stack`, `audit_task_switch_accepts_expand_down_stack` |
 | 62 | Accessed bit дескриптора | не выставлялся при загрузке code/data-сегмента | OS/отладчик видели A=0 после фактического использования сегмента | `audit_descriptor_accessed_bit_is_set_on_segment_load` |
 | 63 | `ENTER`/`LEAVE` | 16-битная форма `LEAVE` писала в `EBP` результат `POP BP` целиком (старшие 16 бит обнулялись), а `ENTER` при 16-битном стеке писал `EBP`, а не `BP` | DOS/4GW 1.97 терял 32-битный указатель TSF в `EBP` и падал с `#GP` при запуске `SETUP.EXE` (Redneck Rampage) | `cpu_enter_leave_16bit_keeps_ebp_upper` |
+| 64 | `POP r/m` с базой ESP | адрес назначения вычислялся до инкремента ESP; `pop dword ptr [esp+8]` писал в `[esp+8]` вместо `[esp+12]` | KRNL386 в Windows 95/98 затирал селектор возврата в thunk'е перед `retfd`; `Fatal error 0D at 0117:00006522` | `cpu_pop_mem_esp_address_uses_incremented_sp`, `cpu_krnl386_pop_esp_thunk_far_return` |
 
-Пункты 1–62 подтверждены тестами; пункт 1 — ещё и сквозной загрузкой
+Пункты 1–64 подтверждены тестами; пункт 1 — ещё и сквозной загрузкой
 FreeDOS, пункты 20–22 — тестами `mode_v86_*`, пункты 28–37 — тестами
-`mode_*`, `system_*`, `local_apic_*`, пункты 42–62 — `test_cpu_audit.cpp`
+`mode_*`, `system_*`, `local_apic_*`, пункты 42–64 — `test_cpu_audit.cpp`
 и обновлёнными тестами `test_cpu_instructions.cpp`.
 
 ## Покрытие по группам

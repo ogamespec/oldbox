@@ -306,6 +306,67 @@ TEST(cpu_stack_and_call_return) {
     }
 }
 
+TEST(cpu_pop_mem_esp_address_uses_incremented_sp) {
+    // POP r/m must compute an ESP-based destination after incrementing ESP.
+    // KRNL386 uses the same instruction (encoded as 67 66 8F 44 24 08 in its
+    // 16-bit code) to shift a far-return frame; evaluating the address before
+    // the pop overwrites the return selector and produces a #GP at the
+    // following RETFD.
+    {
+        CpuHarness h;
+        h.set_r(4, 0x8000);
+        h.bus.write32(0x8000, 0xcafebabe);
+        h.bus.write32(0x8008, 0x11111111);
+        h.bus.write32(0x800c, 0x22222222);
+        h.emit(0x8f); h.emit(0x44); h.emit(0x24); h.emit(0x08);
+        h.halt(); h.run(4);
+        CHECK_EQ(h.r(4), 0x8004u);
+        CHECK_EQ(h.bus.read32(0x8008), 0x11111111u);
+        CHECK_EQ(h.bus.read32(0x800c), 0xcafebabeu);
+    }
+    {
+        // Same instruction with a 16-bit operand: ESP advances by two and the
+        // word lands at [old ESP + 2 + disp].
+        CpuHarness h;
+        h.set_r(4, 0x8000);
+        h.bus.write16(0x8000, 0xbeef);
+        h.bus.write16(0x8008, 0x1111);
+        h.bus.write16(0x800a, 0x2222);
+        h.emit(0x66); h.emit(0x8f); h.emit(0x44); h.emit(0x24); h.emit(0x08);
+        h.halt(); h.run(4);
+        CHECK_EQ(h.r(4), 0x8002u);
+        CHECK_EQ(h.bus.read16(0x8008), 0x1111u);
+        CHECK_EQ(h.bus.read16(0x800a), 0xbeefu);
+    }
+}
+
+TEST(cpu_krnl386_pop_esp_thunk_far_return) {
+    // The exact KRNL386 sequence that produced the Windows 95 GPF:
+    //   pop dword ptr [esp+8]   ; 67 66 8F 44 24 08
+    //   retfd                   ; 66 CB
+    // It runs with 16-bit code/stack defaults (0x67/0x66 override both).
+    CpuHarness h;
+    auto& s = h.state();
+    s.seg[1].flags = 0; // 16-bit code
+    s.seg[2].flags = 0; // 16-bit stack
+    s.gpr[4] = 0x8000;
+    s.eip = 0x1000;
+    h.code = 0x1000;
+    h.bus.write32(0x8000, 0xcafebabe);
+    h.bus.write32(0x8004, 0x00002000); // return EIP
+    h.bus.write32(0x8008, 0x00000008); // return CS (flat ring-0 code)
+    h.bus.write32(0x800c, 0x11111111);
+    h.bus.write8(0x2000, 0xf4);        // hlt at the return target
+    h.emit(0x67); h.emit(0x66); h.emit(0x8f); h.emit(0x44); h.emit(0x24); h.emit(0x08);
+    h.emit(0x66); h.emit(0xcb);
+    h.run(8);
+    CHECK_EQ(s.gpr[4], 0x800cu);
+    CHECK_EQ(u32(s.seg[1].selector), 0x08u);
+    CHECK_EQ(s.eip, 0x2001u); // HLT has already advanced past itself
+    CHECK_EQ(h.bus.read32(0x8008), 0x00000008u); // selector slot intact
+    CHECK_EQ(h.bus.read32(0x800c), 0xcafebabeu); // popped dword moved here
+}
+
 TEST(cpu_string_operations_all_directions) {
     for (int dir : {0, 1}) {
         CpuHarness h;
