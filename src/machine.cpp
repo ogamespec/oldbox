@@ -46,7 +46,8 @@ Machine::Machine(SystemConfig cfg)
           pending_reset_ = true;
           pending_reset_hard_ = hard;
       }),
-      s3_(bus_, cfg_.video.s3_memory_mb, sched_mhz_),
+      s3_(bus_, cfg_.video.s3_memory_mb, sched_mhz_,
+          [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       voodoo_(cfg_.video.voodoo_enabled ? std::make_unique<Voodoo>(bus_, cfg_.video.voodoo_memory_mb) : nullptr),
       ata_(bus_, [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),
       floppy_(bus_, piix4_.dma(), [this](int irq, bool level) { piix4_.pic().set_line(irq, level); }),

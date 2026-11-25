@@ -78,6 +78,7 @@ struct Fix {
         crtc(0x43, 0x00);
         crtc(0x53, 0x10);            // MMIO enable
         crtc(0x58, 0x13);            // linear enable, 4 MB window
+        crtc(0x40, 0x31);            // enable the enhanced register file
         crtc(0x69, 0x00);
         crtc(0x6A, 0x00);
         crtc(0x01, u8(hde));
@@ -191,6 +192,7 @@ TEST(s3_bars_linear_window_and_mmio) {
     f.unlock();
     f.crtc(0x58, 0x13);                   // linear enable
     f.crtc(0x53, 0x10);                   // MMIO enable
+    f.crtc(0x40, 0x31);                   // enable the enhanced register file
     f.bus.write8(0xE0000000, 0x5A);
     CHECK_EQ(f.s3.read_vram8(0), 0x5A);
     CHECK_EQ(f.bus.read8(0xE0000000), 0x5A);
@@ -222,7 +224,7 @@ TEST(s3_unlock_sequence) {
     CHECK_EQ(f.crtcr(0x30), 0x00);       // locked
     f.unlock();
     CHECK_EQ(f.crtcr(0x30), 0xE1);
-    CHECK_EQ(f.crtcr(0x2D), 0x53);
+    CHECK_EQ(f.crtcr(0x2D), 0x88);
     CHECK_EQ(f.crtcr(0x2E), 0x11);
     CHECK_EQ(f.crtcr(0x2F), 0x00);
     CHECK_EQ(f.crtcr(0x37), 0x1F);
@@ -886,8 +888,10 @@ TEST(s3_engine_lines_and_short_stroke) {
     CHECK_EQ(f.s3.read_vram8(u32(121 * 640 + 13)), 0x55);
     CHECK_EQ(f.s3.read_vram8(u32(122 * 640 + 14)), 0x55);
 
-    // Short stroke vector: direction 0 (right), draw, length 6.
+    // Short stroke vector: direction 0 (right), draw, length 6.  A NOP
+    // command with BYTE SWP set selects the low register byte first (18-15).
     f.bus.write32(0xF0008100, (10u << 16) | 100u);
+    f.ww(0x9AE8, 0x1011);               // NOP, byte swap, draw enabled
     f.ww(0x9EE8, 0x0015);
     for (int x = 10; x < 16; ++x) CHECK_EQ(f.s3.read_vram8(u32(100 * 640 + x)), 0x55);
 }
@@ -1180,4 +1184,561 @@ TEST(s3_planar_cpu_base_uses_16k_units) {
     f.bus.write8(0xA0000, 0xFF);
     CHECK_EQ(f.s3.read_vram8(0x8000), 0xFF);
     CHECK_EQ(f.s3.read_vram8(0x20000), 0x00);
+}
+
+// ---------------------------------------------------------------------------
+// S3 register-set completeness (data book Sections 14-19)
+// ---------------------------------------------------------------------------
+
+TEST(s3_device_id_and_readonly_registers) {
+    Fix f;
+    // CR2D-CR3F are protected by CR38; CR2D/CR2E/CR2F are read-only.
+    CHECK_EQ(f.crtcr(0x2D), 0x00);
+    CHECK_EQ(f.crtcr(0x2E), 0x00);
+    f.unlock();
+    CHECK_EQ(f.crtcr(0x2D), 0x88);      // device ID high byte
+    CHECK_EQ(f.crtcr(0x2E), 0x11);      // Trio64
+    CHECK_EQ(f.crtcr(0x30), 0xE1);      // chip ID E, revision 1
+    f.crtc(0x2D, 0x55);
+    f.crtc(0x30, 0x55);
+    CHECK_EQ(f.crtcr(0x2D), 0x88);
+    CHECK_EQ(f.crtcr(0x30), 0xE1);
+}
+
+TEST(s3_cr22_latch_and_cr24_attribute_status) {
+    Fix f;
+    f.mode12h();
+    f.crtc(0x11, 0x00);
+    f.seq(0x04, 0x06);                 // sequential, odd/even off
+    f.gfx(0x04, 0x02);                 // read plane 2
+    f.seq(0x02, 0x04);                 // enable plane 2 writes
+    f.bus.write8(0xA0000, 0xC3);
+    f.seq(0x02, 0x0F);
+    (void)f.bus.read8(0xA0000);        // load the latches
+    CHECK_EQ(f.crtcr(0x22), 0xC3);     // GR4 selects the latch
+
+    // CR24/CR26 return the attribute index, ENB PLT and inverted AFF.
+    f.attr(0x12, 0x07);                // index write without bit 5
+    const u8 st = f.crtcr(0x24);
+    CHECK_EQ(int(st & 0x1F), 0x12);
+    CHECK_EQ(int((st >> 5) & 1), 0);   // display access disabled
+    CHECK_EQ(int((st >> 7) & 1), 1);   // AFF idle after index+data
+}
+
+TEST(s3_clock_synthesis_pll_and_refresh) {
+    Fix f;
+    f.seq(0x08, 0x06);                 // unlock SR9-SR18
+    // DCLK PLL: M=34, N=2, R=1 -> 36*14.31818MHz / (4*2) = 64.43 MHz.
+    f.seq(0x12, u8((1 << 5) | 2));
+    f.seq(0x13, 34);
+    f.w(0x3C2, 0x2F);                  // bits 3-2 = 11: use the DCLK PLL
+    CHECK(f.s3.dclk_hz() > 64.0e6 && f.s3.dclk_hz() < 65.0e6);
+    // MCLK PLL: M=8, N=0, R=0 -> 10*14.31818/2 = 71.59 MHz.
+    f.seq(0x10, 0x00);
+    f.seq(0x11, 8);
+    CHECK(f.s3.mclk_hz() > 71.0e6 && f.s3.mclk_hz() < 72.0e6);
+
+    // The reset mode (mode 3, 28.322 MHz, 100x449 char/line timing) has the
+    // classic ~70 Hz VGA text refresh.
+    f.s3.reset();
+    CHECK(f.s3.refresh_hz() > 69.0 && f.s3.refresh_hz() < 71.0);
+    // Host pacing stays at 60 Hz unless OLDBOX_S3_CRTC_PACING is set.
+    CHECK_EQ(f.s3.frame_cycles(), (100ull * 1000000ull) / 60ull);
+}
+
+TEST(s3_input_status_registers) {
+    Fix f;
+    f.s3.set_monitor_sense(true);
+    CHECK_EQ(int(f.r(0x3C2) & 0x10), 0x10);
+    f.s3.set_monitor_sense(false);
+    CHECK_EQ(int(f.r(0x3C2) & 0x10), 0);
+
+    // Mode 3: phase 0 is active display, no VSYNC.
+    f.s3.set_text_mode();
+    const u8 s0 = f.r(0x3DA);
+    CHECK_EQ(int(s0 & 0x04), 0x04);
+    CHECK_EQ(int(s0 & 0x01), 0);
+    CHECK_EQ(int(s0 & 0x08), 0);
+    // 92% through the frame: vertical retrace active, display inactive.
+    f.s3.tick(f.s3.frame_cycles() * 92 / 100);
+    const u8 s1 = f.r(0x3DA);
+    CHECK_EQ(int(s1 & 0x08), 0x08);
+    CHECK_EQ(int(s1 & 0x01), 0x01);
+    // A write to 3C0h loads only the index (AFF busy); reading 3?Ah resets
+    // the attribute address flip-flop, which CR24 reports inverted.
+    f.w(0x3C0, 0x12);
+    CHECK_EQ(int(f.crtcr(0x24) & 0x80), 0x00);
+    (void)f.r(0x3DA);
+    CHECK_EQ(int(f.crtcr(0x24) & 0x80), 0x80);
+}
+
+TEST(s3_general_input_port_and_general_output_port) {
+    Fix f;
+    f.unlock();
+    f.s3.set_general_input(0xA5);
+    f.crtc(0x55, 0x04);                // ENB GIR
+    CHECK_EQ(f.r(0x3C8), 0xA5);
+    f.crtc(0x55, 0x00);
+    f.w(0x3C8, 0x11);
+    CHECK_EQ(f.r(0x3C8), 0x11);
+    f.crtc(0x5C, 0x5A);                // General Output Port
+    CHECK_EQ(f.crtcr(0x5C), 0x5A);
+    CHECK_EQ(int(f.s3.general_output()), 0x5A);
+}
+
+TEST(s3_ramdac_and_palette_write_locks) {
+    Fix f;
+    f.dac(5, 63, 0, 0);
+    f.unlock();
+    f.crtc(0x33, 0x10);                // LOCK DACW
+    f.dac(5, 0, 63, 0);
+    f.w(0x3C8, 5);
+    CHECK_EQ(f.r(0x3C9), 63);
+    CHECK_EQ(f.r(0x3C9), 0);
+    f.crtc(0x33, 0x00);
+
+    f.attr(5, 6);
+    f.crtc(0x33, 0x40);                // LOCK PLTW
+    f.attr(5, 0);
+    f.w(0x3C0, 0x05);
+    CHECK_EQ(f.r(0x3C1), 0x06);
+    f.crtc(0x33, 0x00);
+}
+
+TEST(s3_crt35_timing_register_locks) {
+    Fix f;
+    f.mode12h();
+    f.unlock();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x35, 0x30);                // lock horizontal + vertical timing
+    f.crtc(0x01, 0x00);
+    f.crtc(0x06, 0x00);
+    f.crtc(0x10, 0x00);
+    CHECK_EQ(f.crtcr(0x01), 0x4F);
+    CHECK_EQ(f.crtcr(0x06), 0x0B);
+    CHECK_EQ(f.crtcr(0x10), 0xEA);
+    // CR7 bit 4 (LCM8) remains writable under the vertical lock.
+    f.crtc(0x07, 0x0F);
+    CHECK_EQ(int(f.crtcr(0x07) & 0x10), 0x00);
+    f.crtc(0x35, 0x00);
+    f.crtc(0x06, 0x90);
+    CHECK_EQ(f.crtcr(0x06), 0x90);
+}
+
+TEST(s3_ar14_pixel_padding_and_ar12_plane_mask) {
+    Fix f;
+    f.mode12h();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x0C, 0x00);
+    f.crtc(0x0D, 0x00);
+    f.crtc(0x17, 0xCC);                // byte mode
+    f.seq(0x02, 0x01);
+    f.bus.write8(0xA0000, 0x00);
+    f.seq(0x02, 0x0F);
+    // AR02 maps colour 2 to DAC 5, AR14 bits 7-6 add 0xC0 -> DAC 0xC5.
+    f.attr(0x14, 0x0C);
+    f.attr(0x02, 0x05);
+    f.dac(0xC5, 63, 63, 0);
+    f.seq(0x02, 0x02);                 // plane 1: pixel 1 becomes colour 2
+    f.bus.write8(0xA0000, 0x40);
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(1, 0), 0x00FFFF00u);
+    // AR12 disables plane 1, forcing the index back to 0.
+    f.attr(0x12, 0x0D);
+    CHECK_EQ(f.s3.pixel(1, 0), 0x00000000u);
+}
+
+TEST(s3_linear_window_law_size_and_64k_page) {
+    Fix f;
+    f.set_bar_windows();
+    f.unlock();
+    f.crtc(0x58, 0x10);                // enable linear addressing, 64 KiB
+    f.crtc(0x31, 0x01);                // CPU base offset enabled
+    f.crtc(0x6A, 0x02);                // page 2 -> VRAM 0x20000
+    f.bus.write8(0xE0000000, 0x5A);
+    CHECK_EQ(f.s3.read_vram8(0x20000), 0x5A);
+    CHECK_EQ(f.s3.read_vram8(0x00000), 0x00);
+    f.crtc(0x6A, 0x03);
+    CHECK_EQ(f.bus.read8(0xE0000000), 0x00);
+    f.bus.write8(0xE0000000, 0xA5);
+    CHECK_EQ(f.s3.read_vram8(0x30000), 0xA5);
+
+    // CR59/CR5A and PCI BAR0 share address bits 31-23.
+    f.crtc(0x59, 0xD0);
+    f.crtc(0x5A, 0x00);
+    CHECK_EQ(f.s3.config_read32(0x10) & 0xFF800000u, 0xD0000000u);
+    f.s3.config_write32(0x10, 0xE0000000u);
+    f.unlock();
+    CHECK_EQ(f.crtcr(0x59), 0xE0);
+}
+
+TEST(s3_pci_interrupt_generation_vga_and_enhanced) {
+    Fix f;
+    int irq_line = -1;
+    bool irq_level = false;
+    f.s3.set_irq([&](int line, bool level) { irq_line = line; irq_level = level; });
+    f.s3.set_interrupt_line(11);
+    f.unlock();
+    f.crtc(0x32, 0x10);                // CR32.4 interrupt enable
+    f.crtc(0x11, 0x10);                // CR11.4 arms the retrace interrupt
+    f.s3.tick(f.s3.frame_cycles());    // end of frame -> VSYNC
+    CHECK(irq_level);
+    CHECK_EQ(irq_line, 11);
+    CHECK_EQ(int(f.r(0x3C2) & 0x80), 0x80); // CRT interrupt pending
+    f.crtc(0x11, 0x00);                // clear the flip-flop
+    CHECK(!irq_level);
+    CHECK_EQ(int(f.r(0x3C2) & 0x80), 0);
+
+    // Enhanced mode: 42E8 bits 8-11 enable the four sources; a write to
+    // bits 0-3 clears the corresponding status.
+    f.ww(0x4AE8, 0x0001);              // enhanced functions
+    f.ww(0x42E8, 0x0100);              // VSY ENB
+    f.s3.tick(f.s3.frame_cycles());
+    CHECK(irq_level);
+    CHECK_EQ(int(f.r(0x42E8) & 0x0F), 0x01);
+    f.ww(0x42E8, 0x0001);              // clear VSY status
+    CHECK(!irq_level);
+    f.ww(0x42E8, 0x0000);
+    f.ww(0x4AE8, 0x0000);
+}
+
+TEST(s3_dpms_off_blanks_output) {
+    Fix f;
+    f.s3.set_mode13h();
+    f.dac(5, 63, 0, 0);
+    f.bus.write8(0xA0000, 5);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
+    f.seq(0x08, 0x06);                 // unlock extended sequencer
+    f.seq(0x0D, 0x50);                 // HSYNC=0, VSYNC=0, feature connector off
+    CHECK(f.s3.dpms_off());
+    const VideoFrame frm = f.s3.frame();
+    CHECK_EQ(frm.pixels[0], 0u);
+    f.seq(0x0D, 0x00);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
+}
+
+TEST(s3_engine_register_access_requires_cr40) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    // Clear EN ENH: the enhanced register file must read back as absent.
+    f.crtc(0x40, 0x30);
+    CHECK_EQ(f.bus.read16(0xF00086E8), 0xFFFF);
+    f.bus.write16(0xF00086E8, 0x0123);
+    f.crtc(0x40, 0x31);
+    CHECK_EQ(f.bus.read16(0xF00086E8), 0x0000);
+    f.bus.write16(0xF00086E8, 0x0123);
+    CHECK_EQ(f.bus.read16(0xF00086E8), 0x0123);
+}
+
+// ---------------------------------------------------------------------------
+// Enhanced engine: all documented drawing commands (Section 18)
+// ---------------------------------------------------------------------------
+
+TEST(s3_engine_polygon_fill_solid) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.bus.write32(0xF000A6E8, 0x00000033);
+    f.bus.write16(0xF000BAE8, 0x0027);          // foreground colour, NEW
+    f.bus.write32(0xF0008140, 0x0000A000);      // foreground mix always
+
+    f.bus.write32(0xF0008100, (10u << 16) | 10u); // edge 1 start
+    f.bus.write32(0xF0008108, (20u << 16) | 30u); // edge 1 end
+    f.bus.write32(0xF0008104, (30u << 16) | 10u); // edge 2 start
+    f.bus.write32(0xF000810C, (40u << 16) | 30u); // edge 2 end
+    f.bus.write32(0xF0008148, 20u);               // height 21
+    f.bus.write16(0xF0008118, 0x6011);            // polygon fill solid
+
+    CHECK_EQ(f.s3.read_vram8(u32(10 * 640 + 10)), 0x33);
+    CHECK_EQ(f.s3.read_vram8(u32(10 * 640 + 30)), 0x33);
+    CHECK_EQ(f.s3.read_vram8(u32(20 * 640 + 15)), 0x33);
+    CHECK_EQ(f.s3.read_vram8(u32(20 * 640 + 35)), 0x33);
+    CHECK_EQ(f.s3.read_vram8(u32(20 * 640 + 14)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(20 * 640 + 36)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(9 * 640 + 20)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(31 * 640 + 20)), 0x00);
+    // Current position advances to the stop line for the next segment.
+    CHECK_EQ(f.bus.read16(0xF00082E8), 30);
+}
+
+TEST(s3_engine_trapezoid_4point_solid) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.bus.write32(0xF000A6E8, 0x00000044);
+    f.bus.write16(0xF000BAE8, 0x0027);
+    f.bus.write32(0xF0008140, 0x0000A000);
+    f.bus.write32(0xF0008100, (10u << 16) | 10u);
+    f.bus.write32(0xF0008108, (15u << 16) | 20u);
+    f.bus.write32(0xF0008104, (30u << 16) | 10u);
+    f.bus.write32(0xF000810C, (25u << 16) | 20u);
+    f.bus.write16(0xF0008118, 0x8011);            // 4-point trapezoid solid
+    CHECK_EQ(f.s3.read_vram8(u32(10 * 640 + 15)), 0x44);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 13)), 0x44);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 28)), 0x44);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 12)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 29)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(21 * 640 + 20)), 0x00);
+}
+
+TEST(s3_engine_brezenham_trapezoid_solid) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.bus.write32(0xF000A6E8, 0x00000055);
+    f.bus.write16(0xF000BAE8, 0x0027);
+    f.bus.write32(0xF0008140, 0x0000A000);
+    // Two vertical edges from y=10 to y=30.
+    f.bus.write32(0xF0008100, (10u << 16) | 10u);
+    f.bus.write32(0xF0008104, (30u << 16) | 10u);
+    f.bus.write32(0xF0008108, 0);                 // axial = 0
+    f.bus.write32(0xF000810C, 0);
+    f.bus.write32(0xF0008110, 0);                 // error = 0
+    f.bus.write32(0xF0008148, 20u << 16);        // major 21 for edge 1
+    f.bus.write32(0xF000814C, 20u);              // major 21 for edge 2
+    f.bus.write16(0xF0009AEA, 6u << 5);           // edge 2: +Y, Y major, -X
+    f.bus.write16(0xF0008118, 0xA0D1);            // Bresenham trapezoid solid
+    CHECK_EQ(f.s3.read_vram8(u32(10 * 640 + 10)), 0x55);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 10)), 0x55);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 30)), 0x55);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 29)), 0x55);
+    CHECK_EQ(f.s3.read_vram8(u32(15 * 640 + 31)), 0x00);
+    CHECK_EQ(f.s3.read_vram8(u32(9 * 640 + 20)), 0x00);
+}
+
+TEST(s3_engine_polygon_fill_pattern) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    const u32 pb = 100u * 640u + 400u;
+    for (int y = 0; y < 8; ++y)
+        for (int x = 0; x < 8; ++x)
+            f.s3.write_vram8(pb + u32(y * 640 + x), u8(((x + y) & 1) ? 0x66 : 0x77));
+    f.bus.write16(0xF000BAE8, 0x0067);            // source = display memory
+    f.bus.write32(0xF0008140, 0x0000A000);
+    // PAT_X=400, PAT_Y=100 (ALT_PAT packs Y in the low word, X in the high).
+    f.bus.write32(0xF0008168, (400u << 16) | 100u);
+    f.bus.write32(0xF0008100, (10u << 16) | 10u);
+    f.bus.write32(0xF0008108, (10u << 16) | 30u);
+    f.bus.write32(0xF0008104, (30u << 16) | 10u);
+    f.bus.write32(0xF000810C, (30u << 16) | 30u);
+    f.bus.write32(0xF0008148, 20u);
+    f.bus.write16(0xF0008118, 0x6811);            // polygon fill pattern
+    for (int y = 10; y <= 30; ++y)
+        for (int x = 10; x <= 30; ++x) {
+            const u8 want = u8((((x & 7) + (y & 7)) & 1) ? 0x66 : 0x77);
+            CHECK_EQ(f.s3.read_vram8(u32(y * 640 + x)), want);
+        }
+}
+
+TEST(s3_engine_image_transfer_bus_padding) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.bus.write16(0xF000BAE8, 0x0047);            // CPU colour source, NEW
+    f.bus.write32(0xF0008140, 0x0000A000);
+    f.bus.write32(0xF0008100, (50u << 16) | 40u);
+    f.bus.write32(0xF0008148, (2u << 16) | 1u);   // 3x2 image
+    // Rectangle + wait, 16-bit transfers, byte swap (Intel order), +X/+Y.
+    f.bus.write16(0xF0008118, 0x53B1);
+    // 3 pixels per line do not fill a 16-bit word: each line is padded to
+    // 4 bytes, so the pad byte must not leak into the next line.
+    f.ww(0xE2E8, 0x2211);
+    f.ww(0xE2E8, 0x0033);
+    f.ww(0xE2E8, 0x5544);
+    f.ww(0xE2E8, 0x0066);
+    const u8 row0[3] = { 0x11, 0x22, 0x33 };
+    const u8 row1[3] = { 0x44, 0x55, 0x66 };
+    for (int x = 0; x < 3; ++x) {
+        CHECK_EQ(f.s3.read_vram8(u32(40 * 640 + 50 + x)), row0[x]);
+        CHECK_EQ(f.s3.read_vram8(u32(41 * 640 + 50 + x)), row1[x]);
+    }
+    // BUS SIZE 10 leaves the position below the lower-left corner.
+    CHECK_EQ(f.bus.read16(0xF00082E8), 42);
+    CHECK_EQ(f.bus.read16(0xF00086E8), 50);
+}
+
+TEST(s3_engine_rsf_word_access_to_32bit_colors) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(32);
+    (void)f.s3.frame();
+    CHECK_EQ(f.s3.width(), 640);
+    // RSF starts at 0: first word updates the low half, second the high half.
+    f.ww(0xA6E8, 0x1234);
+    f.ww(0xA6E8, 0x5678);
+    f.bus.write32(0xF0008100, 0);
+    f.bus.write32(0xF0008148, 0);
+    f.bus.write32(0xF0008140, 0x0000A000);
+    f.bus.write16(0xF000BAE8, 0x0027);
+    f.bus.write16(0xF0008118, 0x40B1);            // 1x1 rectangle fill
+    CHECK_EQ(f.s3.read_vram8(0), 0x34);
+    CHECK_EQ(f.s3.read_vram8(1), 0x12);
+    CHECK_EQ(f.s3.read_vram8(2), 0x78);
+    CHECK_EQ(f.s3.read_vram8(3), 0x56);
+}
+
+// ---------------------------------------------------------------------------
+// Remaining display/RAMDAC/engine capabilities
+// ---------------------------------------------------------------------------
+
+TEST(s3_hardware_cursor_windows_and_x11_modes) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.unlock();
+    f.crtc(0x45, 0x01);                // enable hardware cursor
+    f.crtc(0x4C, 0x00);                // cursor storage at 4 KiB
+    f.crtc(0x4D, 0x04);
+    f.crtc(0x46, 0x00); f.crtc(0x47, 10); // X = 10
+    f.crtc(0x48, 0x00); f.crtc(0x49, 10); // Y = 10
+    f.crtc(0x4E, 0x00); f.crtc(0x4F, 0x00);
+    f.crtc(0x4A, 0x56); f.crtc(0x4A, 0x34); f.crtc(0x4A, 0x12); // fg RGB
+    f.crtc(0x4B, 0x21); f.crtc(0x4B, 0x43); f.crtc(0x4B, 0x65); // bg RGB
+    // Row 0, first 16 pixels: AND word transparent, XOR word all ones.
+    for (int i = 0; i < 2; ++i) f.s3.write_vram8(0x1000 + u32(i), 0x00);
+    for (int i = 0; i < 2; ++i) f.s3.write_vram8(0x1002 + u32(i), 0xFF);
+    const VideoFrame fr = f.s3.frame();
+    const std::size_t di = std::size_t(10) * std::size_t(fr.stride) + 10;
+    CHECK_EQ(fr.pixels[di], 0x00123456u);   // AND=0 XOR=1 -> foreground
+
+    // X11 decode: AND=1 XOR=0 -> background instead of the screen pixel.
+    f.crtc(0x55, 0x10);
+    for (int i = 0; i < 2; ++i) f.s3.write_vram8(0x1000 + u32(i), 0xFF);
+    for (int i = 0; i < 2; ++i) f.s3.write_vram8(0x1002 + u32(i), 0x00);
+    const VideoFrame x11 = f.s3.frame();
+    CHECK_EQ(x11.pixels[di], 0x00654321u);
+}
+
+TEST(s3_graphics_blink_inverts_v3) {
+    Fix f;
+    f.mode12h();
+    f.crtc(0x11, 0x00);
+    f.crtc(0x0C, 0x00);
+    f.crtc(0x0D, 0x00);
+    f.dac(1, 63, 0, 0);
+    f.dac(9, 0, 63, 0);
+    f.seq(0x02, 0x01);
+    f.bus.write8(0xA0000, 0x00);
+    f.seq(0x02, 0x0F);
+    f.attr(0x10, 0x09);                // graphics, enable blink
+    f.dac(1, 63, 0, 0);
+    f.dac(9, 0, 63, 0);
+    f.seq(0x02, 0x01);
+    f.bus.write8(0xA0000, 0x40);       // pixel 1 = colour 1
+    f.seq(0x02, 0x0F);
+    CHECK_EQ(f.s3.pixel(1, 0), 0x00FF0000u);
+    for (int i = 0; i < 16; ++i) f.s3.tick(f.s3.frame_cycles());
+    CHECK_EQ(f.s3.pixel(1, 0), 0x0000FF00u); // V3 inverted -> DAC 9
+}
+
+TEST(s3_text_preset_row_scan_scrolls_vertically) {
+    Fix f;
+    f.s3.set_text_mode();
+    f.crtc(0x0A, 0x20);                // cursor off
+    // Custom font: glyph 0x41 row 0 set, row 8 clear.
+    f.gfx(0x06, 0x04);
+    f.seq(0x02, 0x04);
+    for (int row = 0; row < 16; ++row)
+        f.bus.write8(0xA0000 + u32(0x41 * 32 + row) * 2, u8(row == 0 ? 0x80 : 0x00));
+    f.seq(0x02, 0x03);
+    f.gfx(0x06, 0x0E);
+    f.bus.write8(0xB8000, 'A');
+    f.bus.write8(0xB8001, 0x07);
+    f.dac(7, 63, 63, 63);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FFFFFFu);
+    f.crtc(0x08, 8);                   // start the row at scan line 8
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00000000u);
+    f.crtc(0x08, 0);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FFFFFFu);
+}
+
+TEST(s3_ramdac_mode8_clock_doubling) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.crtc(0x13, 160);                 // 1280 bytes per scan line
+    f.seq(0x08, 0x06);                 // unlock SR9-SR18
+    f.seq(0x15, 0x10);                 // SR15.4: DCLK/2
+    f.seq(0x18, 0x80);                 // SR18.7: clock-doubled RAMDAC
+    f.crtc(0x67, 0x10);                // CR67 mode 8: two pixels per VCLK
+    CHECK_EQ(f.s3.width(), 1280);
+    CHECK_EQ(f.s3.height(), 480);
+    f.dac(5, 63, 0, 0);
+    f.s3.write_vram8(1279, 5);
+    CHECK_EQ(f.s3.pixel(1279, 0), 0x00FF0000u);
+}
+
+TEST(s3_ramdac_mode12_packed_24bpp) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.seq(0x08, 0x06);                 // unlock SR9-SR18
+    f.seq(0x0B, 0x08);                 // SRB.3: packed 24bpp (Mode 12)
+    f.crtc(0x3A, 0x05);                // 4-bit shifters off; enhanced off
+    f.crtc(0x50, 0x00);
+    f.crtc(0x67, 0x00);
+    f.crtc(0x01, 239);                 // 240 character clocks -> 640 pixels
+    f.crtc(0x13, 240);                 // 1920 bytes per line
+    f.crtc(0x12, 479);
+    f.crtc(0x07, 0x1E);
+    CHECK_EQ(f.s3.width(), 640);
+    CHECK_EQ(f.s3.height(), 480);
+    f.s3.write_vram8(300, 0x40);       // pixel 100: B
+    f.s3.write_vram8(301, 0x20);       // G
+    f.s3.write_vram8(302, 0x10);       // R
+    CHECK_EQ(f.s3.pixel(100, 0), 0x00102040u);
+}
+
+TEST(s3_engine_read_register_select_and_gp_stat) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    CHECK_EQ(f.bus.read16(0xF0009AE8), 0x0400u); // idle, FIFO empty
+    f.bus.write16(0xF000BEE8, 0x0000);            // index 0: MIN
+    f.bus.write16(0xF000BEE8, 0x0123);            // MIN = 0x123
+    f.bus.write16(0xF000BEE8, 0xF000);            // read selector = 0
+    CHECK_EQ(f.bus.read16(0xF000BEE8), 0x0123u);
+    CHECK_EQ(f.bus.read16(0xF000BEE8), 0x0000u);  // next: top scissors
+    CHECK_EQ(f.bus.read16(0xF000BEE8), 0x0000u);  // left scissors
+    f.bus.write16(0xF000BEE8, 0xF005);            // selector 5 -> PIX_CNTL
+    CHECK_EQ(f.bus.read16(0xF000BEE8) & 0x0FFF, 0x0000u);
+}
+
+TEST(s3_cr53_nibble_swap_on_linear_access) {
+    Fix f;
+    f.set_bar_windows();
+    f.unlock();
+    f.crtc(0x58, 0x13);
+    f.crtc(0x53, 0x50);                // MMIO + nibble swap
+    f.bus.write8(0xE0000000, 0x12);
+    CHECK_EQ(f.s3.read_vram8(0), 0x21);
+    CHECK_EQ(f.bus.read8(0xE0000000), 0x12);
+    f.crtc(0x53, 0x10);
+    CHECK_EQ(f.bus.read8(0xE0000000), 0x21);
+}
+
+TEST(s3_display_start_address_up_to_4mb) {
+    Fix f;
+    f.set_bar_windows();
+    f.linear_mode(8);
+    (void)f.s3.frame();
+    f.dac(5, 63, 0, 0);
+    f.s3.write_vram8(0x180000, 5);
+    f.crtc(0x69, 0x03);                // start = 0x30000 * 8 = 0x180000
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
+    f.crtc(0x69, 0x00);
+    f.s3.write_vram8(0, 5);
+    CHECK_EQ(f.s3.pixel(0, 0), 0x00FF0000u);
 }

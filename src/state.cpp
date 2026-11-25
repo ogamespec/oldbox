@@ -547,6 +547,8 @@ private:
         w.pod(s.cursor_x_); w.pod(s.cursor_y_);
         w.pod(s.s3_unlocked_); w.pod(s.sys_unlocked_); w.pod(s.cfg_unlocked_);
         w.pod(s.exseq_unlocked_); w.pod(s.adv_func_); w.pod(s.subsystem_status_); w.pod(s.video_enable_);
+        w.pod(s.subsystem_cntl_); w.pod(s.vga_vint_pending_); w.pod(s.vga_vint_armed_);
+        w.pod(s.general_input_); w.pod(s.monitor_sense_);
         w.pod(s.mmio_enabled_); w.pod(s.rom_probe_); w.pod(s.rom_enable_);
         w.array(s.latch_); w.pod(s.font_loaded_);
         w.array(s.render_attr_); w.array(s.render_dac_); w.pod(s.rendering_);
@@ -563,6 +565,7 @@ private:
         w.pod(e.pat_x); w.pod(e.pat_y); w.pod(e.be_index);
         w.vec(e.stream); w.pod(e.stream_pos); w.pod(e.pending); w.pod(e.pending_cmd);
         w.pod(e.xfer_pos); w.pod(e.bit_buf); w.pod(e.bit_cnt);
+        w.pod(e.rsf);
         w.pod(s.status_reads_); w.pod(s.cycles_per_frame_);
     }
     static void load_s3(S3Trio64& s, StateReader& r) {
@@ -590,6 +593,8 @@ private:
         r.pod(s.cursor_x_); r.pod(s.cursor_y_);
         r.pod(s.s3_unlocked_); r.pod(s.sys_unlocked_); r.pod(s.cfg_unlocked_);
         r.pod(s.exseq_unlocked_); r.pod(s.adv_func_); r.pod(s.subsystem_status_); r.pod(s.video_enable_);
+        r.pod(s.subsystem_cntl_); r.pod(s.vga_vint_pending_); r.pod(s.vga_vint_armed_);
+        r.pod(s.general_input_); r.pod(s.monitor_sense_);
         r.pod(s.mmio_enabled_); r.pod(s.rom_probe_); r.pod(s.rom_enable_);
         r.array(s.latch_); r.pod(s.font_loaded_);
         r.array(s.render_attr_); r.array(s.render_dac_); r.pod(s.rendering_);
@@ -605,9 +610,12 @@ private:
         r.pod(e.pat_x); r.pod(e.pat_y); r.pod(e.be_index);
         r.vec(e.stream); r.pod(e.stream_pos); r.pod(e.pending); r.pod(e.pending_cmd);
         r.pod(e.xfer_pos); r.pod(e.bit_buf); r.pod(e.bit_cnt);
+        r.pod(e.rsf);
         r.pod(s.status_reads_); r.pod(s.cycles_per_frame_);
         s.frame_.clear();
         s.dirty_ = true;
+        s.irq_asserted_ = false;
+        s.update_irq();
         s.linear_mapped_ = false;
         s.mmio_mapped_ = false;
         s.rom_mapped_ = false;

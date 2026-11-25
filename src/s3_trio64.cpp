@@ -7,8 +7,8 @@
 #include "perf.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
-#include <cstdlib>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -76,15 +76,80 @@ bool is_engine_port(u16 port) {
 
 u32 pow2_mask(u32 size) { return (size > 0 && (size & (size - 1)) == 0) ? size - 1 : 0; }
 
+// S3 CLKSYN reference crystal and the register-derived PLL frequency.
+constexpr double kRefClockHz = 14318180.0;
+
+double pll_frequency(u8 nreg, u8 mreg, double fallback) {
+    // f = ((M+2) * fREF) / ((N+2) * 2^R), Section 9.1.
+    const int n = nreg & 0x1F;
+    const int r = (nreg >> 5) & 0x03;
+    const int m = mreg & 0x7F;
+    if (nreg == 0 && mreg == 0) return fallback;
+    const double f = (double(m + 2) * kRefClockHz) /
+                     (double(n + 2) * double(1u << r));
+    if (!(f > 1.0e6 && f < 4.0e8)) return fallback;
+    return f;
+}
+
+// CRTC timing register expansions (Section 11.4.1 / 14.3).
+u32 crtc_h_total(const std::array<u8, 256>& c) {
+    u32 v = u32(c[0x00]) | ((u32(c[0x5D]) & 0x01u) << 8);
+    v += 5;
+    if (c[0x43] & 0x80) v *= 2; // horizontal counter double mode
+    return v ? v : 5;
+}
+
+u32 crtc_h_display_end(const std::array<u8, 256>& c) {
+    return (u32(c[0x01]) | ((u32(c[0x5D]) & 0x02u) << 7)) + 1;
+}
+
+u32 crtc_v_total(const std::array<u8, 256>& c, bool interlace) {
+    u32 v = u32(c[0x06]) | ((u32(c[0x07]) & 0x01u) << 8) |
+            ((u32(c[0x07]) & 0x20u) << 4) | ((u32(c[0x5E]) & 0x01u) << 10);
+    v += 2;
+    if (c[0x17] & 0x04) v *= 2; // vertical total double mode
+    if (interlace) v *= 2;      // two fields per frame
+    return v ? v : 2;
+}
+
+u32 crtc_v_display_end(const std::array<u8, 256>& c) {
+    return (u32(c[0x12]) | ((u32(c[0x07]) & 0x02u) << 7) |
+            ((u32(c[0x07]) & 0x40u) << 3) | ((u32(c[0x5E]) & 0x02u) << 9)) + 1;
+}
+
+u32 crtc_v_retrace_start(const std::array<u8, 256>& c) {
+    return u32(c[0x10]) | ((u32(c[0x07]) & 0x04u) << 6) |
+           ((u32(c[0x07]) & 0x80u) << 2) | ((u32(c[0x5E]) & 0x10u) << 6);
+}
+
+u32 crtc_v_retrace_end(const std::array<u8, 256>& c) {
+    const u32 start = crtc_v_retrace_start(c);
+    u32 end = (start & ~0x0Fu) | (u32(c[0x11]) & 0x0Fu);
+    if (end <= start) end += 16;
+    return end;
+}
+
+u32 crtc_h_sync_start(const std::array<u8, 256>& c) {
+    return u32(c[0x04]) | ((u32(c[0x5D]) & 0x10u) << 4);
+}
+
+u32 crtc_h_sync_end(const std::array<u8, 256>& c) {
+    u32 start = crtc_h_sync_start(c);
+    u32 end = (start & ~0x1Fu) | (u32(c[0x05]) & 0x1Fu);
+    if (end <= start) end += 32;
+    return end;
+}
+
 } // namespace
 
 // ---------------------------------------------------------------------------
 // Construction / reset
 // ---------------------------------------------------------------------------
 
-S3Trio64::S3Trio64(Bus& bus, u32 vram_mb, u32 cpu_mhz)
+S3Trio64::S3Trio64(Bus& bus, u32 vram_mb, u32 cpu_mhz, IrqFn irq)
     : PciDevice(0x5333, 0x8811, 0x03, 0x00, 0x00, 0x00),
-      bus_(bus), cpu_mhz_(cpu_mhz ? cpu_mhz : 1), vram_mb_(vram_mb ? vram_mb : 1) {
+      bus_(bus), cpu_mhz_(cpu_mhz ? cpu_mhz : 1), vram_mb_(vram_mb ? vram_mb : 1),
+      irq_(std::move(irq)) {
     set_name("S3 Trio64 (86C764)");
     if (vram_mb_ > 32) vram_mb_ = 32;
     vram_.assign(std::size_t(vram_mb_) * megabyte, 0);
@@ -138,8 +203,17 @@ void S3Trio64::reset() {
     feature_control_ = 0;
     s3_unlocked_ = sys_unlocked_ = cfg_unlocked_ = exseq_unlocked_ = false;
     adv_func_ = 0;
+    // 42E8 read-only status and write-only control, both 0000h at reset.
     subsystem_status_ = 0x0000; // 42E8 power-on default (datasheet 18-1)
+    subsystem_cntl_ = 0x0000;
+    vga_vint_pending_ = false;
+    vga_vint_armed_ = true;
+    irq_asserted_ = false;
     video_enable_ = 0;
+    general_input_ = 0xFF;
+    attr_enable_ = false;
+    dclk_hz_ = 0.0;
+    mclk_hz_ = 0.0;
     linear_enabled_ = false;
     mmio_enabled_ = false;
     font_loaded_ = false;
@@ -148,6 +222,10 @@ void S3Trio64::reset() {
     height_ = 480;
     frame_.clear();
     dirty_ = true;
+    if (irq_asserted_) {
+        irq_asserted_ = false;
+        if (irq_ && interrupt_line()) irq_(interrupt_line(), false);
+    }
     cycles_per_frame_ = std::max<u64>(1, (u64(cpu_mhz_) * 1000000ull) / 60ull);
 
     // Power-on strapping: PCI, fast page memory, 32 KiB video BIOS, internal
@@ -235,6 +313,8 @@ void S3Trio64::config_write32(u8 off, u32 value) {
             rom_map_size_ = u32(rom_.size());
         }
     }
+    // PCI Interrupt Line (3Ch) routing was just programmed by POST.
+    if (aligned == 0x3c) update_irq();
 }
 
 void S3Trio64::load_option_rom(std::span<const u8> rom) {
@@ -252,24 +332,59 @@ void S3Trio64::load_option_rom(std::span<const u8> rom) {
     }
 }
 
+u32 S3Trio64::law_size() const {
+    // CR58 bits 1-0: 00 = 64 KiB, 01 = 1 MiB, 10 = 2 MiB, 11 = 4 MiB.
+    switch (crtc_[0x58] & 0x03) {
+    case 0: return 64u * 1024u;
+    case 1: return 1u * megabyte;
+    case 2: return 2u * megabyte;
+    default: return 4u * megabyte;
+    }
+}
+
+u32 S3Trio64::linear_page_offset() const {
+    // With a 64 KiB linear window and CR31.0 set, CR6A bits 5-0 select the
+    // 64 KiB display-memory page visible through the window (Section 13.1).
+    if ((crtc_[0x58] & 0x03) == 0 && (crtc_[0x31] & 0x01) && (crtc_[0x58] & 0x10))
+        return u32(crtc_[0x6A] & 0x3F) << 16;
+    return 0;
+}
+
 void S3Trio64::map_linear_window() {
     u32 base = linear_base_;
     if (!base) base = u32((u32(crtc_[0x59]) << 8) | crtc_[0x5A]) << 16;
-    // BAR0 advertises the full 64 MiB window but only the installed VRAM is
-    // implemented; mapping just that range also keeps BAR1 from being shadowed
-    // when firmware places it immediately after BAR0.
-    const u32 size = u32(std::min<u64>(vram_.size(), bar_size(0) ? bar_size(0) : kLinearBarSize));
+    // BAR0 advertises the full 64 MiB window but the chip only decodes the
+    // programmed linear-address-window size (CR58) inside the installed VRAM.
+    // Mapping only that range also keeps BAR1 from being shadowed when
+    // firmware places it immediately after BAR0.
+    const u32 advertised = bar_size(0) ? bar_size(0) : kLinearBarSize;
+    const u32 size = u32(std::min<u64>(vram_.size(), std::min<u32>(advertised, law_size())));
     if (linear_mapped_ && linear_map_base_ == base && linear_map_size_ == size) return;
     if (linear_mapped_) {
         bus_.unmap(linear_map_base_, linear_map_size_);
         linear_mapped_ = false;
         linear_map_base_ = linear_map_size_ = 0;
     }
-    if (!base) return;
+    if (!base || !size) return;
     bus_.map_mmio(base, size, &linear_window_, "S3 linear framebuffer");
     linear_mapped_ = true;
     linear_map_base_ = base;
     linear_map_size_ = size;
+}
+
+void S3Trio64::sync_bar_from_crtc() {
+    // CR59/CR5A hold the LA window position bits 31-16; bits 31-23 are shared
+    // with PCI Base Address 0 (Section 17: LAW_POS).  Keep both views equal.
+    const u32 pos = (u32(crtc_[0x59]) << 8 | crtc_[0x5A]) << 16;
+    const u32 newbar = (bars_[0] & 0x007FFFFFu) | (pos & 0xFF800000u);
+    if (newbar == bars_[0]) return;
+    bars_[0] = newbar;
+    cfg_[0x10] = u8(newbar);
+    cfg_[0x11] = u8(newbar >> 8);
+    cfg_[0x12] = u8(newbar >> 16);
+    cfg_[0x13] = u8(newbar >> 24);
+    linear_base_ = newbar;
+    map_linear_window();
 }
 
 void S3Trio64::map_mmio_window() {
@@ -299,6 +414,9 @@ void S3Trio64::on_bar_written(u8 index, u32 value, u32 size) {
     (void)size;
     if (index == 0) {
         linear_base_ = value & 0xFFFFFFF0u;
+        // Base Address 0 bits 31-23 are the same bits as CR59/CR5A[15:8].
+        crtc_[0x59] = u8(linear_base_ >> 24);
+        crtc_[0x5A] = u8(linear_base_ >> 16);
         map_linear_window();
     } else if (index == 1) {
         map_mmio_window();
@@ -314,11 +432,18 @@ void S3Trio64::Window::write8(u32 off, u8 v) { owner_.write_window(off, kind_, v
 
 u16 S3Trio64::Window::read16(u32 off) {
     switch (kind_) {
-    case linear:
-        if (off + 1 >= owner_.vram_.size()) return 0xFFFF;
-        return le16(&owner_.vram_[off]);
+    case linear: {
+        const u32 page = owner_.linear_page_offset();
+        const bool swap = (owner_.crtc_[0x53] & 0x40) != 0;
+        if (!page && !swap) {
+            if (off + 1 >= owner_.vram_.size()) return 0xFFFF;
+            return le16(&owner_.vram_[off]);
+        }
+        return u16(owner_.read_window(off, linear)) | (u16(owner_.read_window(off + 1, linear)) << 8);
+    }
     case mmio:
         if (off < 0x8000) return 0xFFFF;
+        if (!owner_.mmio_window_active()) return 0xFFFF;
         if (is_packed_mmio(off & ~3u)) return u16(owner_.engine_read_packed(off, 2));
         return u16(owner_.engine_read_port(u16(off & 0xFFFF), 2));
     case legacy:
@@ -329,17 +454,27 @@ u16 S3Trio64::Window::read16(u32 off) {
 
 void S3Trio64::Window::write16(u32 off, u16 v) {
     switch (kind_) {
-    case linear:
-        if (off + 1 >= owner_.vram_.size()) return;
-        put_le16(&owner_.vram_[off], v);
-        owner_.dirty();
+    case linear: {
+        const u32 page = owner_.linear_page_offset();
+        const bool swap = (owner_.crtc_[0x53] & 0x40) != 0;
+        if (!page && !swap) {
+            if (off + 1 >= owner_.vram_.size()) return;
+            put_le16(&owner_.vram_[off], v);
+            owner_.dirty();
+            return;
+        }
+        owner_.write_window(off, linear, u8(v));
+        owner_.write_window(off + 1, linear, u8(v >> 8));
         return;
+    }
     case mmio:
         if (off < 0x8000) {
+            if (!owner_.mmio_window_active()) return;
             const u8 bytes[2] = { u8(v), u8(v >> 8) };
             owner_.engine_feed_pixels(std::span<const u8>(bytes, 2));
             return;
         }
+        if (!owner_.mmio_window_active()) return;
         if (is_packed_mmio(off & ~3u)) owner_.engine_write_packed(off, v, 2);
         else owner_.engine_write_port(u16(off & 0xFFFF), v, 2);
         return;
@@ -353,11 +488,20 @@ void S3Trio64::Window::write16(u32 off, u16 v) {
 
 u32 S3Trio64::Window::read32(u32 off) {
     switch (kind_) {
-    case linear:
-        if (off + 3 >= owner_.vram_.size()) return 0xFFFFFFFFu;
-        return le32(&owner_.vram_[off]);
+    case linear: {
+        const u32 page = owner_.linear_page_offset();
+        const bool swap = (owner_.crtc_[0x53] & 0x40) != 0;
+        if (!page && !swap) {
+            if (off + 3 >= owner_.vram_.size()) return 0xFFFFFFFFu;
+            return le32(&owner_.vram_[off]);
+        }
+        u32 v = 0;
+        for (int i = 0; i < 4; ++i) v |= u32(owner_.read_window(off + u32(i), linear)) << (i * 8);
+        return v;
+    }
     case mmio:
         if (off < 0x8000) return 0xFFFFFFFFu;
+        if (!owner_.mmio_window_active()) return 0xFFFFFFFFu;
         if (is_packed_mmio(off & ~3u)) return owner_.engine_read_packed(off, 4);
         return owner_.engine_read_port(u16(off & 0xFFFF), 4);
     case legacy:
@@ -371,17 +515,26 @@ u32 S3Trio64::Window::read32(u32 off) {
 
 void S3Trio64::Window::write32(u32 off, u32 v) {
     switch (kind_) {
-    case linear:
-        if (off + 3 >= owner_.vram_.size()) return;
-        put_le32(&owner_.vram_[off], v);
-        owner_.dirty();
+    case linear: {
+        const u32 page = owner_.linear_page_offset();
+        const bool swap = (owner_.crtc_[0x53] & 0x40) != 0;
+        if (!page && !swap) {
+            if (off + 3 >= owner_.vram_.size()) return;
+            put_le32(&owner_.vram_[off], v);
+            owner_.dirty();
+            return;
+        }
+        for (int i = 0; i < 4; ++i) owner_.write_window(off + u32(i), linear, u8(v >> (i * 8)));
         return;
+    }
     case mmio:
         if (off < 0x8000) {
+            if (!owner_.mmio_window_active()) return;
             const u8 bytes[4] = { u8(v), u8(v >> 8), u8(v >> 16), u8(v >> 24) };
             owner_.engine_feed_pixels(std::span<const u8>(bytes, 4));
             return;
         }
+        if (!owner_.mmio_window_active()) return;
         if (is_packed_mmio(off & ~3u)) owner_.engine_write_packed(off, v, 4);
         else owner_.engine_write_port(u16(off & 0xFFFF), v, 4);
         return;
@@ -394,11 +547,18 @@ void S3Trio64::Window::write32(u32 off, u32 v) {
 
 u8 S3Trio64::read_window(u32 off, int kind) const {
     switch (kind) {
-    case Window::linear:
-        if (off >= vram_.size()) return 0xFF;
-        return vram_[off];
+    case Window::linear: {
+        u32 a = off + linear_page_offset();
+        if (vram_.empty()) return 0xFF;
+        const u32 mask = pow2_mask(u32(vram_.size()));
+        a = mask ? (a & mask) : (a % u32(vram_.size()));
+        u8 v = vram_[a];
+        if (crtc_[0x53] & 0x40) v = u8((v >> 4) | (v << 4));
+        return v;
+    }
     case Window::mmio:
         if (off < 0x8000) return 0xFF; // pixel-transfer data is write-only
+        if (!mmio_window_active()) return 0xFF;
         if (is_packed_mmio(off & ~3u)) return u8(engine_read_packed(off, 1));
         return u8(engine_read_port(u16(off & 0xFFFF), 1));
     case Window::legacy:
@@ -409,18 +569,25 @@ u8 S3Trio64::read_window(u32 off, int kind) const {
 
 void S3Trio64::write_window(u32 off, int kind, u8 value) {
     switch (kind) {
-    case Window::linear:
-        if (off >= vram_.size()) return;
-        vram_[off] = value;
-        if (value && ((off >= 0x20000 && off < 0x28000) || (off >= 0xA0000 && off < 0xA8000)))
+    case Window::linear: {
+        if (vram_.empty()) return;
+        u32 a = off + linear_page_offset();
+        const u32 mask = pow2_mask(u32(vram_.size()));
+        a = mask ? (a & mask) : (a % u32(vram_.size()));
+        if (crtc_[0x53] & 0x40) value = u8((value >> 4) | (value << 4));
+        vram_[a] = value;
+        if (value && ((a >= 0x20000 && a < 0x28000) || (a >= 0xA0000 && a < 0xA8000)))
             font_loaded_ = true;
         dirty();
         return;
+    }
     case Window::mmio: {
         if (off < 0x8000) {
+            if (!mmio_window_active()) return;
             engine_feed_pixels(std::span<const u8>(&value, 1));
             return;
         }
+        if (!mmio_window_active()) return;
         if (is_packed_mmio(off & ~3u)) {
             engine_write_packed(off, value, 1);
         } else {
@@ -439,18 +606,38 @@ void S3Trio64::write_window(u32 off, int kind, u8 value) {
 // I/O ports and VGA register decode
 // ---------------------------------------------------------------------------
 
+u8 S3Trio64::vga_status0() const {
+    // Input Status 0 (3C2h read): bit 4 = internal SENSE comparator, bit 7 =
+    // CRT vertical retrace interrupt pending (Section 14.1).
+    u8 v = 0;
+    if (monitor_sense_) v |= 0x10;
+    if (vga_vint_pending_) v |= 0x80;
+    return v;
+}
+
+u8 S3Trio64::vga_status1() const {
+    // Input Status 1 (3?Ah): bit 0 = display inactive, bit 2 = 1, bit 3 =
+    // vertical retrace active, bits 5-4 = video test feedback.
+    u8 v = 0x04;
+    if (!raster_display_active()) v |= 0x01;
+    if (raster_vsync_active()) v |= 0x08;
+    // Video test mux (AR12 bits 5-4): expose two of the eight palette output
+    // bits.  With no video pipeline running they are zero.
+    return v;
+}
+
 u8 S3Trio64::vga_read(u16 port) {
     switch (port) {
     case 0x3C0:
-        return attr_index_;
+        return u8((attr_index_ & 0x1F) | (attr_enable_ ? 0x20 : 0x00));
     case 0x3C1:
         return attr_[attr_index_ & 0x1F];
     case 0x3C2:
-        return 0x00; // colour monitor sense, no pending retrace interrupt
+        return vga_status0();
     case 0x3CC:
         return misc_output_;
     case 0x3C3:
-        return video_enable_;
+        return (crtc_[0x65] & 0x04) ? video_enable_ : 0xFF;
     case 0x3C4:
         return seq_index_;
     case 0x3C5:
@@ -465,7 +652,8 @@ u8 S3Trio64::vga_read(u16 port) {
         return status;
     }
     case 0x3C8:
-        if (crtc_[0x55] & 0x04) return 0x00; // general input port read
+        // CR55.2 redirects 3C8h reads to the General Input Port (Section 10.3).
+        if (crtc_[0x55] & 0x04) return general_input_;
         return dac_index_;
     case 0x3C9:
         return dac_read_byte();
@@ -483,15 +671,16 @@ u8 S3Trio64::vga_read(u16 port) {
         return crtc_read(crtc_index_);
     case 0x3BA:
     case 0x3DA: {
-        bool vsync = false;
-        if (cycles_per_frame_) {
-            const u64 phase = tick_acc_ % cycles_per_frame_;
-            vsync = (phase * 100u) >= (cycles_per_frame_ * 94u);
-        }
-        status_reads_ += 0x100;
-        if ((status_reads_ & 0xFFFFu) >= 0xF000u) vsync = true;
         attr_flip_flop_ = false;
-        return u8(0x04u | (vsync ? 0x09u : 0x00u));
+        u8 v = vga_status1();
+        status_reads_ += 0x100;
+        // Liveness guard: a guest polling for vertical retrace must never spin
+        // forever if the programmed timing registers are nonsensical.
+        if (!(v & 0x08) && (status_reads_ & 0xFFFFu) >= 0xF000u) {
+            status_reads_ &= ~0xFFFFu;
+            v |= 0x08;
+        }
+        return v;
     }
     default:
         return 0xFF;
@@ -499,10 +688,12 @@ u8 S3Trio64::vga_read(u16 port) {
 }
 
 void S3Trio64::vga_write(u16 port, u8 value) {
+    const bool dac_writes_locked = (crtc_[0x33] & 0x10) != 0;
     switch (port) {
     case 0x3C0:
         if (!attr_flip_flop_) {
             attr_index_ = u8(value & 0x1F);
+            attr_enable_ = (value & 0x20) != 0;
             attr_flip_flop_ = true;
         } else {
             attr_write(attr_index_, value);
@@ -511,9 +702,10 @@ void S3Trio64::vga_write(u16 port, u8 value) {
         return;
     case 0x3C2:
         misc_output_ = value;
+        dirty();
         return;
     case 0x3C3:
-        video_enable_ = value;
+        if (crtc_[0x65] & 0x04) video_enable_ = value;
         return;
     case 0x3C4:
         seq_index_ = u8(value & 0x1F);
@@ -522,14 +714,16 @@ void S3Trio64::vga_write(u16 port, u8 value) {
         seq_write(seq_index_, value);
         return;
     case 0x3C6:
-        if (!(crtc_[0x33] & 0x10)) dac_mask_ = value;
+        if (!dac_writes_locked) dac_mask_ = value;
         return;
     case 0x3C7:
+        if (dac_writes_locked) return;
         dac_read_index_ = value;
         dac_read_phase_ = 0;
         dac_read_mode_ = true;
         return;
     case 0x3C8:
+        if (dac_writes_locked) return;
         dac_index_ = value;
         dac_read_index_ = value;
         dac_write_phase_ = 0;
@@ -537,6 +731,7 @@ void S3Trio64::vga_write(u16 port, u8 value) {
         dac_read_mode_ = false;
         return;
     case 0x3C9:
+        if (dac_writes_locked) return;
         dac_write(value);
         return;
     case 0x3CA:
@@ -573,6 +768,7 @@ void S3Trio64::seq_write(u8 index, u8 value) {
     }
     if (index > 0x08 && index <= 0x18 && !exseq_unlocked_) return;
     seq_[index] = value;
+    if (index >= 0x0A && index <= 0x18) update_clock();
     dirty();
 }
 
@@ -589,6 +785,8 @@ void S3Trio64::commit_palette() {
 
 void S3Trio64::attr_write(u8 index, u8 value) {
     index &= 0x1F;
+    // CR33.6 locks the palette/overscan registers AR00-AR0F and AR11.
+    if ((crtc_[0x33] & 0x40) && (index < 0x10 || index == 0x11)) return;
     attr_[index] = value;
     if (index < 0x10) {
         ++attr_burst_generation_;
@@ -622,6 +820,7 @@ void S3Trio64::dac_write(u8 value) {
     const u32 i = u32(dac_index_) * 3u + dac_write_phase_;
     dac_[i] = u8(value & 0x3F);
     render_dac_[i] = dac_[i];
+    dac_read_mode_ = false; // 3C7 read then reports "last cycle was a write"
     if (++dac_write_phase_ == 3) {
         dac_write_phase_ = 0;
         dac_index_ = u8(dac_index_ + 1);
@@ -640,18 +839,29 @@ u8 S3Trio64::dac_read_byte() {
 }
 
 u8 S3Trio64::crtc_read(u8 index) const {
-    if (index >= 0x30 && index <= 0x3F && !s3_unlocked_ && index != 0x38 && index != 0x39)
+    // Register Lock 1 (CR38) protects the S3 VGA registers CR2D-CR3F.  CR38
+    // and CR39 are the lock registers themselves and stay readable.
+    if (!s3_unlocked_ && index >= 0x2D && index <= 0x3F && index != 0x38 && index != 0x39)
         return 0x00;
     switch (index) {
-    case 0x2D: return 0x53; // device ID high (PCI device ID upper byte)
-    case 0x2E: return 0x11; // Trio64
+    case 0x22:
+        // CPU Latch Data: GR4 bits 1-0 select the latch (Section 14.3).
+        return latch_[gfx_[0x04] & 0x03];
+    case 0x24:
+    case 0x26:
+        // Attribute index + enable display + inverted address flip-flop.
+        return u8((attr_index_ & 0x1F) | (attr_enable_ ? 0x20 : 0x00) |
+                  (attr_flip_flop_ ? 0x00 : 0x80));
+    case 0x2D: return 0x88; // device ID high byte (Section 15-1)
+    case 0x2E: return 0x11; // Trio64 device ID low byte
     case 0x2F: return 0x00; // revision
     case 0x30: return 0xE1; // chip ID / revision status
-    case 0x36: return crtc_[0x36];
-    case 0x37: return crtc_[0x37];
-    case 0x45: hwcur_stack_ = 0; return crtc_[0x45];
-    case 0x68: return crtc_[0x68];
-    default: break;
+    case 0x45:
+        // Reading HGC_MODE resets the hardware-cursor colour stack pointer.
+        hwcur_stack_ = 0;
+        return crtc_[0x45];
+    default:
+        break;
     }
     if (index >= 0x40 && !sys_unlocked_) return 0x00;
     return crtc_[index];
@@ -673,9 +883,35 @@ void S3Trio64::crtc_write(u8 index, u8 value) {
         dirty();
         return;
     }
+    // CR35 bits 4/5 lock the vertical/horizontal timing register groups
+    // (Section 15-6).  The locked bits keep their old value.
+    if (crtc_[0x35] & 0x10) {
+        switch (index) {
+        case 0x06: case 0x10: case 0x15: case 0x16:
+            return;
+        case 0x07:
+            value = u8((value & 0x52) | (crtc_[0x07] & u8(~0x52)));
+            break;
+        case 0x09:
+            value = u8((value & ~0x20) | (crtc_[0x09] & 0x20));
+            break;
+        case 0x11:
+            // CR11 bits 3-0 are vertical timing; bits 4-7 stay writable.
+            value = u8((value & 0xF0) | (crtc_[0x11] & 0x0F));
+            break;
+        default:
+            break;
+        }
+    }
+    if (crtc_[0x35] & 0x20) {
+        if (index <= 0x05) return;
+        if (index == 0x17) value = u8((value & ~0x04) | (crtc_[0x17] & 0x04));
+    }
     if (index == 0x11) {
+        if (!(value & 0x10)) vga_vint_pending_ = false; // CLR VINT
+        vga_vint_armed_ = (value & 0x10) != 0;
         crtc_[0x11] = value;
-        dirty();
+        update_irq();
         return;
     }
     if (index == 0x38) {
@@ -692,7 +928,12 @@ void S3Trio64::crtc_write(u8 index, u8 value) {
     if (index >= 0x30 && index <= 0x3F && !s3_unlocked_) return;
     if (index >= 0x40 && !sys_unlocked_) return;
     if ((index == 0x36 || index == 0x37 || index == 0x68) && !cfg_unlocked_) return;
-    if (index == 0x2D || index == 0x2E || index == 0x2F || index == 0x30) return; // read-only
+    // Read-only registers (Sections 14.3 and 15).
+    if (index == 0x22 || index == 0x24 || index == 0x26 || index == 0x2D ||
+        index == 0x2E || index == 0x2F || index == 0x30) return;
+
+    if (index == 0x36)
+        value = u8((value & 0xFC) | (crtc_[0x36] & 0x03)); // bus select straps
 
     crtc_[index] = value;
     if (index == 0x4A) {
@@ -708,40 +949,24 @@ void S3Trio64::crtc_write(u8 index, u8 value) {
         return;
     }
     switch (index) {
-    case 0x0A:
-    case 0x0B:
-    case 0x0E:
-    case 0x0F:
-    case 0x45:
-    case 0x46:
-    case 0x47:
-    case 0x48:
-    case 0x49:
-    case 0x4A:
-    case 0x4B:
-    case 0x4C:
-    case 0x4D:
-    case 0x4E:
-    case 0x4F:
-        break;
-    case 0x31:
-    case 0x3A:
-    case 0x43:
-    case 0x50:
-    case 0x51:
-    case 0x67:
-    case 0x69:
-    case 0x6A:
-        break;
     case 0x53:
-        update_mapping();
-        break;
     case 0x58:
         update_mapping();
         break;
     case 0x59:
     case 0x5A:
-        if (!linear_base_) map_linear_window();
+        sync_bar_from_crtc();
+        break;
+    case 0x6A:
+        // CR6A selects the 64 KiB page visible through a 64 KiB LA window.
+        map_linear_window();
+        break;
+    case 0x40:
+        // EN ENH gates the enhanced register file (Section 16-1).
+        update_mapping();
+        break;
+    case 0x45:
+        // HWGC enable changes cursor visibility.
         break;
     default:
         break;
@@ -749,14 +974,25 @@ void S3Trio64::crtc_write(u8 index, u8 value) {
     dirty();
 }
 
+bool S3Trio64::pio_engine_blocked() const {
+    // SR9.7: with MMIO enabled, register access may be restricted to MMIO.
+    return mmio_enabled_ && (seq_[0x09] & 0x80) != 0;
+}
+
+bool S3Trio64::mmio_window_active() const { return mmio_enabled_; }
+
 u8 S3Trio64::io_read8(u16 port) {
-    if (is_engine_port(port)) return u8(engine_read_port(port, 1));
+    if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return 0xFF;
+        return u8(engine_read_port(port, 1));
+    }
     if (port >= 0x3B0 && port <= 0x3DF) return vga_read(port);
     return 0xFF;
 }
 
 void S3Trio64::io_write8(u16 port, u8 value) {
     if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return;
         engine_write_port(port, value, 1);
         return;
     }
@@ -764,12 +1000,16 @@ void S3Trio64::io_write8(u16 port, u8 value) {
 }
 
 u16 S3Trio64::io_read16(u16 port) {
-    if (is_engine_port(port)) return u16(engine_read_port(port, 2));
+    if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return 0xFFFF;
+        return u16(engine_read_port(port, 2));
+    }
     return u16(vga_read(port)) | (u16(vga_read(u16(port + 1))) << 8);
 }
 
 void S3Trio64::io_write16(u16 port, u16 value) {
     if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return;
         engine_write_port(port, value, 2);
         return;
     }
@@ -791,12 +1031,16 @@ void S3Trio64::io_write16(u16 port, u16 value) {
 }
 
 u32 S3Trio64::io_read32(u16 port) {
-    if (is_engine_port(port)) return engine_read_port(port, 4);
+    if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return 0xFFFFFFFFu;
+        return engine_read_port(port, 4);
+    }
     return u32(io_read16(port)) | (u32(io_read16(u16(port + 2))) << 16);
 }
 
 void S3Trio64::io_write32(u16 port, u32 value) {
     if (is_engine_port(port)) {
+        if (port >= 0x8000 && pio_engine_blocked()) return;
         engine_write_port(port, value, 4);
         return;
     }
@@ -872,6 +1116,125 @@ u32 S3Trio64::row_base(int y) const {
     return mode_.start + u32(y) * mode_.pitch;
 }
 
+void S3Trio64::update_clock() const {
+    // Miscellaneous Output bits 3-2 select the VGA dot clock or the DCLK PLL
+    // (Section 9.2).  SR15 bit 4 divides DCLK by two to produce VCLK.
+    double dclk = 25175000.0;
+    switch ((misc_output_ >> 2) & 0x03) {
+    case 0: dclk = 25175000.0; break;
+    case 1: dclk = 28322000.0; break;
+    case 2: dclk = 25175000.0; break; // external VCLK: no source connected
+    default: dclk = pll_frequency(seq_[0x12], seq_[0x13], 25175000.0); break;
+    }
+    if (seq_[0x15] & 0x10) dclk *= 0.5;
+    dclk_hz_ = dclk;
+    // Power-on MCLK is 45 MHz; SR10/SR11 reprogram it (Section 14.2).
+    mclk_hz_ = pll_frequency(seq_[0x10], seq_[0x11], 45000000.0);
+}
+
+double S3Trio64::dclk_hz() const { update_clock(); return dclk_hz_; }
+double S3Trio64::mclk_hz() const { update_clock(); return mclk_hz_; }
+
+u32 S3Trio64::h_total_chars() const { return crtc_h_total(crtc_); }
+u32 S3Trio64::v_total_lines() const {
+    return crtc_v_total(crtc_, (crtc_[0x42] & 0x20) != 0);
+}
+
+double S3Trio64::refresh_hz() const {
+    update_timing();
+    const double dots = double(h_total_chars()) * double((seq_[0x01] & 0x01) ? 8 : 9) *
+                        double(v_total_lines());
+    if (dots <= 0.0 || !(dclk_hz_ > 0.0)) return 60.0;
+    const double hz = dclk_hz_ / dots;
+    if (!(hz >= 10.0 && hz <= 240.0)) return 60.0;
+    return hz;
+}
+
+bool S3Trio64::raster_display_active() const {
+    if (!screen_enabled()) return false;
+    update_timing();
+    const u32 vt = std::max<u32>(1, v_total_lines());
+    const u32 ht = std::max<u32>(1, h_total_chars());
+    const double phase = double(tick_acc_ % std::max<u64>(1, cycles_per_frame_)) /
+                         double(std::max<u64>(1, cycles_per_frame_));
+    const double lines = phase * double(vt);
+    const double line = std::fmod(lines, double(vt));
+    const double dot = std::fmod(lines, 1.0) * double(ht);
+    const bool interlace = (crtc_[0x42] & 0x20) != 0;
+    const double field_lines = interlace ? double(vt) * 0.5 : double(vt);
+    const double fline = interlace ? std::fmod(line, field_lines) : line;
+    const u32 vde = crtc_v_display_end(crtc_);
+    const u32 hde = crtc_h_display_end(crtc_);
+    return fline <= double(vde) && dot < double(hde);
+}
+
+bool S3Trio64::raster_vsync_active() const {
+    update_timing();
+    const u32 vt = std::max<u32>(1, v_total_lines());
+    const double phase = double(tick_acc_ % std::max<u64>(1, cycles_per_frame_)) /
+                         double(std::max<u64>(1, cycles_per_frame_));
+    const double line = std::fmod(phase * double(vt), double(vt));
+    const bool interlace = (crtc_[0x42] & 0x20) != 0;
+    const double field_lines = interlace ? double(vt) * 0.5 : double(vt);
+    const double fline = interlace ? std::fmod(line, field_lines) : line;
+    return fline >= double(crtc_v_retrace_start(crtc_)) &&
+           fline < double(crtc_v_retrace_end(crtc_));
+}
+
+bool S3Trio64::raster_hsync_active() const {
+    update_timing();
+    const u32 vt = std::max<u32>(1, v_total_lines());
+    const u32 ht = std::max<u32>(1, h_total_chars());
+    const double phase = double(tick_acc_ % std::max<u64>(1, cycles_per_frame_)) /
+                         double(std::max<u64>(1, cycles_per_frame_));
+    const double lines = phase * double(vt);
+    const double dot = std::fmod(lines, 1.0) * double(ht);
+    return dot >= double(crtc_h_sync_start(crtc_)) &&
+           dot < double(crtc_h_sync_end(crtc_));
+}
+
+void S3Trio64::set_irq_level(bool level) {
+    if (level == irq_asserted_) return;
+    irq_asserted_ = level;
+    // INTA# is routed by POST through PCI configuration register 3Ch.  With
+    // no line assigned there is nothing to assert.
+    const int line = interrupt_line();
+    if (irq_ && line) irq_(line, level);
+}
+
+void S3Trio64::update_irq() {
+    bool level = false;
+    if (crtc_[0x32] & 0x10) {
+        if (adv_func_ & 0x0001u) {
+            // Enhanced mode: enable bits 8-11 correspond to status bits 0-3.
+            const u16 en = subsystem_cntl_;
+            const u16 st = subsystem_status_ & 0x000F;
+            if (((en & 0x0100u) && (st & 0x0001u)) ||
+                ((en & 0x0200u) && (st & 0x0002u)) ||
+                ((en & 0x0400u) && (st & 0x0004u)) ||
+                ((en & 0x0800u) && (st & 0x0008u)))
+                level = true;
+        } else if (!(crtc_[0x11] & 0x20) && (crtc_[0x11] & 0x10) && vga_vint_pending_) {
+            level = true;
+        }
+    }
+    set_irq_level(level);
+}
+
+void S3Trio64::raise_vretrace() {
+    // End of active vertical display: latch the VGA vertical retrace
+    // interrupt flip-flop (only when CR11.4 armed it) and the enhanced VSY
+    // status bit (Section 10.7).
+    if (vga_vint_armed_ && !(crtc_[0x11] & 0x20)) vga_vint_pending_ = true;
+    if (adv_func_ & 0x0001u) subsystem_status_ |= 0x0001u;
+    update_irq();
+}
+
+void S3Trio64::engine_interrupt(u16 status_bits) {
+    subsystem_status_ |= (status_bits & 0x000Fu);
+    update_irq();
+}
+
 void S3Trio64::update_timing() const {
     ModeInfo& m = mode_;
     u32 pitch_reg = crtc_[0x13];
@@ -879,11 +1242,10 @@ void S3Trio64::update_timing() const {
     else pitch_reg |= u32(crtc_[0x43] & 0x04) << 6;
 
     m.pitch_reg = pitch_reg;
-    m.hde = int(crtc_[0x01] | ((crtc_[0x5D] & 0x02) << 7)) + 1;
-    m.vde = int((u32(crtc_[0x12]) | ((u32(crtc_[0x07]) & 0x02) << 7) |
-                 ((u32(crtc_[0x07]) & 0x40) << 3) | ((u32(crtc_[0x5E]) & 0x02) << 9))) + 1;
+    m.hde = int(crtc_h_display_end(crtc_));
+    m.vde = int(crtc_v_display_end(crtc_));
     if (m.hde < 1) m.hde = 1;
-    if (m.hde > 1024) m.hde = 1024;
+    if (m.hde > 2048) m.hde = 2048;
     if (m.vde < 1) m.vde = 1;
     if (m.vde > 4096) m.vde = 4096;
     m.char_h = int(crtc_[0x09] & 0x1F) + 1;
@@ -897,6 +1259,7 @@ void S3Trio64::update_timing() const {
     m.scan_per_row = m.char_h * (m.dbl_scan ? 2 : 1);
     m.char_w = (seq_[0x01] & 0x01) ? 8 : 9;
     m.text = !(attr_[0x10] & 0x01);
+    m.interlace = (crtc_[0x42] & 0x20) != 0;
     // AR13 shifts the fetched display data left by 0..7 pixels (0..8 in
     // 9-dot text).  Dangerous Dave 2 scrolls with CRTC start = scroll/8 and
     // AR13 = scroll%8, so ignoring this register makes the picture move in
@@ -912,7 +1275,12 @@ void S3Trio64::update_timing() const {
     m.chain4 = (seq_[0x04] & 0x08) != 0;
     m.odd_even = !(seq_[0x04] & 0x0C);
     m.enhanced = (adv_func_ & 0x0001u) || (crtc_[0x31] & 0x08) || (crtc_[0x3A] & 0x10);
+    // CR8 preset row scan: the first displayed character row starts at this
+    // scan line (smooth vertical scrolling in text modes).
+    m.vpan = int(crtc_[0x08] & 0x1F);
 
+    m.packed4 = false;
+    m.mode12 = false;
     if (m.text) {
         m.bpp = 4;
     } else if (m.enhanced && (crtc_[0x3A] & 0x10)) {
@@ -921,31 +1289,49 @@ void S3Trio64::update_timing() const {
         // CR50 pixel length is authoritative: 4 bytes/pixel can be paired with
         // the 24-bit DAC mode with the fourth byte unused.
         if (pl == 3) m.bpp = 32;
-        else if (cm == 3) m.bpp = 15; // CR67 color mode 0011 = "Mode 9" = 15-bit
+        else if (cm == 3) m.bpp = 15; // CR67 colour mode 0011 = "Mode 9" = 15-bit
         else if (cm == 5) m.bpp = 16;
         else if (cm == 0xD || cm == 0x7) m.bpp = 24;
         else if (pl == 1) m.bpp = 16;
-        else m.bpp = 8;
+        else m.bpp = (adv_func_ & 0x04u) ? 4 : 8;
+    } else if ((seq_[0x0B] & 0x08) && (crtc_[0x67] >> 4) == 0) {
+        // SRB bit 3 + CR67 mode 0: Trio32 packed 24 bits/pixel (Mode 12).
+        m.bpp = 24;
+        m.mode12 = true;
     } else if ((attr_[0x10] & 0x40) || (gfx_[0x05] & 0x40) || m.chain4) {
         m.bpp = 8;
     } else {
         m.bpp = 4;
     }
-    // Unchained 256-colour modes (VGA Mode X) keep the four-plane layout
-    // even though each plane byte is a complete 8-bit pixel: four
-    // consecutive pixels are fetched from the four planes at the same
-    // address.  Only chain-4 (mode 13h) and the S3 enhanced doubleword
-    // mappings store 8bpp pixels linearly.
-    m.planar = !m.text && (m.bpp == 4 || (m.bpp == 8 && !m.chain4 && !m.enhanced));
+    // Enhanced 4bpp bitmaps are packed two pixels per byte and require the
+    // enhanced (doubleword) memory mapping; VGA 4bpp and Mode X keep the
+    // four-plane layout.
+    m.packed4 = !m.text && m.enhanced && m.bpp == 4 && (crtc_[0x31] & 0x08) != 0;
+    m.planar = !m.text && ((m.bpp == 4 && !m.packed4) ||
+                           (m.bpp == 8 && !m.chain4 && !m.enhanced));
     // In 256-colour modes AR13 has only four positions: 0, 2, 4, 6 shift
     // the stream by 0..3 pixels (odd values are reserved, see H_PX_PAN).
     if (!m.text && m.bpp == 8) m.pan = (int(attr_[0x13]) & 0x06) >> 1;
-    if (std::getenv("OLDBOX_S3_TRACE"))
-        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x crtc31=%02x crtc35=%02x crtc51=%02x crtc6a=%02x\n",
-                     int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.chain4),
+    switch (m.bpp) {
+    case 15: case 16: m.bytes_pp = 2; break;
+    case 24: m.bytes_pp = 3; break;
+    case 32: m.bytes_pp = 4; break;
+    default: m.bytes_pp = 1; break;
+    }
+    // CR67 colour mode 8 (0001) doubles the pixel output rate in 8bpp.  The
+    // mode requires SR18.7 and SR15 bit 4 or 6 (Section 8.1.2).
+    const bool clock_doubled = (m.bpp == 8) && ((crtc_[0x67] >> 4) == 1) &&
+                               ((seq_[0x18] & 0x80) != 0) &&
+                               ((seq_[0x15] & 0x50) != 0);
+    if (std::getenv("OLDBOX_S3_TRACE")) {
+        static bool traced = false;
+        if (!traced) { traced = true; }
+        std::fprintf(stderr, "S3 mode: text=%d %dx%d hde=%d vde=%d bpp=%d planar=%d packed4=%d chain4=%d pitch_reg=%02x attr10=%02x seq04=%02x crtc3a=%02x crtc67=%02x crtc17=%02x crtc18=%02x gr5=%02x gr6=%02x crtc31=%02x crtc35=%02x crtc51=%02x crtc6a=%02x\n",
+                     int(m.text), m.hde, m.vde, m.hde, m.vde, m.bpp, int(m.planar), int(m.packed4), int(m.chain4),
                      pitch_reg, attr_[0x10], seq_[0x04], crtc_[0x3A], crtc_[0x67],
                      crtc_[0x17], crtc_[0x18], gfx_[0x05], gfx_[0x06],
                      crtc_[0x31], crtc_[0x35], crtc_[0x51], crtc_[0x6A]);
+    }
 
     const u32 sw = display_start_word();
     // CR17 bit 6 selects the memory-address counter unit.  In byte mode the
@@ -967,7 +1353,7 @@ void S3Trio64::update_timing() const {
     // the 16-bit counter scaled by the address unit when CR69/CR31/CR51 do
     // not select a higher base.
     if (m.text || m.planar) m.addr_limit = 0x10000u;
-    else m.addr_limit = (sw >> 16) ? 0x100000u : start_scale * 0x10000u;
+    else m.addr_limit = 0x400000u; // 20-bit counter in dword units -> 4 MB
     if (m.text || m.planar) m.pitch = pitch_reg * 2u;
     else m.pitch = pitch_reg * 8u;
     if (m.pitch < 1) m.pitch = 1;
@@ -993,7 +1379,11 @@ void S3Trio64::update_timing() const {
         int per_char = 8;
         if (m.bpp == 8)
             per_char = ((adv_func_ & 0x0001u) && (crtc_[0x3A] & 0x10)) ? 8 : 4;
+        else if (m.packed4)
+            per_char = 16;
         m.width = m.hde * per_char;
+        if (m.mode12) m.width = (m.hde * 8) / 3;
+        if (clock_doubled) m.width *= 2;
         if (crtc_[0x43] & 0x80) m.width *= 2;
         m.height = m.rows;
     }
@@ -1001,6 +1391,19 @@ void S3Trio64::update_timing() const {
     m.height = std::clamp(m.height, 1, 2048);
     width_ = m.width;
     height_ = m.height;
+
+    // Frame period from the CRTC timing and the synthesised dot clock.  If
+    // the registers do not describe a plausible video mode (mid mode-set,
+    // zeroed timing) fall back to 60 Hz so the frontend keeps running.
+    update_clock();
+    const double dots = double(h_total_chars()) * double(m.char_w) * double(v_total_lines());
+    double hz = (dots > 0.0) ? dclk_hz_ / dots : 0.0;
+    if (!(hz >= 10.0 && hz <= 240.0)) hz = 60.0;
+    // The host surface is paced at 60 Hz by default (like the emulator's
+    // other video devices); OLDBOX_S3_CRTC_PACING=1 drives the frame clock at
+    // the real CRTC refresh rate instead.
+    if (!std::getenv("OLDBOX_S3_CRTC_PACING")) hz = 60.0;
+    cycles_per_frame_ = std::max<u64>(1, u64(double(cpu_mhz_) * 1.0e6 / hz));
 }
 
 // ---------------------------------------------------------------------------
@@ -1167,9 +1570,16 @@ u32 S3Trio64::palette_rgb(u8 index) const {
     return (expand(r6) << 16) | (expand(g6) << 8) | expand(b6);
 }
 
-u32 S3Trio64::attr_palette_index(u8 color) const {
+u8 S3Trio64::attr_palette_index(u8 color) const {
     const std::array<u8, 32>& table = rendering_ ? render_attr_ : attr_;
-    return table[color & 0x0F] & 0x3F;
+    const u8 pal = u8(table[color & 0x0F] & 0x3F);
+    // AR14 bits 3-2 are video-output bits 7-6; AR10.7 selects AR14 bits 1-0
+    // for V5-V4 instead of the palette register (Section 14.5).  AR14 is not
+    // part of the palette burst, so it is read live.
+    const u8 v76 = u8((attr_[0x14] & 0x0C) << 4);
+    const u8 v54 = (attr_[0x10] & 0x80) ? u8((attr_[0x14] & 0x03) << 4)
+                                        : u8(pal & 0x30);
+    return u8(v76 | v54 | (pal & 0x0F));
 }
 
 u8 S3Trio64::font_byte(u8 ch, int row, bool font_b) const {
@@ -1217,12 +1627,15 @@ u8 S3Trio64::builtin_font_byte(u8 ch, int row) const {
 u32 S3Trio64::text_rgb(int x, int y) const {
     const ModeInfo& m = mode_;
     if (m.char_w <= 0 || m.char_h <= 0 || m.cols <= 0) return 0;
+    // CR8 preset row scan starts the first character row at scan line CR8[4:0]
+    // (smooth vertical scrolling in text modes).
+    const int gy = y + m.vpan;
     const int gx = x + m.pan;
     const int col = gx / m.char_w;
-    const int row = y / m.scan_per_row;
+    const int row = gy / m.scan_per_row;
     if (col < 0 || col >= m.cols || row < 0 || row >= m.rows) return 0;
     const int sx = gx % m.char_w;
-    const int sy = (y % m.scan_per_row) / (m.dbl_scan ? 2 : 1);
+    const int sy = (gy % m.scan_per_row) / (m.dbl_scan ? 2 : 1);
     // Odd/even text addressing stores character and attribute bytes in the
     // same plane word, so a cell index is one byte in each plane.  Sequential
     // planar modes use two bytes per cell.
@@ -1255,14 +1668,16 @@ u32 S3Trio64::text_rgb(int x, int y) const {
     if (cursor_enabled) {
         const u32 start_w = display_start_word();
         const u32 cur_w = u32(crtc_[0x0F]) | (u32(crtc_[0x0E]) << 8);
-        const u32 idx = (cur_w >= start_w) ? (cur_w - start_w) : (cur_w + 0x10000u - start_w);
+        u32 idx = (cur_w >= start_w) ? (cur_w - start_w) : (cur_w + 0x10000u - start_w);
+        // CRB bits 6-5 delay the cursor by 0-3 character clocks.
+        idx = (idx + u32((crtc_[0x0B] >> 5) & 0x03)) & 0xFFFFu;
         const u32 here = u32(row * m.cols + col);
         const int cs = crtc_[0x0A] & 0x1F;
         const int ce = crtc_[0x0B] & 0x1F;
         const bool cursor_on = ((frames_ / 8u) & 1u) == 0;
         if (idx == here && sy >= cs && sy <= ce && cursor_on) color = fg;
     }
-    return palette_rgb(u8(attr_palette_index(u8(color))));
+    return palette_rgb(attr_palette_index(u8(color)));
 }
 
 u32 S3Trio64::sample_rgb(int x, int y) const {
@@ -1270,10 +1685,17 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
     if (x < 0 || y < 0 || x >= m.width || y >= m.height) return 0;
     if (m.text) return text_rgb(x, y);
 
+    // AR10.5 (TOP PAN) forces the pixel-pan value to zero below line compare.
+    int pan = m.pan;
+    if ((attr_[0x10] & 0x20) && m.split && y >= int(m.split_row) * m.scan_per_row) pan = 0;
+    const bool blink_off = ((frames_ / 16u) & 1u) != 0;
+    const bool blink = (attr_[0x10] & 0x08) != 0;
+    const u8 plane_mask = u8(attr_[0x12] & 0x0F);
+
     const u32 mask = pow2_mask(u32(vram_.size()));
     auto byte = [&](u32 addr) -> u8 { return vram_[mask ? (addr & mask) : (addr % u32(vram_.size()))]; };
     if (m.planar) {
-        const u32 px = u32(x) + u32(m.pan);
+        const u32 px = u32(x) + u32(pan);
         if (m.bpp == 8) {
             // Mode X: one full colour index per plane byte, four pixels per
             // CRTC address.  Reading the planes linearly repeats the first
@@ -1287,11 +1709,25 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
             const u8 v = byte(plane_addr(p, off));
             if (v & (0x80u >> (px & 7u))) idx |= 1u << p;
         }
-        return palette_rgb(u8(attr_palette_index(u8(idx))));
+        idx &= plane_mask;
+        if (blink && blink_off) idx ^= 8u; // AR10.3 inverts V3 in graphics modes
+        return palette_rgb(attr_palette_index(u8(idx)));
     }
-    const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
-                     (m.addr_limit - 1u);
+    if (m.packed4) {
+        const u32 px = u32(x) + u32(pan);
+        const u32 off = (row_base(y) + px / 2u) & (m.addr_limit - 1u);
+        const u8 b = byte(off);
+        u32 idx = (px & 1u) ? u32(b & 0x0F) : u32(b >> 4);
+        idx &= 0x0F;
+        if (blink && blink_off) idx ^= 8u;
+        return palette_rgb(attr_palette_index(u8(idx)));
+    }
+    if (m.mode12) {
+        const u32 addr = (row_base(y) + u32(x) * 3u) & (m.addr_limit - 1u);
+        return (u32(byte(addr + 2)) << 16) | (u32(byte(addr + 1)) << 8) | byte(addr);
+    }
+    const u32 px = (m.bpp == 8) ? u32(x) + u32(pan) : u32(x);
+    const u32 addr = (row_base(y) + px * u32(m.bytes_pp)) & (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15: {
         const u32 v = u32(byte(addr)) | (u32(byte(addr + 1)) << 8);
@@ -1308,6 +1744,12 @@ u32 S3Trio64::sample_rgb(int x, int y) const {
         return (u32(byte(addr + 2)) << 16) | (u32(byte(addr + 1)) << 8) | byte(addr);
     case 32:
         return (u32(byte(addr + 2)) << 16) | (u32(byte(addr + 1)) << 8) | byte(addr);
+    case 4: {
+        // Defensive: a 4bpp non-planar bitmap is packed two pixels per byte.
+        const u32 off = (row_base(y) + u32(x) / 2u) & (m.addr_limit - 1u);
+        const u8 b = byte(off);
+        return palette_rgb(attr_palette_index(u8((x & 1) ? (b & 0x0F) : (b >> 4))));
+    }
     case 8:
     default:
         return palette_rgb(byte(addr));
@@ -1335,6 +1777,7 @@ void S3Trio64::render_mode13() { render_graphics(); }
 void S3Trio64::render_hw_cursor() {
     if (!(adv_func_ & 0x0001u) || !(crtc_[0x45] & 0x01)) return;
     if (vram_.empty()) return;
+    const bool x11 = (crtc_[0x55] & 0x10) != 0;
     const u32 mask = pow2_mask(u32(vram_.size()));
     auto byte = [&](u32 addr) -> u8 { return vram_[mask ? (addr & mask) : (addr % u32(vram_.size()))]; };
     const u32 base = ((u32(crtc_[0x4C] & 0x0F) << 8) | crtc_[0x4D]) * 1024u;
@@ -1357,10 +1800,18 @@ void S3Trio64::render_hw_cursor() {
             const bool a = ((and_w >> bit) & 1u) != 0;
             const bool xo = ((xor_w >> bit) & 1u) != 0;
             const std::size_t di = std::size_t(sy) * std::size_t(width_) + std::size_t(sx);
-            if (a && !xo) continue;
-            if (a && xo) frame_[di] ^= 0x00FFFFFFu;
-            else if (!a && xo) frame_[di] = fg;
-            else frame_[di] = bg;
+            // AND/XOR decode table from Section 13.3.3.18.  The MS-Windows
+            // and X11 modes swap the meaning of the two mask bits.
+            if (!x11) {
+                if (a && !xo) continue;               // 10: current screen pixel
+                if (a && xo) frame_[di] ^= 0x00FFFFFFu; // 11: NOT current pixel
+                else if (!a && xo) frame_[di] = fg;   // 01: foreground
+                else frame_[di] = bg;                 // 00: background
+            } else {
+                if (!a) continue;                     // 00/01: current screen pixel
+                if (!xo) frame_[di] = bg;             // 10: background
+                else frame_[di] = fg;                 // 11: foreground
+            }
         }
     }
 }
@@ -1400,6 +1851,9 @@ void S3Trio64::render_frame() {
     else render_graphics();
     render_hw_cursor();
     rendering_ = false;
+    // VESA DPMS: with both syncs forced inactive the monitor is powered down
+    // and shows no picture (Section 10.2 / SRD bits 7-4).
+    if (dpms_off()) std::fill(frame_.begin(), frame_.end(), 0u);
     // A pending single-index burst is flushed on the next render (the idle
     // path above); keep the frame dirty so frame() retries even outside tick.
     dirty_ = attr_burst_next_ != 0;
@@ -1429,15 +1883,29 @@ u32 S3Trio64::native_pixel(int x, int y) const {
         }
         return idx;
     }
+    if (m.packed4) {
+        const u32 px = u32(x) + u32(m.pan);
+        const u32 off = (row_base(y) + px / 2u) & (m.addr_limit - 1u);
+        const u8 b = byte(off);
+        return (px & 1u) ? u32(b & 0x0F) : u32(b >> 4);
+    }
+    if (m.mode12) {
+        const u32 addr = (row_base(y) + u32(x) * 3u) & (m.addr_limit - 1u);
+        return u32(byte(addr)) | (u32(byte(addr + 1)) << 8) | (u32(byte(addr + 2)) << 16);
+    }
     const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
-                     (m.addr_limit - 1u);
+    const u32 addr = (row_base(y) + px * u32(m.bytes_pp)) & (m.addr_limit - 1u);
     switch (m.bpp) {
     case 15:
     case 16: return u32(byte(addr)) | (u32(byte(addr + 1)) << 8);
     case 24: return u32(byte(addr)) | (u32(byte(addr + 1)) << 8) | (u32(byte(addr + 2)) << 16);
     case 32: return u32(byte(addr)) | (u32(byte(addr + 1)) << 8) | (u32(byte(addr + 2)) << 16) |
                     (u32(byte(addr + 3)) << 24);
+    case 4: {
+        const u32 off = (row_base(y) + u32(x) / 2u) & (m.addr_limit - 1u);
+        const u8 b = byte(off);
+        return (x & 1) ? u32(b & 0x0F) : u32(b >> 4);
+    }
     case 8:
     default: return byte(addr);
     }
@@ -1469,14 +1937,42 @@ void S3Trio64::native_write(int x, int y, u32 value) {
         dirty();
         return;
     }
+    if (m.packed4) {
+        const u32 px = u32(x) + u32(m.pan);
+        const u32 off = (row_base(y) + px / 2u) & (m.addr_limit - 1u);
+        const u32 addr = plane_addr(int(px & 1u), off);
+        const u32 a = mask ? (addr & mask) : (addr % u32(vram_.size()));
+        if (px & 1u) vram_[a] = u8((vram_[a] & 0xF0) | (value & 0x0F));
+        else vram_[a] = u8((vram_[a] & 0x0F) | ((value & 0x0F) << 4));
+        dirty();
+        return;
+    }
+    if (m.mode12) {
+        const u32 addr = (row_base(y) + u32(x) * 3u) & (m.addr_limit - 1u);
+        auto put = [&](u32 a, u8 v) {
+            const u32 idx = mask ? (a & mask) : (a % u32(vram_.size()));
+            vram_[idx] = v;
+        };
+        put(addr, u8(value));
+        put(addr + 1, u8(value >> 8));
+        put(addr + 2, u8(value >> 16));
+        dirty();
+        return;
+    }
     const u32 px = (m.bpp == 8) ? u32(x) + u32(m.pan) : u32(x);
-    const u32 addr = (row_base(y) + px * u32(std::max(1, (m.bpp + 7) / 8))) &
-                     (m.addr_limit - 1u);
+    const u32 addr = (row_base(y) + px * u32(m.bytes_pp)) & (m.addr_limit - 1u);
     auto put = [&](u32 a, u8 v) {
         const u32 idx = mask ? (a & mask) : (a % u32(vram_.size()));
         vram_[idx] = v;
     };
     switch (m.bpp) {
+    case 4: {
+        const u32 off = (row_base(y) + u32(x) / 2u) & (m.addr_limit - 1u);
+        const u32 a = mask ? (off & mask) : (off % u32(vram_.size()));
+        if (x & 1) vram_[a] = u8((vram_[a] & 0xF0) | (value & 0x0F));
+        else vram_[a] = u8((vram_[a] & 0x0F) | ((value & 0x0F) << 4));
+        break;
+    }
     case 15:
     case 16:
         put(addr, u8(value));
@@ -1573,6 +2069,8 @@ void S3Trio64::set_text_mode() {
     misc_output_ = 0x67;
     dac_mask_ = 0xFF;
     adv_func_ = 0;
+    vga_vint_armed_ = (crtc_[0x11] & 0x10) != 0;
+    vga_vint_pending_ = false;
     linear_enabled_ = false;
     mmio_enabled_ = false;
     s3_unlocked_ = sys_unlocked_ = cfg_unlocked_ = exseq_unlocked_ = false;
@@ -1604,6 +2102,8 @@ void S3Trio64::set_mode13h() {
     misc_output_ = 0x63;
     dac_mask_ = 0xFF;
     adv_func_ = 0;
+    vga_vint_armed_ = (crtc_[0x11] & 0x10) != 0;
+    vga_vint_pending_ = false;
     linear_enabled_ = false;
     mmio_enabled_ = false;
     s3_unlocked_ = sys_unlocked_ = cfg_unlocked_ = exseq_unlocked_ = false;
@@ -1629,11 +2129,20 @@ VideoFrame S3Trio64::frame() const {
 }
 
 void S3Trio64::tick(u64 cpu_cycles) {
-    if (!cycles_per_frame_) cycles_per_frame_ = 1;
+    // Recompute the CRTC-derived frame period; a mode set can change it.
+    update_clock();
+    const double dots = double(h_total_chars()) * double((seq_[0x01] & 0x01) ? 8 : 9) *
+                        double(v_total_lines());
+    double hz = (dots > 0.0) ? dclk_hz_ / dots : 60.0;
+    if (!(hz >= 10.0 && hz <= 240.0)) hz = 60.0;
+    if (!std::getenv("OLDBOX_S3_CRTC_PACING")) hz = 60.0;
+    cycles_per_frame_ = std::max<u64>(1, u64(double(cpu_mhz_) * 1.0e6 / hz));
     tick_acc_ += cpu_cycles;
     if (tick_acc_ >= cycles_per_frame_) {
         const u64 elapsed = tick_acc_ / cycles_per_frame_;
         tick_acc_ %= cycles_per_frame_;
+        // A vertical retrace (end of the frame) latches the interrupt status.
+        for (u64 i = 0; i < std::min<u64>(elapsed, 4); ++i) raise_vretrace();
         render_frame();
         frames_ += elapsed;
     }
@@ -1654,11 +2163,6 @@ bool S3Trio64::is_packed_mmio(u32 off) {
     default:
         return false;
     }
-}
-
-u8 S3Trio64::next_stream_byte() {
-    if (eng_.stream_pos < eng_.stream.size()) return eng_.stream[eng_.stream_pos++];
-    return 0;
 }
 
 bool S3Trio64::next_stream_bit(bool& bit) const {
@@ -1749,10 +2253,11 @@ void S3Trio64::engine_write_pixel(int x, int y, u32 value) {
     const u32 stride = engine_stride();
     if (!stride) return;
     const u32 base = engine_dst_base();
-    const u32 addr = base + u32(y) * stride + u32(x) * u32(engine_bytes_per_pixel());
-    if (addr >= vram_.size()) return;
     auto put = [&](u32 a, u8 v) {
-        if (a < vram_.size()) vram_[a] = v;
+        if (a < vram_.size()) {
+            vram_[a] = v;
+            dirty();
+        }
     };
     if (mode_.bpp == 4) {
         const u32 a = base + u32(y) * stride + u32(x / 2);
@@ -1762,6 +2267,8 @@ void S3Trio64::engine_write_pixel(int x, int y, u32 value) {
         dirty();
         return;
     }
+    const u32 addr = base + u32(y) * stride + u32(x) * u32(engine_bytes_per_pixel());
+    if (addr >= vram_.size()) return;
     switch (mode_.bpp) {
     case 8:
         put(addr, u8(value));
@@ -1803,7 +2310,7 @@ u32 S3Trio64::engine_apply_mix(u32 dst, u32 src, bool foreground) const {
     case 1: color = eng_.frgd; break;
     case 2:
     case 3:
-    default: color = src; break;
+    default: color = src & eng_.rd_mask; break; // RD_MASK gates the data source
     }
     color &= bits;
     u32 mixed;
@@ -1843,7 +2350,8 @@ bool S3Trio64::engine_use_foreground(u32 src) const {
     case 3: {
         const u32 bits = engine_bits();
         const u32 rd = eng_.rd_mask & bits;
-        return rd != 0 && (src & rd) == rd;
+        if (rd == 0) return true; // no planes read: every bit reads as one
+        return (src & rd) == rd;
     }
     case 2: {
         bool bit = true;
@@ -1852,6 +2360,23 @@ bool S3Trio64::engine_use_foreground(u32 src) const {
     }
     default:
         return true;
+    }
+}
+
+void S3Trio64::engine_fill_span(int y, int x0, int x1, u16 cmd, bool pattern,
+                                int pat_x, int pat_y) {
+    (void)cmd;
+    if (y < 0 || y > 4095) return;
+    if (x0 > x1) std::swap(x0, x1);
+    x0 = std::max(x0, 0);
+    x1 = std::min(x1, 4095);
+    for (int x = x0; x <= x1; ++x) {
+        if (!engine_clip(x, y)) continue;
+        u32 src = 0;
+        if (pattern) src = engine_read_pixel(pat_x + (x & 7), pat_y + (y & 7), false);
+        const bool fg = pattern ? engine_use_foreground(src) : engine_use_foreground(0);
+        const u32 dst = engine_read_pixel(x, y, true);
+        engine_write_pixel(x, y, engine_apply_mix(dst, src, fg));
     }
 }
 
@@ -1914,6 +2439,100 @@ void S3Trio64::engine_pattern_fill(u16 cmd) {
     }
 }
 
+// Linear interpolation along one polygon/trapezoid edge.
+static int fill_edge_x(int x0, int y0, int x1, int y1, int y) {
+    if (y1 == y0) return x0;
+    const double t = double(y - y0) / double(y1 - y0);
+    return int(std::lround(double(x0) + double(x1 - x0) * t));
+}
+
+void S3Trio64::engine_polygon_fill(u16 cmd) {
+    const bool pattern = (cmd & 0x0800) != 0;
+    const int xa = int(eng_.cur_x), ya = int(eng_.cur_y);
+    const int xb = int(eng_.cur_x2), yb = int(eng_.cur_y2);
+    const int xae = int(eng_.step_x), yae = int(eng_.step_y);
+    const int xbe = int(eng_.step_x2), ybe = int(eng_.step_y2);
+    const int ystart = std::max(ya, yb);
+    const int ystop = std::min(yae, ybe);
+    if (ystop < ystart) return;
+    const int patx = int(eng_.pat_x), paty = int(eng_.pat_y);
+    for (int y = ystart; y <= ystop; ++y) {
+        const int x0 = fill_edge_x(xa, ya, xae, yae, y);
+        const int x1 = fill_edge_x(xb, yb, xbe, ybe, y);
+        engine_fill_span(y, x0, x1, cmd, pattern, patx, paty);
+    }
+    // Both edge engines remain at the stop line; the next segment command
+    // continues from there with a new end point for the edge that finished.
+    eng_.cur_x = u16(fill_edge_x(xa, ya, xae, yae, ystop) & 0x0FFF);
+    eng_.cur_y = u16(ystop & 0x0FFF);
+    eng_.cur_x2 = u16(fill_edge_x(xb, yb, xbe, ybe, ystop) & 0x0FFF);
+    eng_.cur_y2 = u16(ystop & 0x0FFF);
+}
+
+void S3Trio64::engine_trapezoid4(u16 cmd) {
+    const bool pattern = (cmd & 0x0800) != 0;
+    const int xa = int(eng_.cur_x), ya = int(eng_.cur_y);
+    const int xae = int(eng_.step_x), yae = int(eng_.step_y);
+    const int xb = int(eng_.cur_x2);
+    const int xbe = int(eng_.step_x2);
+    if (yae < ya) return;
+    const int patx = int(eng_.pat_x), paty = int(eng_.pat_y);
+    for (int y = ya; y <= yae; ++y) {
+        const int x0 = fill_edge_x(xa, ya, xae, yae, y);
+        const int x1 = fill_edge_x(xb, ya, xbe, yae, y);
+        engine_fill_span(y, x0, x1, cmd, pattern, patx, paty);
+    }
+    eng_.cur_x = u16(xae & 0x0FFF);
+    eng_.cur_y = u16(yae & 0x0FFF);
+    eng_.cur_x2 = u16(xbe & 0x0FFF);
+    eng_.cur_y2 = u16(yae & 0x0FFF);
+}
+
+// Bresenham edge walk used by the parameter trapezoid fills.
+static void bres_edge_xs(int x0, int y0, int major, int axial, int diag, int error,
+                         int dir, std::vector<int>& xs) {
+    const int dx = (dir & 0x01) ? 1 : -1;
+    const int dy = (dir & 0x04) ? 1 : -1;
+    const bool ymajor = (dir & 0x02) != 0;
+    int x = x0, y = y0, err = error;
+    xs.clear();
+    xs.reserve(std::size_t(major) + 1);
+    for (int i = 0; i <= major; ++i) {
+        xs.push_back(ymajor ? x : y);
+        if (ymajor) {
+            if (err > 0) { x += dx; err += diag; } else err += axial;
+            y += dy;
+        } else {
+            if (err > 0) { y += dy; err += diag; } else err += axial;
+            x += dx;
+        }
+    }
+}
+
+void S3Trio64::engine_trapezoid_bres(u16 cmd) {
+    const bool pattern = (cmd & 0x0800) != 0;
+    const int y0 = int(eng_.cur_y);
+    const int major1 = int(eng_.maj);
+    const int major2 = int(eng_.maj2);
+    const int dir1 = (cmd >> 5) & 7;
+    const int dir2 = (eng_.cmd2 >> 5) & 7;
+    std::vector<int> xs1, xs2;
+    bres_edge_xs(int(eng_.cur_x), y0, major1, sign_extend14(eng_.step_y),
+                 sign_extend14(eng_.step_x), sign_extend14(eng_.err), dir1, xs1);
+    bres_edge_xs(int(eng_.cur_x2), int(eng_.cur_y2), major2, sign_extend14(eng_.step_y2),
+                 sign_extend14(eng_.step_x2), sign_extend14(eng_.err2), dir2, xs2);
+    const int rows = std::min<int>(int(xs1.size()), int(xs2.size()));
+    const bool ymajor1 = (dir1 & 0x02) != 0;
+    const bool ymajor2 = (dir2 & 0x02) != 0;
+    const int patx = int(eng_.pat_x), paty = int(eng_.pat_y);
+    for (int i = 0; i < rows; ++i)
+        engine_fill_span(y0 + i, xs1[std::size_t(i)], xs2[std::size_t(i)], cmd, pattern, patx, paty);
+    eng_.cur_x = u16(xs1.empty() ? int(eng_.cur_x) : xs1.back() & 0x0FFF);
+    eng_.cur_y = u16((ymajor1 ? (y0 + ((dir1 & 4) ? major1 : -major1)) : y0) & 0x0FFF);
+    eng_.cur_x2 = u16(xs2.empty() ? int(eng_.cur_x2) : xs2.back() & 0x0FFF);
+    eng_.cur_y2 = u16((ymajor2 ? (y0 + ((dir2 & 4) ? major2 : -major2)) : y0) & 0x0FFF);
+}
+
 static constexpr int kDirX[8] = { 1, 1, 0, -1, -1, -1, 0, 1 };
 static constexpr int kDirY[8] = { 0, -1, -1, -1, 0, 1, 1, 1 };
 
@@ -1943,10 +2562,43 @@ void S3Trio64::engine_line(u16 cmd) {
     const int diag = sign_extend14(eng_.step_x);
     int err = sign_extend14(eng_.err);
     int x = int(eng_.cur_x), y = int(eng_.cur_y);
+
+    // Textured line: CMD.WAIT YES + PIX_CNTL.DT-EX-SRC = 10 selects the CPU
+    // mask bits.  The engine waits until the whole line's worth of transfer
+    // data has arrived (padding included, see Section 13.3.3.2).
+    const bool textured = (cmd & 0x0100) && ((eng_.pix_cntl >> 6) & 0x3) == 0x2;
+    std::vector<u8> mask;
+    if (textured) {
+        const unsigned bus = (cmd >> 9) & 0x3;
+        const unsigned unit = bus == 0 ? 1 : bus == 1 ? 2 : 4;
+        const u32 bits = u32(major);
+        const u32 cost = (bus == 3) ? (bits + 7) / 8
+                                    : ((bits + 8u * unit - 1u) / (8u * unit)) * unit;
+        if (eng_.stream.size() - eng_.stream_pos < cost) {
+            eng_.pending = true;
+            eng_.pending_cmd = cmd;
+            return;
+        }
+        mask.assign(eng_.stream.begin() + std::ptrdiff_t(eng_.stream_pos),
+                    eng_.stream.begin() + std::ptrdiff_t(eng_.stream_pos + cost));
+        eng_.stream_pos += cost;
+        if (!(cmd & 0x1000) && unit > 1) {
+            for (u32 i = 0; i + unit <= cost; i += unit)
+                std::reverse(mask.begin() + std::ptrdiff_t(i),
+                             mask.begin() + std::ptrdiff_t(i + unit));
+        }
+    }
+    auto mask_bit = [&](int i) -> bool {
+        const std::size_t byte = std::size_t(i) / 8u;
+        if (byte >= mask.size()) return true;
+        return ((mask[byte] >> (7u - (unsigned(i) & 7u))) & 1u) != 0;
+    };
+
     for (int i = 0; i < major; ++i) {
         if (draw && !(last_off && i == major - 1) && engine_clip(x, y)) {
+            const bool fg = textured ? mask_bit(i) : true;
             const u32 dst = engine_read_pixel(x, y, true);
-            engine_write_pixel(x, y, engine_apply_mix(dst, 0, true));
+            engine_write_pixel(x, y, engine_apply_mix(dst, 0, fg));
         }
         if (xmaj) {
             if (err > 0) { y += dy; err += diag; }
@@ -1960,6 +2612,7 @@ void S3Trio64::engine_line(u16 cmd) {
     }
     eng_.cur_x = u16(x & 0x0FFF);
     eng_.cur_y = u16(y & 0x0FFF);
+    if (textured) eng_.pending = false;
 }
 
 void S3Trio64::engine_line2(u16 cmd) {
@@ -1987,7 +2640,11 @@ void S3Trio64::engine_line2(u16 cmd) {
 void S3Trio64::engine_short_stroke(u16 vectors) {
     const bool draw_cmd = (eng_.cmd & 0x0010) != 0;
     const bool last_off = (eng_.cmd & 0x0004) != 0;
-    for (int half = 0; half < 2; ++half) {
+    // BYTE SWP selects which byte of the 16-bit register is the first vector:
+    // 1 = low byte first, 0 = high byte first (Section 18-15).
+    const int order[2] = { (eng_.cmd & 0x1000) ? 0 : 1, (eng_.cmd & 0x1000) ? 1 : 0 };
+    for (int k = 0; k < 2; ++k) {
+        const int half = order[k];
         const u8 v = u8(half ? (vectors >> 8) : (vectors & 0xFF));
         const int dir = (v >> 5) & 7;
         const bool draw = (v & 0x10) != 0;
@@ -2007,50 +2664,90 @@ void S3Trio64::engine_short_stroke(u16 vectors) {
 }
 
 void S3Trio64::engine_image_transfer(u16 cmd) {
+    update_timing();
     const u32 width = u32(eng_.maj) + 1u;
     const u32 height = u32(eng_.min) + 1u;
     if (!width || !height) { eng_.pending = false; return; }
-    const bool mono = (cmd & 0x0002) && ((eng_.pix_cntl >> 6) & 0x3) == 2;
-    const int bytespp = engine_bytes_per_pixel();
+    const unsigned bus = (cmd >> 9) & 0x3;
+    const unsigned unit = bus == 0 ? 1u : bus == 1 ? 2u : 4u;
+    const bool across = (cmd & 0x0002) && ((eng_.pix_cntl >> 6) & 0x3) == 0x2;
+    const unsigned bppbits = mode_.bpp == 4 ? 4u : mode_.bpp == 15 || mode_.bpp == 16 ? 16u
+                            : mode_.bpp == 24 ? 24u : mode_.bpp == 32 ? 32u : 8u;
+    const u32 line_bits = across ? width : width * bppbits;
+    const u32 line_bytes = (line_bits + 7u) / 8u;
+    const u32 line_cost = bus == 3 ? line_bytes
+                                   : ((line_bytes + unit - 1u) / unit) * unit;
     eng_.pending = true;
     eng_.pending_cmd = cmd;
+    const bool swap = (cmd & 0x1000) != 0;
     while (eng_.xfer_pos < width * height) {
-        const u32 px = eng_.xfer_pos % width;
-        const u32 py = eng_.xfer_pos / width;
-        const int x = int(eng_.cur_x) + int(px);
-        const int y = int(eng_.cur_y) + int(py);
-        u32 src = 0;
-        bool fg = true;
-        if (mono) {
-            bool bit = false;
-            if (!next_stream_bit(bit)) return;
-            fg = bit;
-            src = bit ? eng_.frgd : eng_.bkgd;
-        } else {
-            if (eng_.stream.size() - eng_.stream_pos < std::size_t(bytespp)) return;
-            for (int i = 0; i < bytespp; ++i)
-                src |= u32(next_stream_byte()) << (i * 8);
-            fg = engine_use_foreground(src);
+        if (eng_.stream.size() - eng_.stream_pos < line_cost) return; // wait for CPU
+        std::vector<u8> line(eng_.stream.begin() + std::ptrdiff_t(eng_.stream_pos),
+                             eng_.stream.begin() + std::ptrdiff_t(eng_.stream_pos + line_cost));
+        eng_.stream_pos += line_cost;
+        if (!swap && unit > 1) {
+            for (u32 i = 0; i + unit <= line_cost; i += unit)
+                std::reverse(line.begin() + std::ptrdiff_t(i),
+                             line.begin() + std::ptrdiff_t(i + unit));
         }
-        if (engine_clip(x, y)) {
-            const u32 dst = engine_read_pixel(x, y, true);
-            engine_write_pixel(x, y, engine_apply_mix(dst, src, fg));
+        const u32 row = eng_.xfer_pos / width;
+        for (u32 px = 0; px < width; ++px) {
+            const int x = int(eng_.cur_x) + int(px);
+            const int y = int(eng_.cur_y) + int(row);
+            u32 src = 0;
+            bool fg = true;
+            if (across) {
+                const std::size_t bit = std::size_t(px) / 8u;
+                const bool one = bit < line.size() &&
+                                 ((line[bit] >> (7u - (px & 7u))) & 1u) != 0;
+                fg = one;
+                src = one ? eng_.frgd : eng_.bkgd;
+            } else if (bppbits == 4) {
+                const u8 b = line[std::size_t(px) / 2u];
+                src = (px & 1u) ? u32(b & 0x0F) : u32(b >> 4);
+                fg = ((eng_.pix_cntl >> 6) & 0x3) == 0x3 ? engine_use_foreground(src) : true;
+            } else {
+                const u32 bytes = bppbits / 8u;
+                for (u32 i = 0; i < bytes && std::size_t(px) * bytes + i < line.size(); ++i)
+                    src |= u32(line[std::size_t(px) * bytes + i]) << (i * 8u);
+                fg = ((eng_.pix_cntl >> 6) & 0x3) == 0x3 ? engine_use_foreground(src) : true;
+            }
+            if (engine_clip(x, y)) {
+                const u32 dst = engine_read_pixel(x, y, true);
+                engine_write_pixel(x, y, engine_apply_mix(dst, src, fg));
+            }
         }
-        ++eng_.xfer_pos;
+        eng_.xfer_pos += width;
     }
     eng_.pending = false;
     eng_.xfer_pos = 0;
     eng_.bit_cnt = 0;
     eng_.bit_buf = 0;
+    // BUS SIZE 10 leaves the current position one pixel below the lower-left
+    // corner; BUS SIZE 11 ends one pixel right of the top-right corner.
+    const u32 x0 = eng_.cur_x, y0 = eng_.cur_y;
+    if (bus == 3) {
+        eng_.cur_x = u16((x0 + width) & 0x0FFF);
+        eng_.cur_y = u16(y0 & 0x0FFF);
+    } else {
+        eng_.cur_x = u16(x0 & 0x0FFF);
+        eng_.cur_y = u16((y0 + height) & 0x0FFF);
+    }
     if (eng_.stream_pos >= eng_.stream.size()) {
         eng_.stream.clear();
         eng_.stream_pos = 0;
     }
+    engine_interrupt(0x000A); // GE busy done + command FIFO empty
 }
 
 void S3Trio64::engine_continue(u16 cmd) {
     const unsigned type = ((cmd >> 13) & 0x7u) | (((cmd >> 11) & 1u) << 3);
-    if (type == 2) engine_image_transfer(cmd);
+    if (type == 1) {
+        engine_line(cmd);
+    } else if (type == 2) {
+        engine_image_transfer(cmd);
+    }
+    if (!eng_.pending) engine_interrupt(0x000A);
 }
 
 void S3Trio64::engine_feed_pixels(std::span<const u8> data) {
@@ -2068,6 +2765,7 @@ void S3Trio64::engine_feed_pixels(std::span<const u8> data) {
 void S3Trio64::engine_execute(u16 cmd) {
     PerfScope scope(PerfNode::S3);
     update_timing();
+    if (!enhanced_registers_enabled()) return; // CR40.0 gates the engine (18-1)
     if (eng_.pending) {
         // A new command aborts an unfinished CPU-data transfer.
         eng_.pending = false;
@@ -2080,15 +2778,23 @@ void S3Trio64::engine_execute(u16 cmd) {
     const unsigned type = ((cmd >> 13) & 0x7u) | (((cmd >> 11) & 1u) << 3);
     switch (type) {
     case 0:
+        // NOP: used to program short-stroke parameters without a pixel write.
         break;
     case 1:
         engine_line(cmd);
         break;
     case 2:
-    case 0xA: // CMD bit 11 is written as a don't-care by the datasheet's own
-              // image-transfer example (0x5571); decode both encodings.
         if (cmd & 0x0100) engine_image_transfer(cmd);
         else engine_fill_rect(cmd);
+        break;
+    case 3:
+        engine_polygon_fill(cmd);       // polygon fill solid
+        break;
+    case 4:
+        engine_trapezoid4(cmd);         // 4-point trapezoid fill solid
+        break;
+    case 5:
+        engine_trapezoid_bres(cmd);     // Bresenham parameter trapezoid solid
         break;
     case 6:
         engine_blit(cmd);
@@ -2097,11 +2803,21 @@ void S3Trio64::engine_execute(u16 cmd) {
         engine_pattern_fill(cmd);
         break;
     case 9:
-        engine_line2(cmd);
+        engine_line2(cmd);              // polyline / 2-point line
+        break;
+    case 0xB:
+        engine_polygon_fill(cmd);       // polygon fill pattern
+        break;
+    case 0xC:
+        engine_trapezoid4(cmd);         // 4-point trapezoid fill pattern
+        break;
+    case 0xD:
+        engine_trapezoid_bres(cmd);     // Bresenham trapezoid fill pattern
         break;
     default:
         break;
     }
+    if (!eng_.pending) engine_interrupt(0x000A); // GE idle + FIFO empty
 }
 
 void S3Trio64::engine_store(u16 base, u16 value) {
@@ -2109,8 +2825,9 @@ void S3Trio64::engine_store(u16 base, u16 value) {
     case 0x42E8:
         // SUBSYS_CNTL (datasheet 18-2): bits 3:0 clear the interrupt statuses,
         // bits 11:8 enable them, bits 15:14 are the GE reset control.
-        subsystem_status_ &= u8(~(value & 0x000F));
-        if (value & 0x4000) { // GE reset
+        subsystem_cntl_ = value;
+        subsystem_status_ = u16(subsystem_status_ & ~(value & 0x000Fu));
+        if (((value >> 14) & 0x03u) == 0x02u) { // GE-RST = 10: reset
             eng_.pending = false;
             eng_.xfer_pos = 0;
             eng_.stream.clear();
@@ -2118,6 +2835,7 @@ void S3Trio64::engine_store(u16 base, u16 value) {
             eng_.bit_cnt = 0;
             eng_.bit_buf = 0;
         }
+        update_irq();
         break;
     case 0x46E8:
         video_enable_ = u8(value);
@@ -2125,6 +2843,7 @@ void S3Trio64::engine_store(u16 base, u16 value) {
     case 0x4AE8:
         adv_func_ = value;
         update_mapping();
+        update_irq();
         dirty();
         break;
     case 0x82E8: eng_.cur_y = u16(value & 0x0FFF); break;
@@ -2175,7 +2894,7 @@ void S3Trio64::engine_store(u16 base, u16 value) {
         case 0xA: eng_.pix_cntl = u16(0xA000u | data); break;
         case 0xD: eng_.multi_misc2 = u16(0xD000u | data); break;
         case 0xE: eng_.multi_misc = u16(0xE000u | data); break;
-        case 0xF: eng_.read_sel = data; break;
+        case 0xF: eng_.read_sel = u16(data & 0x0F); break;
         default: break;
         }
         break;
@@ -2196,7 +2915,10 @@ void S3Trio64::engine_store(u16 base, u16 value) {
 }
 
 u32 S3Trio64::engine_read_port(u16 port, int width) const {
+    update_timing();
     const u16 base = u16(port & 0xFFFEu);
+    // Enhanced command registers are enabled by CR40.0.
+    if (base >= 0x8000 && !enhanced_registers_enabled()) return 0xFFFF;
     if (width == 4) {
         switch (base) {
         case 0xA2E8: return eng_.bkgd;
@@ -2207,12 +2929,16 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
         default: break;
         }
     }
+    // In 32bpp with 16-bit command registers, RSF selects which half of the
+    // 32-bit colour the word access touches and toggles afterwards (18-23).
+    const bool rsf_word = width == 2 && mode_.bpp == 32 && !(eng_.multi_misc & 0x200);
     u32 v = 0;
     switch (base) {
     case 0x42E8:
         // SUBSYS_STAT (datasheet 18-1): interrupt statuses in bits 3:0,
         // bit 7 = pixel length (0 = 4-bit, 1 = 8-bit).
-        v = (subsystem_status_ & 0x000Fu) | ((adv_func_ & 0x04) ? 0x0000u : 0x0080u);
+        v = (subsystem_status_ & 0x000Fu) |
+            (((crtc_[0x50] & 0x30u) == 0 && (adv_func_ & 0x04u) == 0) ? 0x0080u : 0x0000u);
         break;
     case 0x46E8: v = video_enable_; break;
     case 0x4AE8: v = adv_func_; break;
@@ -2229,37 +2955,56 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
     case 0x96E8: v = eng_.maj; break;
     case 0x96EA: v = eng_.maj2; break;
     case 0x9AE8:
-        v = 0x0400u | (eng_.pending ? 0x0200u : 0x0000u);
+        // GP_STAT: bit 10 = all FIFO slots empty, bit 9 = GE busy,
+        // bits 15-11/7-0 = FIFO slots available (0 = full complement).
+        v = eng_.pending ? 0x0200u : 0x0400u;
         break;
     case 0x9AEA: v = eng_.cmd2; break;
     case 0x9EE8: v = eng_.short_stroke; break;
-    case 0xA2E8: v = eng_.bkgd & 0xFFFFu; break;
+    case 0xA2E8:
+        if (rsf_word) { v = (eng_.bkgd >> (eng_.rsf ? 16 : 0)) & 0xFFFFu; eng_.rsf = !eng_.rsf; }
+        else v = eng_.bkgd & 0xFFFFu;
+        break;
     case 0xA2EA: v = (eng_.bkgd >> 16) & 0xFFFFu; break;
-    case 0xA6E8: v = eng_.frgd & 0xFFFFu; break;
+    case 0xA6E8:
+        if (rsf_word) { v = (eng_.frgd >> (eng_.rsf ? 16 : 0)) & 0xFFFFu; eng_.rsf = !eng_.rsf; }
+        else v = eng_.frgd & 0xFFFFu;
+        break;
     case 0xA6EA: v = (eng_.frgd >> 16) & 0xFFFFu; break;
-    case 0xAAE8: v = eng_.wrt_mask & 0xFFFFu; break;
+    case 0xAAE8:
+        if (rsf_word) { v = (eng_.wrt_mask >> (eng_.rsf ? 16 : 0)) & 0xFFFFu; eng_.rsf = !eng_.rsf; }
+        else v = eng_.wrt_mask & 0xFFFFu;
+        break;
     case 0xAAEA: v = (eng_.wrt_mask >> 16) & 0xFFFFu; break;
-    case 0xAEE8: v = eng_.rd_mask & 0xFFFFu; break;
+    case 0xAEE8:
+        if (rsf_word) { v = (eng_.rd_mask >> (eng_.rsf ? 16 : 0)) & 0xFFFFu; eng_.rsf = !eng_.rsf; }
+        else v = eng_.rd_mask & 0xFFFFu;
+        break;
     case 0xAEEA: v = (eng_.rd_mask >> 16) & 0xFFFFu; break;
-    case 0xB2E8: v = eng_.color_cmp & 0xFFFFu; break;
+    case 0xB2E8:
+        if (rsf_word) { v = (eng_.color_cmp >> (eng_.rsf ? 16 : 0)) & 0xFFFFu; eng_.rsf = !eng_.rsf; }
+        else v = eng_.color_cmp & 0xFFFFu;
+        break;
     case 0xB2EA: v = (eng_.color_cmp >> 16) & 0xFFFFu; break;
     case 0xB6E8: v = eng_.mix_bg; break;
     case 0xBAE8: v = eng_.mix_fg; break;
     case 0xBEE8: {
-        // Read-Register-Data (datasheet 18-19/18-24): the read index
-        // increments after every read; index 7 returns 9AE8 with bits 15:13
-        // forced 0.
-        const u16 sel = eng_.read_sel & 0x7u;
-        eng_.read_sel = u16((eng_.read_sel & ~0x7u) | ((sel + 1) & 0x7u));
+        // Read-Register-Data (datasheet 18-19/18-24): the read index is a
+        // 4-bit selector that auto-increments after every read.
+        const u16 sel = eng_.read_sel & 0x0Fu;
+        eng_.read_sel = (sel >= 0x0Au) ? 0 : u16(sel + 1);
         switch (sel) {
-        case 0: v = eng_.min; break;
-        case 1: v = eng_.clip_t; break;
-        case 2: v = eng_.clip_l; break;
-        case 3: v = eng_.clip_b; break;
-        case 4: v = eng_.clip_r; break;
-        case 5: v = eng_.pix_cntl; break;
-        case 6: v = eng_.multi_misc; break;
-        case 7: v = (0x0400u | (eng_.pending ? 0x0200u : 0)) & 0x1FFFu; break;
+        case 0x0: v = eng_.min; break;
+        case 0x1: v = eng_.clip_t; break;
+        case 0x2: v = eng_.clip_l; break;
+        case 0x3: v = eng_.clip_b; break;
+        case 0x4: v = eng_.clip_r; break;
+        case 0x5: v = eng_.pix_cntl; break;
+        case 0x6: v = eng_.multi_misc; break;
+        case 0x7: v = (eng_.pending ? 0x0200u : 0x0400u) & 0x1FFFu; break;
+        case 0x8: v = (subsystem_status_ & 0x000Fu) | 0x0000u; break;
+        case 0x9: v = video_enable_; break;
+        case 0xA: v = eng_.multi_misc2; break;
         default: v = 0; break;
         }
         break;
@@ -2277,8 +3022,17 @@ u32 S3Trio64::engine_read_port(u16 port, int width) const {
 }
 
 void S3Trio64::engine_write_port(u16 port, u32 value, int width) {
+    update_timing();
+    const u16 base = u16(port & 0xFFFEu);
+    if (base >= 0x8000 && !enhanced_registers_enabled()) return;
+    if (base == 0xE2E8) {
+        const u8 bytes[4] = { u8(value), u8(value >> 8), u8(value >> 16), u8(value >> 24) };
+        const int count = width == 4 ? 4 : (width == 2 ? 2 : 1);
+        engine_feed_pixels(std::span<const u8>(bytes, std::size_t(count)));
+        return;
+    }
     if (width == 4) {
-        switch (port & 0xFFFEu) {
+        switch (base) {
         case 0xA2E8: eng_.bkgd = value; return;
         case 0xA6E8: eng_.frgd = value; return;
         case 0xAAE8: eng_.wrt_mask = value; return;
@@ -2287,12 +3041,24 @@ void S3Trio64::engine_write_port(u16 port, u32 value, int width) {
         default: break;
         }
     }
-    const u16 base = u16(port & 0xFFFEu);
-    if (base == 0xE2E8) {
-        const u8 bytes[4] = { u8(value), u8(value >> 8), u8(value >> 16), u8(value >> 24) };
-        const int count = width == 4 ? 4 : (width == 2 ? 2 : 1);
-        engine_feed_pixels(std::span<const u8>(bytes, std::size_t(count)));
-        return;
+    // 32bpp with 16-bit command registers: RSF selects the half of the
+    // 32-bit colour register and toggles after each word access.
+    if (width == 2 && mode_.bpp == 32 && !(eng_.multi_misc & 0x200)) {
+        u32* reg = nullptr;
+        switch (base) {
+        case 0xA2E8: reg = &eng_.bkgd; break;
+        case 0xA6E8: reg = &eng_.frgd; break;
+        case 0xAAE8: reg = &eng_.wrt_mask; break;
+        case 0xAEE8: reg = &eng_.rd_mask; break;
+        case 0xB2E8: reg = &eng_.color_cmp; break;
+        default: break;
+        }
+        if (reg) {
+            const unsigned shift = eng_.rsf ? 16 : 0;
+            *reg = (*reg & ~(0xFFFFu << shift)) | ((value & 0xFFFFu) << shift);
+            eng_.rsf = !eng_.rsf;
+            return;
+        }
     }
     if (width >= 2) {
         engine_store(base, u16(value & 0xFFFFu));
@@ -2311,6 +3077,8 @@ void S3Trio64::engine_write_port(u16 port, u32 value, int width) {
 }
 
 void S3Trio64::engine_write_packed(u32 off, u32 value, int width) {
+    if (!enhanced_registers_enabled()) return;
+    update_timing();
     const u32 base = off & ~3u;
     if (width == 4) {
         const u16 lo = u16(value), hi = u16(value >> 16);
@@ -2334,7 +3102,7 @@ void S3Trio64::engine_write_packed(u32 off, u32 value, int width) {
             return;
         case 0x8144:
             eng_.multi_misc = u16(0xE000u | (lo & 0x0FFF));
-            eng_.read_sel = u16(hi & 7);
+            eng_.read_sel = u16(hi & 0x0F);
             return;
         case 0x8148:
             eng_.min = u16(lo & 0x0FFF);
@@ -2401,7 +3169,7 @@ void S3Trio64::engine_write_packed(u32 off, u32 value, int width) {
     case 0x8140: eng_.pix_cntl = u16(0xA000u | (v & 0x0FFF)); break;
     case 0x8142: eng_.multi_misc2 = u16(0xD000u | (v & 0x0FFF)); break;
     case 0x8144: eng_.multi_misc = u16(0xE000u | (v & 0x0FFF)); break;
-    case 0x8146: eng_.read_sel = u16(v & 7); break;
+    case 0x8146: eng_.read_sel = u16(v & 0x0F); break;
     case 0x8148: eng_.min = u16(v & 0x0FFF); break;
     case 0x814A: eng_.maj = u16(v & 0x0FFF); break;
     case 0x814C: eng_.maj2 = u16(v & 0x0FFF); break;
@@ -2412,6 +3180,7 @@ void S3Trio64::engine_write_packed(u32 off, u32 value, int width) {
 }
 
 u32 S3Trio64::engine_read_packed(u32 off, int width) const {
+    if (!enhanced_registers_enabled()) return 0xFFFF;
     const u32 base = off & ~3u;
     u16 lo = 0, hi = 0;
     switch (base) {

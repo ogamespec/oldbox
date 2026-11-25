@@ -2,15 +2,27 @@
 #include "pci.hpp"
 #include "video.hpp"
 
+#include <functional>
+
 namespace oldbox {
 
-// S3 Trio64 (86C764) PCI VGA controller.  Implements the standard VGA
-// register/planar data path, S3 extended CRTC/sequencer registers, the
-// linear frame buffer and the packed MMIO 2D engine used by the Trio64 BIOS.
+// S3 Trio64 (86C764) PCI VGA controller.
+//
+// Implements the complete register set documented in the S3 Trio32/Trio64
+// data book (March 1995): standard VGA, the S3 VGA/system-control/system-
+// extension registers, the dual PLL clock synthesizer, the RAMDAC colour
+// modes, the DPMS/feature-connector/genlock/shared-frame-buffer control bits,
+// the interrupt subsystem and the enhanced 2D graphics engine (line, polyline,
+// rectangle, polygon and trapezoid fills, image transfers, BitBLT and PatBLT).
 class S3Trio64 : public PciDevice, public IoDevice, public VideoSource {
     friend class StateCodec;
 public:
-    S3Trio64(Bus& bus, u32 vram_mb, u32 cpu_mhz);
+    // Routes the chip's INTA# pin to an interrupt controller.  The line number
+    // comes from PCI configuration register 3Ch (assigned by POST); a level of
+    // `true` asserts the line.
+    using IrqFn = std::function<void(int, bool)>;
+
+    S3Trio64(Bus& bus, u32 vram_mb, u32 cpu_mhz, IrqFn irq = {});
     ~S3Trio64() override;
 
     void reset();
@@ -24,6 +36,33 @@ public:
     [[nodiscard]] u64 frames() const { return frames_; }
     [[nodiscard]] int width() const { update_timing(); return width_; }
     [[nodiscard]] int height() const { update_timing(); return height_; }
+
+    void set_irq(IrqFn irq) { irq_ = std::move(irq); update_irq(); }
+
+    // Clock synthesis (Section 9): DCLK/MCLK derived from SR10-SR15 and the
+    // Miscellaneous Output register clock select.
+    [[nodiscard]] double dclk_hz() const;
+    [[nodiscard]] double mclk_hz() const;
+    // CRT refresh rate implied by the CRTC timing and DCLK.
+    [[nodiscard]] double refresh_hz() const;
+    [[nodiscard]] u64 frame_cycles() const { update_timing(); return cycles_per_frame_; }
+
+    // Board-level inputs that have no device behind them in the emulator.  The
+    // SENSE comparator (Section 8.4) is exposed through Input Status 0 bit 4;
+    // the General Input Port (Section 10.3) is read at 3C8h when CR55.2 = 1.
+    void set_monitor_sense(bool present) { monitor_sense_ = present; }
+    [[nodiscard]] bool monitor_sense() const { return monitor_sense_; }
+    void set_general_input(u8 value) { general_input_ = value; }
+
+    // Feature control / DPMS / genlock / shared frame buffer observability.
+    [[nodiscard]] bool feature_connector_enabled() const { return (seq_[0x0D] & 0x01) != 0; }
+    [[nodiscard]] bool dpms_hsync_off() const { return ((seq_[0x0D] >> 4) & 0x03) == 0x01; }
+    [[nodiscard]] bool dpms_vsync_off() const { return ((seq_[0x0D] >> 6) & 0x03) == 0x01; }
+    [[nodiscard]] bool dpms_off() const { return dpms_hsync_off() && dpms_vsync_off(); }
+    [[nodiscard]] bool genlock_enabled() const { return (crtc_[0x56] & 0x01) != 0; }
+    [[nodiscard]] bool shared_frame_buffer_enabled() const { return (crtc_[0x50] & 0x04) != 0; }
+    [[nodiscard]] u8 general_output() const { return crtc_[0x5C]; }
+    [[nodiscard]] bool enhanced_registers_enabled() const { return (crtc_[0x40] & 0x01) != 0; }
 
     void on_bar_written(u8 index, u32 value, u32 size) override;
     void pci_reset() override { reset(); }
@@ -79,16 +118,21 @@ private:
     // Everything needed to draw one pixel, derived from the VGA register set.
     struct ModeInfo {
         bool text = true;
-        bool planar = false;      // four-plane layout: 4bpp or unchained 8bpp (Mode X)
+        bool planar = false;      // four-plane layout (4bpp or Mode X 8bpp)
+        bool packed4 = false;     // enhanced 4bpp: two nibbles per byte
+        bool mode12 = false;      // Trio32 packed 24bpp, one byte per DCLK
         bool chain4 = false;
         bool odd_even = true;
         bool enhanced = false;    // S3 enhanced (non-planar) mode functions
+        bool interlace = false;   // CR42.5: two fields per frame
         int bpp = 4;              // 4, 8, 15, 16, 24, 32
+        int bytes_pp = 1;         // display memory bytes per pixel
         u32 pitch = 160;          // bytes between two scan lines
         u32 pitch_reg = 80;       // CR13 plus extension bits
         u32 start = 0;            // byte offset of the display start
         u32 addr_limit = 0x10000; // display address counter wrap (64K/128K/...)
-        int pan = 0;              // AR13 horizontal pixel panning (0..7/8)
+        int pan = 0;              // AR13 horizontal pixel panning (0..8)
+        int vpan = 0;             // CR8 preset row scan (0..31)
         int hde = 80;             // character clocks of active display
         int vde = 400;            // scan lines of active display
         int char_w = 9;
@@ -125,12 +169,13 @@ private:
         mutable u16 read_sel = 0; // auto-increments on BEE8 reads
         u16 pat_x = 0, pat_y = 0;
         u8 be_index = 0;
-        // CPU->engine pixel / mask stream for image transfers and textured lines.
+        mutable bool rsf = false; // MULT_MISC.RSF: upper word of 32-bit colours        // CPU->engine pixel / mask stream for image transfers and textured lines.
         std::vector<u8> stream;
         mutable std::size_t stream_pos = 0;
         bool pending = false;
         u16 pending_cmd = 0;
         u32 xfer_pos = 0;
+        // Per-line transfer decoder state (bus width / byte swap / padding).
         mutable u8 bit_buf = 0;
         mutable int bit_cnt = 0;
     };
@@ -162,6 +207,7 @@ private:
     u8 gfx_index_ = 0;
     u8 attr_index_ = 0;
     bool attr_flip_flop_ = false;
+    bool attr_enable_ = false;  // 3C0h write bit 5 / CR24 bit 5
     bool dac_read_mode_ = false;
     bool crtc_protect_ = false;
     mutable u8 hwcur_stack_ = 0;
@@ -181,7 +227,16 @@ private:
     bool exseq_unlocked_ = false;   // SR8 key -> SR9-SR18
     u16 adv_func_ = 0;              // 4AE8 advanced function control
     u16 subsystem_status_ = 0x0000; // 42E8: SUBSYS_STAT, power-on default 0000h
+    u16 subsystem_cntl_ = 0x0000;   // 42E8: SUBSYS_CNTL interrupt enables
     u8 video_enable_ = 0;           // 46E8
+    bool vga_vint_pending_ = false; // VGA-mode vertical retrace interrupt FF
+    bool vga_vint_armed_ = true;    // CR11 bit 4 (interrupt can be latched)
+
+    // Board inputs and interrupt plumbing.
+    IrqFn irq_;
+    bool irq_asserted_ = false;
+    u8 general_input_ = 0xFF;
+    bool monitor_sense_ = false;
 
     // PCI window bookkeeping.
     u32 linear_map_base_ = 0, mmio_map_base_ = 0;
@@ -213,14 +268,40 @@ private:
     mutable ModeInfo mode_;
     mutable bool dirty_ = true;
     u32 status_reads_ = 0;
-    u64 cycles_per_frame_ = 1;
+    mutable u64 cycles_per_frame_ = 1;
+    mutable double dclk_hz_ = 0.0;
+    mutable double mclk_hz_ = 0.0;
 
+    // ---- clocks / timing / interrupts ----
+    void update_clock() const;
+    [[nodiscard]] u32 h_total_chars() const;
+    [[nodiscard]] u32 v_total_lines() const;
+    [[nodiscard]] bool raster_display_active() const;
+    [[nodiscard]] bool raster_vsync_active() const;
+    [[nodiscard]] bool raster_hsync_active() const;
+    void update_irq();
+    void set_irq_level(bool level);
+    void raise_vretrace();
+    void engine_interrupt(u16 status_bits);
+    [[nodiscard]] u8 vga_status1() const;
+    [[nodiscard]] u8 vga_status0() const;
+
+    // ---- PCI / linear window ----
+    void sync_bar_from_crtc();
+    [[nodiscard]] u32 law_size() const;
+    [[nodiscard]] u32 linear_page_offset() const;
+
+    // ---- VGA/S3 register file ----
     void engine_reset();
     void engine_write_port(u16 port, u32 value, int width);
     [[nodiscard]] u32 engine_read_port(u16 port, int width) const;
     void engine_write_packed(u32 off, u32 value, int width);
     [[nodiscard]] u32 engine_read_packed(u32 off, int width) const;
     [[nodiscard]] static bool is_packed_mmio(u32 off);
+    [[nodiscard]] bool pio_engine_blocked() const;
+    [[nodiscard]] bool mmio_window_active() const;
+
+    // ---- graphics engine ----
     void engine_feed_pixels(std::span<const u8> data);
     void engine_continue(u16 cmd);
     void engine_execute(u16 cmd);
@@ -230,7 +311,11 @@ private:
     void engine_line(u16 cmd);
     void engine_line2(u16 cmd);
     void engine_short_stroke(u16 vectors);
+    void engine_polygon_fill(u16 cmd);
+    void engine_trapezoid4(u16 cmd);
+    void engine_trapezoid_bres(u16 cmd);
     void engine_image_transfer(u16 cmd);
+    void engine_fill_span(int y, int x0, int x1, u16 cmd, bool pattern, int pat_x, int pat_y);
     [[nodiscard]] u32 engine_read_pixel(int x, int y, bool dst = false) const;
     void engine_write_pixel(int x, int y, u32 value);
     [[nodiscard]] u32 engine_apply_mix(u32 dst, u32 src, bool foreground) const;
@@ -241,7 +326,6 @@ private:
     [[nodiscard]] u32 engine_src_base() const;
     [[nodiscard]] u32 engine_dst_base() const;
     [[nodiscard]] int engine_bytes_per_pixel() const;
-    [[nodiscard]] u8 next_stream_byte();
     [[nodiscard]] bool next_stream_bit(bool& bit) const;
     void engine_store(u16 port, u16 value);
 
@@ -275,15 +359,13 @@ private:
     [[nodiscard]] u32 sample_rgb(int x, int y) const;
     [[nodiscard]] u32 text_rgb(int x, int y) const;
     [[nodiscard]] u32 palette_rgb(u8 index) const;
-    [[nodiscard]] u32 attr_palette_index(u8 color) const;
+    [[nodiscard]] u8 attr_palette_index(u8 color) const;
     [[nodiscard]] u32 native_pixel(int x, int y) const;
     void native_write(int x, int y, u32 value);
     [[nodiscard]] u8 font_byte(u8 ch, int row, bool font_b) const;
     [[nodiscard]] u8 builtin_font_byte(u8 ch, int row) const;
     void legacy_write(u32 off, u8 value);
     [[nodiscard]] u8 legacy_read(u32 off) const;
-    void load_latches(u32 off, bool chain);
-    [[nodiscard]] u8 raster_byte(u8 data, u8 latch) const;
     void dirty() { dirty_ = true; }
 };
 
