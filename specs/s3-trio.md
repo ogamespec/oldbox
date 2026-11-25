@@ -133,6 +133,8 @@ Additional information may be obtained from:
 
 S3 Incorporated, Literature Department, 2770 San Tomas Expressway, Santa Clara, CA 95051-0968.
 
+Telephone: 408-980-5400, Fax: 408-980-5444
+
 ## Section 1: Introduction
 
 **High-Performance Integrated DRAM-based GUI Accelerator Product Family**
@@ -2543,7 +2545,7 @@ ES:[ALT_CURXY] <= |     x1     |     y1     |   ; set starting coordinates
                  31           15           0
 ES:[ALT_STEP] <= |     x2     |     y2     |   ; set destination coordinates
 
-ES:[CMD] <= 001010000010001b    ; draw 2-point line (bits 15-13, 11), draw (bit 4)
+ES:[CMD] <= 0010100000010001b    ; draw 2-point line (bits 15-13, 11), draw (bit 4)
 ```
 
 Repeat the last two instructions to draw additional polyline segments.
@@ -2582,27 +2584,27 @@ ES:[ALT_CURXY2] <= |     x1     |     y1     |   ; set starting coordinates for 
 
                   31           15           0
 ES:[ALT_STEP2] <= |     x3     |     y3     |   ; set destination coordinates for segment 1 of right side
-ES:[CMD]<= 01100000000010001b   ; draw polygon (bits 15-13, 11), draw (bit 4) - Step 1
+ES:[CMD]<= 0110000000010001b   ; draw polygon (bits 15-13, 11), draw (bit 4) - Step 1
                   31           15           0
 ES:[ALT_STEP2] <= |     x4     |     y4     |   ; set destination coordinates for segment 2 of right side
-ES:[CMD]<= 01100000000010001b   ; draw polygon (bits 15-13, 11) - Step 2
+ES:[CMD]<= 0110000000010001b   ; draw polygon (bits 15-13, 11) - Step 2
                  31           15           0
 ES:[ALT_STEP] <= |     x5     |     y5     |   ; set destination coordinates for segment 2 of right side
 ```
 
 ```
-ES:[CMD]<= 01100000000010001b   ; draw polygon (bits 15-13, 11) - Step 3
+ES:[CMD]<= 0110000000010001b   ; draw polygon (bits 15-13, 11) - Step 3
                  31           15           0
 ES:[ALT_STEP] <= |     x6     |     y6     |   ; set destination coordinates for segment 3 of left side
 
-ES:[CMD]<= 01100000000010001b   ; draw polygon (bits 15-13, 11) - Step 4
+ES:[CMD]<= 0110000000010001b   ; draw polygon (bits 15-13, 11) - Step 4
 
                  31           15           0
 ES:[ALT_STEP] <= |     x7     |     y7     |   ; set destination coordinates for segment 4 of left side
 
                   31           15           0
 ES:[ALT_STEP2] <= |     x8     |     y8     |   ; set destination coordinates for segment 3 of right side
-ES:[CMD]<= 01100000000010001b   ; draw polygon (bits 15-13, 11) - Step 4
+ES:[CMD]<= 0110000000010001b   ; draw polygon (bits 15-13, 11) - Step 4
 ```
 
 The generation of this polygon is summarized in the following table.
@@ -2630,7 +2632,7 @@ The generation of this polygon is summarized in the following table.
 
 3. Segment 3 of the left side ends at the same vertical position as segment 2 of the right side (Step 4). When this occurs, both edges of the polygon must be extended by the next command. This is shown in Step 5.
 
-4. For the step that closes the polygon (Step 5 in the example), the destination y positions must be be the same (y7 = y8 in the example) for the two edge segments making the closure. As with the top edge, the x positions may be different (forming a horizontal bottom edge) or the same (a point).
+4. For the step that closes the polygon (Step 5 in the example), the destination y positions must be the same (y7 = y8 in the example) for the two edge segments making the closure. As with the top edge, the x positions may be different (forming a horizontal bottom edge) or the same (a point).
 
 5. When two lines join or cross at an angle other than 90 degrees, the common pixel will not be drawn.
 
@@ -2652,7 +2654,7 @@ Draw Operation: (Color Pattern)
 Same as for polygon fill solid except
 
 ```
-ES:[CMD]<= 01101000000010001b   ; draw polygon with pattern fill (bits 15-13, 11)
+ES:[CMD]<= 0110100000010001b   ; draw polygon with pattern fill (bits 15-13, 11)
 ```
 
 is substituted for each of the command lines.
@@ -2675,7 +2677,7 @@ Draw Operation: (Mono Pattern)
 Same as for polygon fill solid except
 
 ```
-ES:[CMD]<= 01101000000010011b   ; draw polygon with pattern fill (bits 15-13, 11),
+ES:[CMD]<= 0110100000010011b   ; draw polygon with pattern fill (bits 15-13, 11),
                                 ; multi-pixel (bit 1)
 ```
 
@@ -2733,7 +2735,7 @@ Draw Operation: (Color Pattern)
 Same as for 4-point trapezoid fill solid except the command is as follows:
 
 ```
-ES:[CMD]<= 01101000000010001b   ; draw trapezoid with pattern fill (bits 15-13, 11)
+ES:[CMD]<= 0110100000010001b   ; draw trapezoid with pattern fill (bits 15-13, 11)
 ```
 
 Setup: (Mono Pattern)
@@ -2754,7 +2756,7 @@ Draw Operation: (Mono Pattern)
 Same as for 4-point trapezoid fill solid except the command is as follows:
 
 ```
-ES:[CMD]<= 10010000000010011b   ; draw trapezoid with pattern fill (bits 15-13, 11), multi-pixel (bit 1)
+ES:[CMD]<= 1000100000010011b   ; draw trapezoid with pattern fill (bits 15-13, 11), multi-pixel (bit 1)
 ```
 
 #### 13.3.3.16 Bresenham Parameter Trapezoid Fill Solid (Trio64 Only)
@@ -2802,8 +2804,8 @@ If the X drawing direction is positive then
 else if the X drawing direction is negative
       ES[ERR_TERM] <= 2 * MIN - MAX - 1       ; error term for edge 2
 
-ES:[CMD2]<= 00000000DD00000b    ; edge 2 drawing direction (bits 7-5)
-ES:[CMD]<= 10100001DD10001b     ; draw Bresenham parameter trapezoid (bits 15-13, 11)
+ES:[CMD2]<= 000000001DD00000b    ; edge 2 drawing direction (bits 7-5)
+ES:[CMD]<= 101000001DD10001b     ; draw Bresenham parameter trapezoid (bits 15-13, 11)
                                 ; edge 1 drawing direction (bits 7-5), draw (bit 4)
 ```
 
@@ -3013,7 +3015,7 @@ This register indicates the status of the VGA adapter.
 
 | Bits | Field |
 | --- | --- |
-| 7 | CRT INTP |
+| 7 | CRT INTPE |
 | 6–5 | Reserved = 0 |
 | 4 | MON SENS |
 | 3–0 | Reserved = 0 |
@@ -3027,7 +3029,7 @@ This register indicates the status of the VGA adapter.
 
 **Bits 6–5 — Reserved = 0**
 
-**Bit 7 — CRT INTP — CRT Interrupt Status**
+**Bit 7 — CRT INTPE — CRT Interrupt Status**
 
 0 = Vertical retrace interrupt cleared
 1 = Vertical retrace interrupt pending
@@ -3143,9 +3145,9 @@ This register controls the operation mode of dot clock and character clock.
 | 3 | DCK 1/2 |
 | 2 | SHF LD |
 | 1 | Reserved = 0 |
-| 0 | BDC |
+| 0 | 8DC |
 
-**Bit 0 — BDC — 8 Dot Clock Select**
+**Bit 0 — 8DC — 8 Dot Clock Select**
 
 0 = Character clocks 9 dots wide are generated
 1 = Character clocks 8 dots wide are generated
@@ -3200,6 +3202,8 @@ This register selects write protection or write permission for CPU write access 
 | Bits | Field |
 | --- | --- |
 | 7–6 | Reserved = 0 |
+| 5, 3–2 | SLA |
+| 4, 1–0 | SLB |
 
 In text modes, bit 3 of the attribute byte normally turns the foreground intensity on or off. This bit can be redefined to be a switch between two character sets. The switch is enabled when there is a difference between the value of character font select A and character font select B bits. Memory Mode (SR4) register bit 1 = 1 (extended memory) enables all bits of this function; otherwise character fonts 0 and 4 are available. 256 KBytes of video memory support 8 character sets. This register is reset to 0 asynchronously during a system reset.
 
@@ -3258,6 +3262,10 @@ This bit affects only CPU write data accesses into video memory. Bit 3 of this r
 
 | A1 | A0 | Plane Selected |
 | --- | --- | --- |
+| 0 | 0 | 0 |
+| 0 | 1 | 1 |
+| 1 | 0 | 2 |
+| 1 | 1 | 3 |
 
 **Bits 7–4 — Reserved = 0**
 
@@ -3363,12 +3371,12 @@ In addition, bits 7-4 of this register must be programmed to 0111b and bits 7-4 
 
 **Bits 7–4 — ALT COLOR MODE — Color Mode for feature connector input**
 
-0000 = Mode 0: 8-bit color, 1 pixel/DCLK
-0001 = Mode 8: 8-bit color, 2 pixels/DCLK
-0011 = Mode 9: 15-bit color, 1 pixel/DCLK
-0101 = Mode 10: 16-bit color, 1 pixel/DCLK
+0000 = Mode 0: 8-bit color, 1 pixel/VCLK
+0001 = Mode 8: 8-bit color, 2 pixels/VCLK
+0011 = Mode 9: 15-bit color, 1 pixel/VCLK
+0101 = Mode 10: 16-bit color, 1 pixel/VCLK
 0111 = Mode 12: 640x480x24-bit color (packed), 1 pixel/3 DCLKs (Trio32 only)
-1101 = Mode 13: 24-bit color, 1 pixel/DCLK
+1101 = Mode 13: 24-bit color, 1 pixel/VCLK
 
 All other mode values are reserved. Setting mode 0001 (clock doubled mode) also requires that either bit 4 or bit 6 of SR15 be set to 1 and that bit 7 of SR18 be set to 1.
 
@@ -3430,7 +3438,7 @@ These bits contain the binary equivalent of the integer (1, 2, 4, 8) range value
 
 **Bit 7 — Reserved**
 
-#### CLK Value High Register (SR11)
+#### MCLK Value High Register (SR11)
 
 | Access | Address |
 | --- | --- |
@@ -3574,9 +3582,9 @@ An external DCLK is only used for S3 test purposes.
 | 3 | VCLK OUT |
 | 2 | MCLK OUT |
 | 1 | DFRQ EN |
-| 0 | MFRO EN |
+| 0 | MFRQ EN |
 
-**Bit 0 — MFRO EN — Enable new MCLK frequency load**
+**Bit 0 — MFRQ EN — Enable new MCLK frequency load**
 
 0 = Register bit clear
 1 = Load new MCLK frequency
@@ -3614,7 +3622,7 @@ Either this bit or bit 6 of this register must be set to 1 for clock doubled RAM
 0 = Clock loading is controlled by bits 0 and 1 of this register
 1 = Load MCLK and DCLK PLL values immediately
 
-To produce an immediate MCLK and DCLK load, program this bit to 1 and then to 0. Bits 3-2 of 3C2H must also then be programmed to 11b to load the DCLK values if they are not already programmed to this value. This register must never be left set to
+To produce an immediate MCLK and DCLK load, program this bit to 1 and then to 0. Bits 3-2 of 3C2H must also then be programmed to 11b to load the DCLK values if they are not already programmed to this value. This register must never be left set to 1.
 
 **Bit 6 — DCLK INV — Invert DCLK**
 
@@ -4239,7 +4247,7 @@ This register specifies the scan line count value when the vertical blank period
 
 Value = least significant 8 bits of the scan line counter value at which vertical blanking ends. To obtain this value, add the desired width of the vertical blanking pulse in scan lines to [(value in the Start Vertical Blank register)-1], also in scan lines. The 8 least significant bits of this sum are programmed into this field. This allows a maximum vertical blanking pulse of 63 scan line units.
 
-#### CRTC Mode Control Register (CRT_MO) (CR17)
+#### CRTC Mode Control Register (CRT_MD) (CR17)
 
 | Access | Address |
 | --- | --- |
@@ -5044,7 +5052,7 @@ This register allows software to identify whether a Trio32 or Trio64 is present.
 
 | Access | Address |
 | --- | --- |
-| Read Only | 375H, Index 2FH |
+| Read Only | 3?5H, Index 2FH |
 | Power-On Default | See description. |
 
 | Bits | Field |
@@ -5057,7 +5065,7 @@ This register allows software to identify whether a Trio32 or Trio64 is present.
 
 | Access | Address |
 | --- | --- |
-| Read Only | 375H, Index 30H |
+| Read Only | 3?5H, Index 30H |
 | Power-On Default | E1H |
 
 When the software detects E1H in the upper nibble of this register, it should then use CR2D, CR2E and CR2F for chip ID information.
@@ -5072,7 +5080,7 @@ When the software detects E1H in the upper nibble of this register, it should th
 
 | Access | Address |
 | --- | --- |
-| Read/Write | 375H, Index 31H |
+| Read/Write | 3?5H, Index 31H |
 | Power-On Default | 00H |
 
 | Bits | Field |
@@ -5706,7 +5714,7 @@ See bits 7–6 below.
 
 **Bits 5–4 — PXL-LNGH — Pixel Length Select**
 
-00 = 1 byte (Default). This corresponds to a pixel length of 4 or 8 bits/pixel in bit 7 of the Subsystem Status register (42EBH)
+00 = 1 byte (Default). This corresponds to a pixel length of 4 or 8 bits/pixel in bit 7 of the Subsystem Status register (42E8H)
 01 = 2 bytes. 16 bits/pixel
 10 = Reserved
 11 = 4 bytes. 32 bits/pixel
@@ -5717,7 +5725,9 @@ These bits select the pixel length for Enhanced mode command execution through t
 
 Bit 0 of this register is the most significant bit of this definition.
 
+000 = 1024 (or 2048 if bit 1 of CR31 = 1) (Default)
 001 = 640
+010 = 800 (or 1600x1200x4 if bit 2 of 4AE8H = 1)
 011 = 1280
 100 = 1152
 101 = Reserved
@@ -5860,7 +5870,7 @@ This bit select the type of decoding used for the 64x64x2 storage array of the h
 | --- | --- |
 | 7–5 | Reserved |
 | 4 | PRST ODDF |
-| 3 | ESYN RN |
+| 3 | ESYN R/V |
 | 2 | DIS VSYN |
 | 1 | DIS HSYN |
 | 0 | RMT ON |
@@ -5880,7 +5890,7 @@ This bit select the type of decoding used for the 64x64x2 storage array of the h
 0 = VSYNC output buffer tri-stated on
 1 = VSYNC output buffer tri-stated off
 
-**Bit 3 — ESYN RN — External Sync Vertical Counter Reset Select**
+**Bit 3 — ESYN R/V — External Sync Vertical Counter Reset Select**
 
 0 = Horizontal/Vertical counter reset sync (Default)
 1 = Vertical counter-only reset sync with genlocking
@@ -6093,7 +6103,7 @@ This specifies the number of DCLKs to delay the resetting of the character clock
 
 **Bit 2 — ENB 3C3 — Enable 3C3H for Video Subsystem Setup**
 
-0 = 46EBH is the address for video subsystem setup
+0 = 46E8H is the address for video subsystem setup
 1 = 3C3H is the address for video subsystem setup
 
 This bit allows the CPU to initialize a second video card.
@@ -7564,46 +7574,46 @@ Within each table, registers are listed in order of increasing addresses/indices
 | --- | --- | --- | --- | --- | --- |
 | **General or External Registers** |  |  |  |  |  |
 | 3C2 |  |  |  | **Miscellaneous Output** | 14-1 |
-|  |  | 0 | R/W | Color emulation. Address based at 3Dx |  |
-|  |  | 1 | R/W | Enable CPU access of video memory |  |
-|  |  | 3–2 | R/W | Video DCLK select |  |
-|  |  | 4 | R/W | Reserved |  |
-|  |  | 5 | R/W | Select the high 64K page of memory |  |
-|  |  | 6 | R/W | Make HSYNC an active low signal |  |
-|  |  | 7 | R/W | Make VSYNC an active low signal |  |
+|  |  | 0 | W | Color emulation. Address based at 3Dx |  |
+|  |  | 1 | W | Enable CPU access of video memory |  |
+|  |  | 3–2 | W | Video DCLK select |  |
+|  |  | 4 | W | Reserved |  |
+|  |  | 5 | W | Select the high 64K page of memory |  |
+|  |  | 6 | W | Make HSYNC an active low signal |  |
+|  |  | 7 | W | Make VSYNC an active low signal |  |
 | 3CC |  |  |  | **Miscellaneous Output** | 14-1 |
-|  |  | 0 | R/W | Color emulation. Address based at 3Dx |  |
-|  |  | 1 | R/W | Enable CPU access of video memory |  |
-|  |  | 3–2 | R/W | Video DCLK select |  |
-|  |  | 4 | R/W | Reserved |  |
-|  |  | 5 | R/W | Select the high 64K page of memory |  |
-|  |  | 6 | R/W | Make HSYNC an active low signal |  |
-|  |  | 7 | R/W | Make VSYNC an active low signal |  |
+|  |  | 0 | R | Color emulation. Address based at 3Dx |  |
+|  |  | 1 | R | Enable CPU access of video memory |  |
+|  |  | 3–2 | R | Video DCLK select |  |
+|  |  | 4 | R | Reserved |  |
+|  |  | 5 | R | Select the high 64K page of memory |  |
+|  |  | 6 | R | Make HSYNC an active low signal |  |
+|  |  | 7 | R | Make VSYNC an active low signal |  |
 | 3?A |  |  |  | **Feature Control** | 14-2 |
-|  |  | 2–0 | R/W | Reserved |  |
-|  |  | 3 | R/W | VSYNC is ORed with the internal display enable signal |  |
-|  |  | 7–4 | R/W | Reserved |  |
+|  |  | 2–0 | W | Reserved |  |
+|  |  | 3 | W | VSYNC is ORed with the internal display enable signal |  |
+|  |  | 7–4 | W | Reserved |  |
 | 3CA |  |  |  | **Feature Control** | 14-2 |
-|  |  | 2–0 | R/W | Reserved |  |
-|  |  | 3 | R/W | VSYNC is ORed with the internal display enable signal |  |
-|  |  | 7–4 | R/W | Reserved |  |
+|  |  | 2–0 | R | Reserved |  |
+|  |  | 3 | R | VSYNC is ORed with the internal display enable signal |  |
+|  |  | 7–4 | R | Reserved |  |
 | 3C2 |  |  |  | **Input Status 0** | 14-3 |
-|  |  | 3–0 | R/W | Reserved |  |
-|  |  | 4 | R/W | The internal SENSE signal is a logical 1 |  |
-|  |  | 6–5 | R/W | Reserved |  |
-|  |  | 7 | R/W | Vertical retrace interrupt to the CPU is pending |  |
+|  |  | 3–0 | R | Reserved |  |
+|  |  | 4 | R | The internal SENSE signal is a logical 1 |  |
+|  |  | 6–5 | R | Reserved |  |
+|  |  | 7 | R | Vertical retrace interrupt to the CPU is pending |  |
 
 **Table A-1. VGA Registers (Continued)**
 
 | Address | Index | Bit(s) | R/W | Register Name / Bit Description | Page |
 | --- | --- | --- | --- | --- | --- |
 | 3?A |  |  |  | **Input Status 1** | 14-3 |
-|  |  | 0 | R/W | The display is not in active display mode |  |
-|  |  | 1 | R/W | Reserved |  |
-|  |  | 2 | R/W | Reserved = 1 |  |
-|  |  | 3 | R/W | Vertical retrace period is active |  |
-|  |  | 5–4 | R/W | Feedback of two color outputs for test purposes |  |
-|  |  | 7–6 | R/W | Reserved |  |
+|  |  | 0 | R | The display is not in active display mode |  |
+|  |  | 1 | R | Reserved |  |
+|  |  | 2 | R | Reserved = 1 |  |
+|  |  | 3 | R | Vertical retrace period is active |  |
+|  |  | 5–4 | R | Feedback of two color outputs for test purposes |  |
+|  |  | 7–6 | R | Reserved |  |
 | **Sequencer Registers** |  |  |  |  |  |
 | 3C4 |  |  |  | **Sequencer Index** | 14-4 |
 |  |  | 4–0 | R/W | Index to the sequencer register to be accessed |  |
@@ -7681,11 +7691,11 @@ Within each table, registers are listed in order of increasing addresses/indices
 | 3C5 | 14 |  |  | **CLKSYN Control 1 (SR14)** | 14-14 |
 |  |  | 0 | R/W | DCLK PLL powered down (test only) |  |
 |  |  | 1 | R/W | MCLK PLL powered down (test only) |  |
-|  |  | 2 | R/W | Test MCLK (test only) |  |
-|  |  | 3 | R/W | Clear clock synthesizer counters (test only) |  |
-|  |  | 4 | R/W | Pin 146 tri-stated |  |
-|  |  | 5 | R/W | MCLK is input on pin 146 (test only) |  |
-|  |  | 6 | R/W | DCLK is input on pin 156 (test only) |  |
+|  |  | 3 | R/W | Test MCLK (test only) |  |
+|  |  | 4 | R/W | Clear clock synthesizer counters (test only) |  |
+|  |  | 5 | R/W | Pin 146 tri-stated |  |
+|  |  | 6 | R/W | MCLK is input on pin 146 (test only) |  |
+|  |  | 7 | R/W | DCLK is input on pin 156 (test only) |  |
 | 3C5 | 15 |  |  | **CLKSYN Control 2 (SR15)** | 14-15 |
 |  |  | 0 | R/W | Load new MCLK frequency |  |
 |  |  | 1 | R/W | Load new DCLK frequency |  |
@@ -7813,11 +7823,11 @@ Within each table, registers are listed in order of increasing addresses/indices
 | 3?5 | 18 |  |  | **Line Compare (CR18)** | 14-32 |
 |  |  | 7–0 | R/W | Line at which memory address counter cleared to 0 |  |
 | 3?5 | 22 |  |  | **CPU latch Data (CR22)** | 14-32 |
-|  |  | 7–0 | R/W | Value in the CPU latch in the graphics controller |  |
+|  |  | 7–0 | R | Value in the CPU latch in the graphics controller |  |
 | 3?5 | 24,26 |  |  | **Attribute Controller Flag/Index** | 14-33 |
-|  |  | 5–0 | R/W | Value of the attribute controller index data at 3C0H |  |
-|  |  | 6 | R/W | Reserved |  |
-|  |  | 7 | R/W | State of inverted internal address flip-flop |  |
+|  |  | 5–0 | R | Value of the attribute controller index data at 3C0H |  |
+|  |  | 6 | R | Reserved |  |
+|  |  | 7 | R | State of inverted internal address flip-flop |  |
 | **Graphics Controller Registers** |  |  |  |  |  |
 | 3CE |  |  |  | **Graphics Controller Index** | 14-34 |
 |  |  | 3–0 | R/W | Index to the graphics controller register to be accessed |  |
@@ -7853,7 +7863,7 @@ Within each table, registers are listed in order of increasing addresses/indices
 |  |  | 5 | R/W | Select odd/even shift mode |  |
 |  |  | 6 | R/W | Select 256 color shift mode |  |
 |  |  | 7 | R/W | Reserved |  |
-| 3CF | 06 |  |  | **Memory Mode Control (GR6)** | 14-39 |
+| 3CF | 06 |  |  | **Memory Map Mode Control (GR6)** | 14-39 |
 |  |  | 0 | R/W | Select graphics mode memory addressing |  |
 |  |  | 1 | R/W | Chain odd/even planes |  |
 |  |  | 3–2 | R/W | Select memory mapping |  |
@@ -7868,12 +7878,12 @@ Within each table, registers are listed in order of increasing addresses/indices
 |  |  | 4–0 | R/W | Index to the attribute controller register to be accessed |  |
 |  |  | 5 | R/W | Enable video display |  |
 |  |  | 7–6 | R/W | Reserved |  |
-| 3C10 |  |  |  | **Attribute Controller Data** | 14-42 |
+| 3C1/0 |  |  |  | **Attribute Controller Data** | 14-42 |
 |  |  | 7–0 | R/W | Data to or from the attribute controller register accessed |  |
-| 3C10 | 00-0F |  |  | **Palette Register (AR0-ARF)** | 14-42 |
+| 3C1/0 | 00-0F |  |  | **Palette Register (AR0-ARF)** | 14-42 |
 |  |  | 5–0 | R/W | Color value |  |
 |  |  | 7–6 | R/W | Reserved |  |
-| 3C10 | 10 |  |  | **Attribute Mode Control (AR10)** | 14-43 |
+| 3C1/0 | 10 |  |  | **Attribute Mode Control (AR10)** | 14-43 |
 |  |  | 0 | R/W | Select graphics mode |  |
 |  |  | 1 | R/W | Select monochrome display |  |
 |  |  | 2 | R/W | Enable line graphics characters |  |
@@ -7881,22 +7891,22 @@ Within each table, registers are listed in order of increasing addresses/indices
 |  |  | 4 | R/W | Reserved |  |
 |  |  | 5 | R/W | Enable top panning |  |
 |  |  | 6 | R/W | Select 256 color mode |  |
-|  |  | 7 | R/W | Bits 5–4 of video output come from AR14 1-0 |  |
-| 3C10 | 11 |  |  | **Border Color (AR11)** | 14-44 |
+|  |  | 7 | R/W | Bits 5–4 of video output come from AR14_1-0 |  |
+| 3C1/0 | 11 |  |  | **Border Color (AR11)** | 14-44 |
 |  |  | 7–0 | R/W | Border color value |  |
 
 **Table A-1. VGA Registers (Continued)**
 
 | Address | Index | Bit(s) | R/W | Register Name / Bit Description | Page |
 | --- | --- | --- | --- | --- | --- |
-| 3C10 | 12 |  |  | **Color Plane Enable (AR12)** | 14-44 |
+| 3C1/0 | 12 |  |  | **Color Plane Enable (AR12)** | 14-44 |
 |  |  | 3–0 | R/W | Display plane enable |  |
 |  |  | 5–4 | R/W | Select inputs to bits 5–4 of 3?AH |  |
 |  |  | 7–6 | R/W | Reserved |  |
-| 3C10 | 13 |  |  | **Horizontal Pixel Panning (AR13)** | 14-45 |
+| 3C1/0 | 13 |  |  | **Horizontal Pixel Panning (AR13)** | 14-45 |
 |  |  | 3–0 | R/W | Number of pixels to shift the display to the left |  |
 |  |  | 7–4 | R/W | Reserved |  |
-| 3C10 | 14 |  |  | **Pixel Padding (AR14)** | 14-46 |
+| 3C1/0 | 14 |  |  | **Pixel Padding (AR14)** | 14-46 |
 |  |  | 1–0 | R/W | Bits 5–4 of the video output if AR10 7 = 1 |  |
 |  |  | 3–2 | R/W | Bits 7–6 of the video output |  |
 |  |  | 7–4 | R/W | Reserved |  |
@@ -7905,18 +7915,18 @@ Within each table, registers are listed in order of increasing addresses/indices
 |  |  | 0 | R/W | Chip responds to commands, addresses and data |  |
 |  |  | 7–1 | R/W | Reserved |  |
 | 46E8 |  |  |  | **Video Subsystem Enable** | 14-48 |
-|  |  | 2–0 | R/W | Reserved |  |
-|  |  | 3 | R/W | Enable video I/O and memory address decoding |  |
-|  |  | 4 | R/W | Put chip in setup mode |  |
-|  |  | 7–5 | R/W | Reserved |  |
+|  |  | 2–0 | W | Reserved |  |
+|  |  | 3 | W | Enable video I/O and memory address decoding |  |
+|  |  | 4 | W | Put chip in setup mode |  |
+|  |  | 7–5 | W | Reserved |  |
 | **RAMDAC Registers** |  |  |  |  |  |
 | 3C6 |  |  |  | **DAC Mask** | 14-49 |
 |  |  | 7–0 | R/W | Pixel read mask |  |
 | 3C7 |  |  |  | **DAC Read Index** | 14-49 |
-|  |  | 7–0 | R/W | Index to palette register to be read |  |
+|  |  | 7–0 | W | Index to palette register to be read |  |
 | 3C7 |  |  |  | **DAC Status** | 14-50 |
-|  |  | 1–0 | R/W | Shows whether previous DAC cycle was a read or write |  |
-|  |  | 7–2 | R/W | Reserved |  |
+|  |  | 1–0 | R | Shows whether previous DAC cycle was a read or write |  |
+|  |  | 7–2 | R | Reserved |  |
 | 3C8 |  |  |  | **DAC Write Index** | 14-50 |
 |  |  | 7–0 | R/W | Index to palette register to be written or General Input Port read data |  |
 | 3C9 |  |  |  | **DAC Data** | 14-51 |
@@ -7931,14 +7941,14 @@ The Trio32/Trio64 has additional registers described in Table A-2 that are locat
 | Address | Index | Bit(s) | R/W | Register Name / Bit Description | Page |
 | --- | --- | --- | --- | --- | --- |
 | 3?5 | 2D |  |  | **Device ID High (CR2D)** | 15-1 |
-|  |  | 7–0 | R/W | High byte of device ID (B8H) |  |
+|  |  | 7–0 | R | High byte of device ID (88H) |  |
 | 3?5 | 2E |  |  | **Device ID Low (CR2E)** | 15-1 |
-|  |  | 7–0 | R/W | Low byte of device ID (10H-Trio32, 11H-Trio64) |  |
+|  |  | 7–0 | R | Low byte of device ID (10H-Trio32, 11H-Trio64) |  |
 | 3?5 | 2F |  |  | **Revision (CR2F)** | 15-2 |
-|  |  | 7–0 | R/W | Revision level |  |
+|  |  | 7–0 | R | Revision level |  |
 | 3?5 | 30 |  |  | **Chip ID/Rev (CR30)** | 15-2 |
-|  |  | 3–0 | R/W | Chip Identification - EH identifies Trio32/Trio64 |  |
-|  |  | 7–4 | R/W | Chip revision status (stepping) - See CR2F |  |
+|  |  | 3–0 | R | Chip Identification - EH identifies Trio32/Trio64 |  |
+|  |  | 7–4 | R | Chip revision status (stepping) - See CR2F |  |
 | 3?5 | 31 |  |  | **Memory Configuration (CR31)** | 15-2 |
 |  |  | 0 | R/W | Enable base address offset (CR6A 6-0) |  |
 |  |  | 1 | R/W | Enable two-page screen image |  |
@@ -7980,7 +7990,7 @@ The Trio32/Trio64 has additional registers described in Table A-2 that are locat
 |  |  | 5 | R/W | Lock Horizontal Timing registers |  |
 |  |  | 7–6 | R/W | Reserved |  |
 | 3?5 | 36 |  |  | **Configuration 1 (CR36)** | 15-7 |
-|  |  | 1–0 | R/W | Select System bus (PCI or VL-Bus) |  |
+|  |  | 1–0 | R | Select System bus (PCI or VL-Bus) |  |
 |  |  | 3–2 | R/W | Select Memory page mode (fast page or EDO) |  |
 |  |  | 4 | R/W | Enable BIOS ROM accesses (VL-Bus) |  |
 |  |  | 7–5 | R/W | Define display memory size |  |
@@ -8328,7 +8338,7 @@ This section lists the registers which support the Trio32/Trio64 enhanced drawin
 |  | 6–5 | R/W | Select color source |  |
 |  | 15–7 | R/W | Reserved |  |
 | BEE8 |  |  | **Read Register Data** | 18-19 |
-|  | 15–0 | R | Data from register selected by bits 2-0 of BEE8H |  |
+|  | 15–0 | R | Data from register selected by bits 2-0 of BEE8H_E |  |
 | BEE8 |  |  | **Minor Axis Pixel Count** | 18-20 |
 |  | 11–0 | W | Rectangle height (pixels - 1) |  |
 |  | 15–12 | W | Reserved |  |
