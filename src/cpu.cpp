@@ -199,8 +199,9 @@ void Cpu::dcache_begin() {
     // separates aliased code (same bytes executed in different
     // modes/segments).  No multiply: the lookup runs on every instruction.
     const u32 idx = (phys ^ (phys >> dcache_shift_) ^ ctx) & (dcache_slots_ - 1);
+    const u64 key2 = (u64(cs.limit) << 32) | ctx;
     const DecodeCacheEntry& e = dcache_[idx];
-    if (e.phys0 == phys && e.ctx == ctx && e.cs_limit == cs.limit && e.len != 0 &&
+    if (e.phys0 == phys && e.key2 == key2 && e.len != 0 &&
         e.gen0 == page_gen(e.phys0) &&
         (e.page_count == 1 || e.gen1 == page_gen(e.phys1))) {
         // Cache hit: execute from the recorded decode, pointing straight
@@ -224,8 +225,7 @@ void Cpu::dcache_begin() {
     pending_.phys0 = phys;
     pending_.gen0 = page_gen(phys);
     pending_.page_count = 1;
-    pending_.ctx = ctx;
-    pending_.cs_limit = cs.limit;
+    pending_.key2 = (u64(cs.limit) << 32) | ctx;
     dcache_record_ = true;
     ++dcache_misses_;
     if (dbg_prof_) { dbg_decode_ticks_ += dbg_ticks() - t0; ++dbg_decode_count_; }
@@ -237,7 +237,7 @@ void Cpu::dcache_commit() {
     if (dbg_prof_) t0 = dbg_ticks();
     dcache_record_ = false;
     if (pending_.len == 0) return;
-    const u32 idx = (pending_.phys0 ^ (pending_.phys0 >> dcache_shift_) ^ pending_.ctx) & (dcache_slots_ - 1);
+    const u32 idx = (pending_.phys0 ^ (pending_.phys0 >> dcache_shift_) ^ u32(pending_.key2)) & (dcache_slots_ - 1);
     pending_.lean_tag = dcache_lean_tag(pending_);
     dcache_[idx] = pending_;
     if (dbg_prof_) dbg_decode_ticks_ += dbg_ticks() - t0;
@@ -273,6 +273,27 @@ u8 Cpu::dcache_lean_tag(const DecodeCacheEntry& e) const {
     if (op == 0xf6 || op == 0xf7) return 24;                     // group 3
     if (op == 0xfe) return 25;                                   // group 4
     if (op == 0xff) return 26;                                   // group 5
+    if (op == 0xc0 || op == 0xc1 || op == 0xd0 || op == 0xd1 || op == 0xd2 || op == 0xd3) return 27; // shifts
+    if (op == 0x8f) return 28;                                   // pop r/m
+    if (op == 0xc6) return 29;                                   // mov r/m8,imm8
+    if (op == 0xc2) return 30;                                   // ret imm16
+    if (op == 0xce) return 31;                                   // into
+    if (op == 0xc9) return 32;                                   // leave
+    if (op == 0xc8) return 33;                                   // enter
+    if (op == 0xd4) return 34;                                   // aam
+    if (op == 0xd5) return 35;                                   // aad
+    if (op == 0x86 || op == 0x87) return 36;                     // xchg r/m
+    if (op == 0x0f) {
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const bool locked = (e.prefixes & 0x10) != 0;
+        if (op2 >= 0x40 && op2 <= 0x4f && !locked) return 40;    // cmovcc
+        if (op2 >= 0x80 && op2 <= 0x8f && !locked) return 41;    // jcc rel
+        if (op2 >= 0x90 && op2 <= 0x9f && !locked) return 42;    // setcc
+        if (op2 == 0xaf && !locked) return 43;                   // imul r,r/m
+        if ((op2 == 0xb6 || op2 == 0xb7 || op2 == 0xbe || op2 == 0xbf) && !locked) return 44; // movzx/movsx
+        if (op2 >= 0xc8 && op2 <= 0xcf && !locked) return 45;    // bswap
+        if ((op2 == 0xb0 || op2 == 0xb1)) return 46;             // cmpxchg (lock allowed)
+    }
     return 0;
 }
 
@@ -289,7 +310,8 @@ void Cpu::dcache_lean_execute() {
     cycles_ += 2;
     if (lock_) {
         const bool alu_memory = op <= 0x31 && (op & 7) <= 1;
-        if (!alu_memory && op != 0x80 && op != 0x81 && op != 0x82 && op != 0x83)
+        if (!alu_memory && op != 0x80 && op != 0x81 && op != 0x82 && op != 0x83 &&
+            op != 0x86 && op != 0x87 && op != 0xf6 && op != 0xf7 && op != 0xfe && op != 0xff)
             raise_exception(6);
     }
     auto ea = [&](const ModRmTemplate& t) -> u32 {
@@ -617,6 +639,231 @@ void Cpu::dcache_lean_execute() {
         }
         case 6: push_value(rm_read(t, size), size); break;
         default: raise_exception(6); break;
+        }
+        break;
+    }
+    case 27: { // group 2 shifts (C0/C1/D0-D3)
+        const int size = (op == 0xc0 || op == 0xd0 || op == 0xd2) ? 1 : opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        u32 count;
+        if (op == 0xc0 || op == 0xc1) count = e.bytes[e.len - 1] & 0x1f;
+        else if (op == 0xd0 || op == 0xd1) count = 1;
+        else count = state_.gpr[1] & 0x1f;
+        const u32 value = rm_read(t, size);
+        const u32 mask = size_mask(size);
+        const u32 msb = sign_bit(size);
+        u32 r = value & mask;
+        if (count != 0) {
+            switch (t.reg_field) {
+            case 0: { // ROL
+                for (u32 i = 0; i < count; ++i) { r = ((r << 1) | (r >> (size * 8 - 1))) & mask; }
+                set_flag(CF, (r & 1) != 0);
+                if (count == 1) set_flag(OF, ((r & msb) != 0) != get_flag(CF));
+                break;
+            }
+            case 1: { // ROR
+                for (u32 i = 0; i < count; ++i) { r = ((r >> 1) | ((r & 1) << (size * 8 - 1))) & mask; }
+                set_flag(CF, (r & msb) != 0);
+                if (count == 1) set_flag(OF, ((r & msb) != 0) != ((r & (msb >> 1)) != 0));
+                break;
+            }
+            case 2: { // RCL
+                bool cf = get_flag(CF);
+                for (u32 i = 0; i < count; ++i) { const bool nb = (r & msb) != 0; r = ((r << 1) & mask) | (cf ? 1u : 0u); cf = nb; }
+                set_flag(CF, cf);
+                if (count == 1) set_flag(OF, ((r & msb) != 0) != get_flag(CF));
+                break;
+            }
+            case 3: { // RCR
+                bool cf = get_flag(CF);
+                for (u32 i = 0; i < count; ++i) { const bool nb = (r & 1) != 0; r = (r >> 1) | (cf ? msb : 0u); cf = nb; }
+                set_flag(CF, cf);
+                if (count == 1) set_flag(OF, ((r & msb) != 0) != ((r & (msb >> 1)) != 0));
+                break;
+            }
+            case 4: case 6: { // SHL/SAL
+                for (u32 i = 0; i < count; ++i) { const bool nb = (r & msb) != 0; r = (r << 1) & mask; set_flag(CF, nb); }
+                set_flag(OF, ((r & msb) != 0) != get_flag(CF));
+                set_szp(r, size);
+                break;
+            }
+            case 5: { // SHR
+                for (u32 i = 0; i < count; ++i) { const bool nb = (r & 1) != 0; r >>= 1; set_flag(CF, nb); }
+                set_flag(OF, (value & msb) != 0);
+                set_szp(r, size);
+                break;
+            }
+            default: { // SAR
+                const u32 sgn = value & msb;
+                for (u32 i = 0; i < count; ++i) { const bool nb = (r & 1) != 0; r = (r >> 1) | sgn; set_flag(CF, nb); }
+                set_flag(OF, false);
+                set_szp(r, size);
+                break;
+            }
+            }
+        }
+        rm_write(t, r, size);
+        break;
+    }
+    case 28: { // pop r/m (0x8F)
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        if (t.is_register) {
+            write_reg_index(t.rm, pop_value(size), size);
+        } else {
+            // Compute the effective address before the pop (the decode phase
+            // did the same), then apply the ESP increment for ESP-based
+            // addresses.
+            const u32 old_esp = state_.gpr[4];
+            const u32 off_pre = ea(t);
+            const u32 v = pop_value(size);
+            u32 off = off_pre;
+            if (t.esp_base) off += state_.gpr[4] - old_esp;
+            write_mem(off, v, size, SegReg(t.segment));
+        }
+        break;
+    }
+    case 29: { // mov r/m8,imm8 (0xC6)
+        const ModRmTemplate& t = e.mrm[0];
+        if (t.reg_field != 0) raise_exception(6);
+        rm_write(t, e.bytes[e.len - 1], 1);
+        break;
+    }
+    case 30: { // ret imm16 (0xC2)
+        const u16 n = le16(e.bytes + e.len - 2);
+        const u32 target = read_mem(stack_pointer(), opsize(), SegReg::ss);
+        trace_control("RET", target, stack_pointer());
+        state_.eip = pop_value(opsize());
+        set_stack_pointer(stack_pointer() + n);
+        break;
+    }
+    case 31: // into (0xCE)
+        if (get_flag(OF)) { trace_control("INTO", 0, stack_pointer()); software_interrupt(4); }
+        break;
+    case 32: { // leave (0xC9)
+        set_stack_pointer(state_.gpr[5]);
+        if (opsize() == 4) state_.gpr[5] = pop_value(4);
+        else set_reg16(5, u16(pop_value(2)));
+        break;
+    }
+    case 33: { // enter (0xC8)
+        const u16 alloc = le16(e.bytes + e.len - 3);
+        const u8 level = u8(e.bytes[e.len - 1] & 31);
+        const int opsz = opsize();
+        push_value(state_.gpr[5], opsz);
+        const u32 frame = stack_pointer();
+        if (level > 0) {
+            for (int i = 1; i < int(level); ++i) {
+                const u32 bp = stack32() ? state_.gpr[5] : (state_.gpr[5] & 0xffffu);
+                const u32 off = (bp - u32(i * opsz)) & (stack32() ? 0xffffffffu : 0xffffu);
+                push_value(read_mem(off, opsz, SegReg::ss), opsz);
+            }
+            push_value(frame, opsz);
+        }
+        if (stack32()) state_.gpr[5] = frame;
+        else set_reg16(5, u16(frame));
+        set_stack_pointer(stack_pointer() - alloc);
+        break;
+    }
+    case 34: { // aam (0xD4)
+        const u8 base = e.bytes[e.len - 1];
+        if (base == 0) raise_exception(0);
+        const u8 al = reg8(0);
+        const u16 quot = u16(al) / base;
+        const u16 rem = u16(al) % base;
+        set_reg16(0, u16(quot * 0x100 + rem));
+        set_szp(u8(rem), 1);
+        break;
+    }
+    case 35: { // aad (0xD5)
+        const u8 base = e.bytes[e.len - 1];
+        const u16 ax = reg16(0);
+        set_reg16(0, u16(((ax >> 8) * base + (ax & 0xff)) & 0xff));
+        set_szp(reg8(0), 1);
+        break;
+    }
+    case 36: { // xchg r/m (0x86/0x87)
+        const int size = (op & 1) ? opsize() : 1;
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 a = rm_read(t, size), b = read_reg_index(t.reg_field, size);
+        rm_write(t, b, size);
+        write_reg_index(t.reg_field, a, size);
+        break;
+    }
+    case 40: { // 0F cmovcc
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 value = rm_read(t, size);
+        if (cond(op2 & 15)) write_reg_index(t.reg_field, value, size);
+        break;
+    }
+    case 41: { // 0F jcc rel
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const i32 rel = opsize32_ ? i32(le32(e.bytes + e.len - 4)) : i32(i16(le16(e.bytes + e.len - 2)));
+        if (cond(op2 & 15)) state_.eip = near_ip(state_.eip + u32(rel));
+        break;
+    }
+    case 42: { // 0F setcc
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const ModRmTemplate& t = e.mrm[0];
+        rm_write(t, cond(op2 & 15) ? 1u : 0u, 1);
+        break;
+    }
+    case 43: { // 0F imul r,r/m
+        cycles_ += 2;
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 a = read_reg_index(t.reg_field, size);
+        const u32 b = rm_read(t, size);
+        const i64 r = size == 2 ? i64(i16(u16(a))) * i64(i16(u16(b))) : i64(i32(a)) * i64(i32(b));
+        const u32 out = u32(r);
+        write_reg_index(t.reg_field, out, size);
+        const bool ov = size == 2 ? (r != i64(i16(u16(out)))) : (r != i64(i32(out)));
+        set_flag(CF, ov); set_flag(OF, ov);
+        break;
+    }
+    case 44: { // 0F movzx/movsx
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int src_size = (op2 & 1) ? 2 : 1;
+        const int dst_size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        u32 v = rm_read(t, src_size);
+        if (op2 >= 0xbe) {
+            if (src_size == 1) v = u32(i32(i8(u8(v))));
+            else v = u32(i32(i16(u16(v))));
+        }
+        write_reg_index(t.reg_field, v, dst_size);
+        break;
+    }
+    case 45: { // 0F bswap
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int r = op2 & 7;
+        u32 v = state_.gpr[r];
+        v = ((v & 0x000000ffu) << 24) | ((v & 0x0000ff00u) << 8) |
+            ((v & 0x00ff0000u) >> 8) | ((v & 0xff000000u) >> 24);
+        state_.gpr[r] = v;
+        break;
+    }
+    case 46: { // 0F cmpxchg
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int size = (op2 & 1) ? opsize() : 1;
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 dst = rm_read(t, size);
+        const u32 acc = size == 1 ? reg8(0) : (size == 2 ? reg16(0) : state_.gpr[0]);
+        set_sub(acc, dst, acc - dst, size);
+        if (acc == dst) {
+            set_flag(ZF, true);
+            rm_write(t, read_reg_index(t.reg_field, size), size);
+        } else {
+            set_flag(ZF, false);
+            if (size == 1) set_reg8(0, u8(dst)); else if (size == 2) set_reg16(0, u16(dst)); else state_.gpr[0] = dst;
         }
         break;
     }

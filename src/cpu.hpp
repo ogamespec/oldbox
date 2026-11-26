@@ -167,8 +167,7 @@ struct ModRmTemplate {
 struct DecodeCacheEntry {
     u32 phys0 = 0, phys1 = 0; // physical page(s) spanned by the instruction
     u32 gen0 = 0, gen1 = 0;   // page generations at decode time
-    u32 ctx = 0;              // context tag: mode | SMM | CS.D | CS selector
-    u32 cs_limit = 0;         // CS limit the fetch limit checks ran against
+    u64 key2 = 0;             // packed (cs_limit << 32) | ctx: one compare
     u8 len = 0;               // instruction length in bytes
     u8 opcode_ofs = 0;        // byte offset of the first opcode byte
     u8 opcode = 0;
