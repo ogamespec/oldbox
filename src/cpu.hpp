@@ -6,22 +6,9 @@
 #include <functional>
 #include <deque>
 
-#ifdef _MSC_VER
-#include <intrin.h>
-#endif
-
 namespace oldbox {
 
 class Cpu;
-
-// TEMP-BENCH: timestamp source for the decode-cache profiling counters.
-[[nodiscard]] inline u64 dbg_ticks() {
-#ifdef _MSC_VER
-    return __rdtsc();
-#else
-    return 0;
-#endif
-}
 
 enum : u32 {
     CF = 1u << 0,  PF = 1u << 2,  AF = 1u << 4,  ZF = 1u << 6,
@@ -312,18 +299,6 @@ public:
     [[nodiscard]] u64 dcache_hits() const { return dcache_hits_; }
     [[nodiscard]] u64 dcache_misses() const { return dcache_misses_; }
     [[nodiscard]] u32 dcache_slots() const { return dcache_slots_; }
-    // TEMP-BENCH: hit/decode machinery tick counters.
-    [[nodiscard]] u64 dbg_hit_ticks() const { return dbg_hit_ticks_; }
-    [[nodiscard]] u64 dbg_decode_ticks() const { return dbg_decode_ticks_; }
-    [[nodiscard]] u64 dbg_lookup_ticks() const { return dbg_lookup_ticks_; }
-    [[nodiscard]] u64 dbg_dec_mach_ticks() const { return dbg_dec_mach_ticks_; }
-    [[nodiscard]] u64 dbg_lean_pro_ticks() const { return dbg_lean_pro_ticks_; }
-    [[nodiscard]] u64 dbg_hit_count() const { return dbg_hit_count_; }
-    [[nodiscard]] u64 dbg_decode_count() const { return dbg_decode_count_; }
-    [[nodiscard]] u64 dbg_wrap_hit() const { return dbg_wrap_hit_; }
-    [[nodiscard]] u64 dbg_wrap_dec() const { return dbg_wrap_dec_; }
-    void dbg_reset_ticks() { dbg_hit_ticks_ = dbg_decode_ticks_ = dbg_lookup_ticks_ = dbg_dec_mach_ticks_ = dbg_lean_pro_ticks_ = dbg_hit_count_ = dbg_decode_count_ = dbg_wrap_hit_ = dbg_wrap_dec_ = 0; }
-    void dbg_profile(bool v) { dbg_prof_ = v; }
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
     void deliver_interrupt(int vector, bool software = false);
@@ -749,17 +724,6 @@ private:
     void dcache_commit();
     void dcache_lean_execute(); // hot-subset execution straight from the entry
     [[nodiscard]] u8 dcache_lean_tag(const DecodeCacheEntry& e) const;
-    // TEMP-BENCH: per-operation tick accounting (hit machinery vs decode
-    // machinery), enabled only while dbg_prof_ is set so the hot path pays a
-    // single predictable branch per counted block.  Read by the benchmarks.
-    u64 dbg_hit_ticks_ = 0, dbg_decode_ticks_ = 0;
-    u64 dbg_lookup_ticks_ = 0; // hit branch of dcache_begin only
-    u64 dbg_dec_mach_ticks_ = 0; // decode machinery blocks (fetch/parse/record/commit)
-    u64 dbg_lean_pro_ticks_ = 0; // lean dispatch prologue
-    u64 dbg_hit_count_ = 0, dbg_decode_count_ = 0;
-    u64 dbg_t0_ = 0, dbg_decode_t0_ = 0;
-    u64 dbg_wrap_hit_ = 0, dbg_wrap_dec_ = 0; // profiling wrap counts for calibration
-    bool dbg_prof_ = false;
     [[nodiscard]] u32 dcache_context() const;
     [[nodiscard]] u32 page_gen(u32 phys) const;
     void bump_page_gen(u32 phys);

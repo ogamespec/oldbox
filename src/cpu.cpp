@@ -180,8 +180,6 @@ void Cpu::dcache_begin() {
     dcache_mrm_idx_ = 0;
     dcache_imm_idx_ = 0;
     if (!dcache_lookup_enabled_) return; // disabled: exact pre-cache execution path
-    u64 t0 = 0;
-    if (dbg_prof_) t0 = dbg_ticks();
     const auto& cs = state_.seg[unsigned(SegReg::cs)];
     dcache_mask_ = state_.mode == CpuMode::protected_mode ? 0xffffffffu : 0xffffu;
     const u32 off = state_.eip & dcache_mask_;
@@ -217,7 +215,6 @@ void Cpu::dcache_begin() {
         state_.eip = (state_.eip & ~dcache_mask_) | ((off + e.len) & dcache_mask_);
         if (e.opcode_ofs) cycles_ += 2 * int(e.opcode_ofs);
         ++dcache_hits_;
-        if (dbg_prof_) { dbg_lookup_ticks_ += dbg_ticks() - t0; dbg_t0_ = t0; ++dbg_hit_count_; ++dbg_wrap_hit_; }
         return;
     }
     // Cache miss: decode and record this execution.
@@ -228,25 +225,15 @@ void Cpu::dcache_begin() {
     pending_.key2 = (u64(cs.limit) << 32) | ctx;
     dcache_record_ = true;
     ++dcache_misses_;
-    if (dbg_prof_) { dbg_decode_t0_ = t0; dbg_dec_mach_ticks_ += dbg_ticks() - t0; ++dbg_decode_count_; ++dbg_wrap_dec_; }
 }
 
 void Cpu::dcache_commit() {
     if (!dcache_record_) return;
-    u64 t_mach = 0;
-    if (dbg_prof_) t_mach = dbg_ticks();
     dcache_record_ = false;
     if (pending_.len == 0) return;
     const u32 idx = (pending_.phys0 ^ (pending_.phys0 >> dcache_shift_) ^ u32(pending_.key2)) & (dcache_slots_ - 1);
     pending_.lean_tag = dcache_lean_tag(pending_);
     dcache_[idx] = pending_;
-    if (dbg_prof_) {
-        // Decode-op span: one rdtsc pair per instruction covering the whole
-        // fetch+parse+record+commit cycle from the miss in dcache_begin.
-        dbg_decode_ticks_ += dbg_ticks() - dbg_decode_t0_;
-        dbg_dec_mach_ticks_ += dbg_ticks() - t_mach; // commit block only
-        ++dbg_wrap_dec_;
-    }
 }
 
 // Classifies an opcode for the lean (fully pre-parsed) execution path, or 0
@@ -325,8 +312,6 @@ u8 Cpu::dcache_lean_tag(const DecodeCacheEntry& e) const {
 void Cpu::dcache_lean_execute() {
     const DecodeCacheEntry& e = *dcache_hit_;
     const u8 op = e.opcode;
-    u64 t_pro = 0;
-    if (dbg_prof_) t_pro = dbg_ticks();
     last_opcode_ = op;
     cycles_ += 2;
     if (lock_) {
@@ -360,7 +345,6 @@ void Cpu::dcache_lean_execute() {
         return e.imm_size[slot] == 4 ? e.imm[slot] : (e.imm[slot] & 0xffffu);
     };
     (void)imm_of;
-    if (dbg_prof_) { dbg_lean_pro_ticks_ += dbg_ticks() - t_pro; ++dbg_wrap_hit_; }
     switch (e.lean_tag) {
     case 1: { // ALU r/m, 0x00-0x3B
         const int kind = op >> 3;
@@ -1465,8 +1449,6 @@ u8 Cpu::fetch8_cold() {
         // self-modifying write inside this very instruction invalidates the
         // entry when it is committed.  The address is A20-masked, matching
         // the bus-level location the byte is actually read from.
-        u64 t0 = 0;
-        if (dbg_prof_) t0 = dbg_ticks();
         const u32 phys = translate(lin, false) & (state_.a20 ? 0xffffffffu : ~(1u << 20));
         if (pending_.page_count == 1 && (phys >> 12) != (pending_.phys0 >> 12)) {
             pending_.phys1 = phys;
@@ -1476,7 +1458,6 @@ u8 Cpu::fetch8_cold() {
         const u8 v = bus_.read8(phys);
         pending_.bytes[pending_.len++] = v;
         state_.eip = (state_.eip & ~mask) | ((off + 1) & mask);
-        if (dbg_prof_) { dbg_dec_mach_ticks_ += dbg_ticks() - t0; ++dbg_wrap_dec_; }
         return v;
     }
     const u8 v = read_linear8(lin);
@@ -1547,8 +1528,6 @@ u32 Cpu::modrm_offset_16(u8 rm) {
 }
 
 ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
-    u64 t_mach = 0;
-    if (dbg_prof_) t_mach = dbg_ticks();
     const u32 rec_start = dcache_record_ ? pending_.len : 0;
     u8 base_reg = 0xff, index_reg = 0xff, scale = 0;
     u32 disp = 0;
@@ -1652,7 +1631,6 @@ ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
         t.disp = disp;
         pending_.mrm[pending_.mrm_count++] = t;
     }
-    if (dcache_record_ && dbg_prof_) { dbg_dec_mach_ticks_ += dbg_ticks() - t_mach; ++dbg_wrap_dec_; }
     return m;
 }
 
@@ -2713,14 +2691,8 @@ void Cpu::step() {
         bool completed = false;
         try {
             dcache_begin();
-            // Hit-op span: one rdtsc pair per instruction covering the whole
-            // cached execution (dispatch + operand delivery + handler), the
-            // mirror of the decode-op span on the miss path.
-            const bool prof_hit = dbg_prof_ && dcache_replay_;
-            const u64 t_hit = prof_hit ? dbg_ticks() : 0;
             if (dcache_hit_ && dcache_hit_->lean_tag) dcache_lean_execute();
             else execute_one();
-            if (prof_hit) { dbg_hit_ticks_ += dbg_ticks() - t_hit; ++dbg_wrap_hit_; }
             completed = true;
         } catch (const CpuException& e) {
             handle_exception(e.vector, e.error, e.has_error);

@@ -9,6 +9,12 @@ using namespace oldbox;
 
 namespace {
 
+[[nodiscard]] u64 bench_now_ns() {
+    return u64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+                   .count());
+}
+
 std::string find_asset(const std::string& rel) {
     for (const char* root : {"", "../", "../../", "../../../"}) {
         const std::string path = std::string(root) + rel;
@@ -75,9 +81,9 @@ TEST(dcache_bench_freedos_boot) {
     std::printf("BENCH freedos: end-to-end speedup %.2fx\n", t_off / t_on);
 }
 
-// Opt-in benchmark (OLDBOX_BENCH=1): the cache machinery measured inside the
-// real FreeDOS boot (BIOS POST + DOS, MMIO ROM fetches, shadow RAM, device
-// traffic): ticks per hit operation vs ticks per decode operation.
+// Opt-in benchmark (OLDBOX_BENCH=1): one unprofiled FreeDOS boot with the
+// decode cache on, reporting wall time, MIPS and the hit/miss split from the
+// public cache statistics (no instrumentation in the CPU).
 TEST(dcache_bench_freedos_machinery) {
     if (!std::getenv("OLDBOX_BENCH")) {
         std::printf("[ SKIP ] dcache FreeDOS machinery benchmark (set OLDBOX_BENCH=1)\n");
@@ -99,23 +105,15 @@ TEST(dcache_bench_freedos_machinery) {
     cfg.audio.enabled = false;
     cfg.video.voodoo_enabled = false;
     Machine machine(cfg);
-    machine.cpu().dbg_reset_ticks();
-    machine.cpu().dbg_profile(true);
+    const u64 w0 = bench_now_ns();
     machine.run_slice(36.0);
-    machine.cpu().dbg_profile(false);
-    const u64 hc = machine.cpu().dbg_hit_count(), ht = machine.cpu().dbg_hit_ticks();
-    const u64 dc = machine.cpu().dbg_decode_count(), dt = machine.cpu().dbg_decode_ticks();
-    const u64 lt = machine.cpu().dbg_lookup_ticks(), lp = machine.cpu().dbg_lean_pro_ticks();
-    const u64 dm = machine.cpu().dbg_dec_mach_ticks();
-    const double hit_per = hc ? double(ht) / double(hc) : 0.0;
-    const double dec_per = dc ? double(dt) / double(dc) : 0.0;
-    std::printf("BENCH freedos machinery: hit span %6.1f ticks (lookup %5.1f + dispatch %5.1f) (%llu ops)\n",
-                hit_per, hc ? double(lt) / double(hc) : 0.0, hc ? double(lp) / double(hc) : 0.0,
-                (unsigned long long)hc);
-    std::printf("BENCH freedos machinery: decode span %6.1f ticks (machinery %5.1f) (%llu ops)\n",
-                dec_per, dc ? double(dm) / double(dc) : 0.0, (unsigned long long)dc);
-    std::printf("BENCH freedos machinery: decode/hit ratio %.2fx\n",
-                hit_per > 0.0 ? dec_per / hit_per : 0.0);
+    const u64 w1 = bench_now_ns();
+    const u64 hc = machine.cpu().dcache_hits();
+    const u64 mc = machine.cpu().dcache_misses();
+    const double s = double(w1 - w0) / 1e9;
+    std::printf("BENCH freedos: %.2f s, %llu instructions, %llu hits / %llu misses (%.1f%% hit rate)\n",
+                s, (unsigned long long)(hc + mc), (unsigned long long)hc, (unsigned long long)mc,
+                (hc + mc) ? 100.0 * double(hc) / double(hc + mc) : 0.0);
 }
 
 // End-to-end firmware test: the reference Award image boots the FreeDOS floppy
