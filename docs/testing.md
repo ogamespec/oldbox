@@ -8,13 +8,14 @@ ctest --test-dir build --output-on-failure
 ./build/oldbox_tests audit_
 ```
 
-525 тестов, сгруппированных по файлам:
+548 тестов, сгруппированных по файлам:
 
 | Файл | Что проверяет |
 |---|---|
 | `test_cpu.cpp` | базовые ALU/флаги, строки, FPU, protected/paging/PAE, MSR |
 | `test_cpu_audit.cpp` | регрессии аудита 2026: MOV Sreg (#UD/#NP/#SS, zero-extension, запрет code→SS), STI shadow, LOOP/JCXZ EIP mask, 66/67 (включая повторные префиксы), стек по SS.B, V86 64K-доступ, IRET в V86 с CPL>0, невалидные кодировки, PACKSSDW, MMX-сдвиги, PMADDWD, MSR #GP, PE/PG в SMM, FPU 16-bit env/FNSAVE/FINIT, SGDT/SIDT 16-bit, accessed-bit, expand-down SS в call gate/task switch, #NP для LDT/TSS/CS |
 | `test_cpu_instructions.cpp` | ALU всех размеров, INC/DEC, NEG/NOT, MUL/DIV, сдвиги/вращения, BT/BTS/BTR/BTC со знаковыми смещениями, BSF/BSR, SETcc/CMOVcc, MOVZX/MOVSX, стек/call/popad (включая POP r/m с адресацией от ESP), строки + REPZ/REPNE, BCD, ENTER/LEAVE/XLAT, IN/OUT, 16-битные near-переходы и LOOP, KRNL386-подобный `pop [esp+8]` + `retfd` |
+| `test_cpu_dcache.cpp` | кэш декодирования: попадания в циклах, SMC и внешние записи, префиксы (включая FS/GS), 16/32-битная адресация, [disp16], SIB, 0F-опкоды, x87, 15-байтовые инструкции, исключения без коммита, смена режима, лимит CS, пересечение страницы, remap страниц, flush, REP, POP r/m с базой ESP; opt-in бенчмарки (`OLDBOX_BENCH=1`) |
 | `test_cpu_modes.cpp` | real 16/32, segment wrap, A20, protected limits, LDT, IDT error code 16/32, TSS ring3→ring0→ring3, call gates 16/32, task switching/IRET NT/TSS T-bit, 4K/PSE/PAE, WP, V86-сегментация/прерывания/IRET/VME, SGDT/LGDT layout |
 | `test_cpu_system.cpp` | CPUID 233/333/VME/кэш-дескрипторы, MSR PAT/MTRR/MCA/perf, unknown MSR #GP, SYSENTER/SYSEXIT, RDTSC/RDPMC, CMPXCHG/CMPXCHG8B, BOUND, LDS/LSS/LFS/LGS, far call, #NM, CR/DR/CLTS, debug-регистры и breakpoints, CLI privilege, ARPL/VERR/VERW/LAR/LSL, PUSHF/POPF/LAHF/SAHF/CMC, INTO, SMSW/LMSW/SIDT, XCHG/XADD/BSWAP, SMM |
 | `test_cpu_fpu.cpp` | x87 load/store/arith/compare/control/env, MMX mov/padd/pand/compare/shift/unpack/movd/emms |

@@ -1,5 +1,7 @@
 #include "tests/test.hpp"
 #include "machine.hpp"
+#include <chrono>
+#include <cstdlib>
 #include <filesystem>
 #include <string>
 
@@ -28,6 +30,50 @@ std::string screen_text(Machine& machine) {
 }
 
 } // namespace
+
+// Opt-in benchmark (OLDBOX_BENCH=1): the full Award POST + FreeDOS boot,
+// 36 emulated seconds, with the decode cache on and off.  Measures the
+// end-to-end host time, i.e. the interpreter speedup including all device
+// emulation (which the cache does not affect).
+TEST(dcache_bench_freedos_boot) {
+    if (!std::getenv("OLDBOX_BENCH")) {
+        std::printf("[ SKIP ] dcache FreeDOS benchmark (set OLDBOX_BENCH=1)\n");
+        return;
+    }
+    const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
+    const std::string floppy = find_asset("assets/floppy/freedos1440.img");
+    const std::string vga = find_asset("assets/vga/S3Trio64_1_14-04.bin");
+    if (bios.empty() || floppy.empty()) {
+        std::printf("[ SKIP ] dcache FreeDOS benchmark: assets missing\n");
+        return;
+    }
+    auto run = [&](bool enabled) {
+        SystemConfig cfg;
+        cfg.firmware.bios_path = bios;
+        cfg.firmware.vga_bios_path = vga;
+        cfg.storage.floppy_path = floppy;
+        cfg.headless = true;
+        cfg.no_sdl_audio = true;
+        cfg.audio.enabled = false;
+        cfg.video.voodoo_enabled = false;
+        Machine machine(cfg);
+        machine.cpu().set_dcache_enabled(enabled);
+        const auto t0 = std::chrono::steady_clock::now();
+        machine.run_slice(36.0);
+        const auto t1 = std::chrono::steady_clock::now();
+        const double secs = std::chrono::duration<double>(t1 - t0).count();
+        const u64 insn = machine.cpu().instruction_count();
+        const double mips = double(insn) / secs / 1e6;
+        std::printf("BENCH freedos: cache %s %8.2f s, %8.2f MIPS, %llu insn (%llu hits / %llu misses)\n",
+                    enabled ? "on " : "off", secs, mips, (unsigned long long)insn,
+                    (unsigned long long)machine.cpu().dcache_hits(),
+                    (unsigned long long)machine.cpu().dcache_misses());
+        return secs;
+    };
+    const double t_off = run(false);
+    const double t_on = run(true);
+    std::printf("BENCH freedos: end-to-end speedup %.2fx\n", t_off / t_on);
+}
 
 // End-to-end firmware test: the reference Award image boots the FreeDOS floppy
 // and the shell reaches its command prompt.  This is the regression that caught

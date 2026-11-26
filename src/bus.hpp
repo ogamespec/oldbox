@@ -83,6 +83,7 @@ public:
 
     void write8(u32 addr, u8 value) {
         const u32 a = addr & a20_mask_;
+        if (write_hook_) write_hook_(a, 1);
         if (!write_slow_required() && a < ram_size_ && ram_pages_[a >> 16]) [[likely]] {
             ram_base_[a] = value;
             return;
@@ -91,6 +92,7 @@ public:
     }
     void write16(u32 addr, u16 value) {
         const u32 a = addr & a20_mask_;
+        if (write_hook_) write_hook_(a, 2);
         if (!write_slow_required() && a < ram_size_ && a + 2 <= ram_size_ && (a & 0xffffu) <= 0xfffeu &&
             ram_pages_[a >> 16]) [[likely]] {
             put_le16(ram_base_ + a, value);
@@ -100,6 +102,7 @@ public:
     }
     void write32(u32 addr, u32 value) {
         const u32 a = addr & a20_mask_;
+        if (write_hook_) write_hook_(a, 4);
         if (!write_slow_required() && a < ram_size_ && a + 4 <= ram_size_ && (a & 0xffffu) <= 0xfffcu &&
             ram_pages_[a >> 16]) [[likely]] {
             put_le32(ram_base_ + a, value);
@@ -130,6 +133,7 @@ public:
         return read32_slow(addr);
     }
     void write8_raw(u32 addr, u8 value) {
+        if (write_hook_) write_hook_(addr, 1);
         if (!write_slow_required() && addr < ram_size_ && ram_pages_[addr >> 16]) [[likely]] {
             ram_base_[addr] = value;
             return;
@@ -137,6 +141,7 @@ public:
         write8_slow(addr, value);
     }
     void write16_raw(u32 addr, u16 value) {
+        if (write_hook_) write_hook_(addr, 2);
         if (!write_slow_required() && addr < ram_size_ && addr + 2 <= ram_size_ && (addr & 0xffffu) <= 0xfffeu &&
             ram_pages_[addr >> 16]) [[likely]] {
             put_le16(ram_base_ + addr, value);
@@ -145,6 +150,7 @@ public:
         write16_slow(addr, value);
     }
     void write32_raw(u32 addr, u32 value) {
+        if (write_hook_) write_hook_(addr, 4);
         if (!write_slow_required() && addr < ram_size_ && addr + 4 <= ram_size_ && (addr & 0xffffu) <= 0xfffcu &&
             ram_pages_[addr >> 16]) [[likely]] {
             put_le32(ram_base_ + addr, value);
@@ -164,9 +170,17 @@ public:
     void io_write32(u16 port, u32 value);
 
     void set_a20(bool enabled) {
+        const bool changed = enabled != a20_;
         a20_ = enabled;
         a20_mask_ = enabled ? 0xffffffffu : ~(1u << 20);
+        if (changed && a20_hook_) a20_hook_(enabled);
     }
+    // Notified when the A20 gate toggles (the CPU flushes its decode cache).
+    void set_a20_hook(std::function<void(bool)> cb) { a20_hook_ = std::move(cb); }
+    // Notified for every memory write through the bus, whatever the master
+    // (CPU, 8237 DMA or the host in tests).  The CPU uses it to invalidate
+    // its decode cache for the written physical range.
+    void set_write_hook(std::function<void(u32, u32)> cb) { write_hook_ = std::move(cb); }
 
     [[nodiscard]] bool a20() const { return a20_; }
     void set_watch_pc(u16 cs, u16 ip) { watch_cs_ = cs; watch_ip_ = ip; }
@@ -229,6 +243,8 @@ private:
     u16 watch_ip_ = 0;
     u32 watch_lo_ = 0, watch_hi_ = 0;
     std::function<void(u32, u32, int)> write_watch_;
+    std::function<void(bool)> a20_hook_;
+    std::function<void(u32, u32)> write_hook_;
     std::vector<u8> port80_history_;
 };
 

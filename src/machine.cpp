@@ -58,6 +58,15 @@ Machine::Machine(SystemConfig cfg)
     piix4_.pit().set_cycle_source([this]() { return cpu_.state().cycles; });
     cpu_.set_interrupt_ack([this]() { return piix4_.pic().acknowledge(); });
     piix4_.pic().set_pending_callback([this](bool line) { cpu_.set_irq_line(line); });
+    // Any master writing guest memory (the CPU itself, the 8237 DMA, bus
+    // masters) invalidates the affected decode-cache pages.  An A20 toggle
+    // changes the bytes behind every physical address above the gate, so the
+    // whole decode cache must be dropped.
+    bus_.set_write_hook([this](u32 addr, u32 size) { cpu_.invalidate_code(addr, size); });
+    bus_.set_a20_hook([this](bool enabled) {
+        cpu_.set_a20(enabled);
+        cpu_.flush_decode_cache();
+    });
     // Firmware service shim: early Award POST calls INT 13h AH=00h before it
     // =====================================================================
     //  NO BIOS-SERVICE HOOKS.  OldBox is a low-level emulator: the guest
@@ -694,6 +703,12 @@ std::string Machine::status_text() const {
     o << std::format("Floppy  {}\n", floppy_.status());
     o << std::format("Time    {:.3f} s, {} frames, {} instructions\n", emulated_seconds(), frames_, cpu_.instruction_count());
     o << perf().summary_line() << "\n";
+    {
+        const u64 dh = cpu_.dcache_hits(), dm = cpu_.dcache_misses();
+        const u64 dt = dh + dm;
+        o << std::format("Decache {} hits / {} misses ({:.1f}% hit rate)\n", dh, dm,
+                         dt ? 100.0 * double(dh) / double(dt) : 0.0);
+    }
     o << std::format("CPU at  {:04x}:{:08x}  CSBASE={:08x} CR0={:08x} EFLAGS={:08x} ESP={:08x} SS={:04x} SSBASE={:08x}\n",
                      cpu_.state().seg[1].selector, cpu_.state().eip, cpu_.state().seg[1].base, cpu_.state().cr0, cpu_.state().eflags,
                      cpu_.state().gpr[4], cpu_.state().seg[2].selector, cpu_.state().seg[2].base);

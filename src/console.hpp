@@ -58,6 +58,7 @@ private:
     void text_dump(const std::vector<std::string>& args);
     void cmos_command(const std::vector<std::string>& args);
     void perf_command(const std::vector<std::string>& args);
+    void dcache_command(const std::vector<std::string>& args);
     void save_command(const std::vector<std::string>& args, bool quick);
     void load_command(const std::vector<std::string>& args, bool quick);
 

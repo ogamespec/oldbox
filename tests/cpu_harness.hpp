@@ -13,7 +13,16 @@ public:
     Cpu cpu{bus, 32};
     u32 code = 0x1000;
 
-    CpuHarness() { reset_flat32(); }
+    CpuHarness() {
+        // Tests patch guest memory through the bus directly (emit(), manual
+        // write8 calls); like any other memory write that must invalidate the
+        // CPU's decode cache.  A20 only affects addresses above the gate,
+        // which the CPU tests never execute, so only the gate state needs to
+        // track the bus.
+        bus.set_write_hook([this](u32 addr, u32 size) { cpu.invalidate_code(addr, size); });
+        bus.set_a20_hook([this](bool enabled) { cpu.set_a20(enabled); });
+        reset_flat32();
+    }
 
     void reset_flat32() {
         reset_real();

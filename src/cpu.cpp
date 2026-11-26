@@ -14,7 +14,10 @@ namespace {
 }
 }
 
-Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes) : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes) {
+Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes)
+    : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes),
+      dcache_(std::make_unique<DecodeCacheEntry[]>(kDecodeCacheSlots)),
+      page_gen_(std::make_unique<PageGen[]>(kPageGenSlots)) {
     tlb_tag_.fill(0xffffffffu);
     tlb_phys_.fill(0);
     tlb_flags_.fill(0);
@@ -65,6 +68,157 @@ void Cpu::reset() {
     mc_ctl_.fill(0); mc_status_.fill(0); mc_addr_.fill(0); mc_misc_.fill(0);
     last_interrupt_ = 0;
     last_opcode_ = 0;
+    flush_decode_cache();
+}
+
+// ---------------------------------------------------------------------------
+// Decode cache
+// ---------------------------------------------------------------------------
+
+void Cpu::flush_decode_cache() {
+    // Only the cache arrays and the page-generation table are cleared: an
+    // instruction in flight (recording or replaying) keeps its scratch entry,
+    // so a flush triggered mid-instruction (A20 toggled from an OUT) cannot
+    // corrupt execution.  Its entry is then unreachable because the reset
+    // generation table never matches the recorded generations.
+    std::fill_n(dcache_.get(), kDecodeCacheSlots, DecodeCacheEntry{});
+    std::fill_n(page_gen_.get(), kPageGenSlots, PageGen{});
+    dcache_epoch_ = 1;
+    dcache_hits_ = 0;
+    dcache_misses_ = 0;
+    dcache_cur_ = 0;
+    dcache_mrm_idx_ = 0;
+}
+
+u32 Cpu::dcache_context() const {
+    const u32 mode = state_.mode == CpuMode::protected_mode   ? 1u
+                     : state_.mode == CpuMode::virtual86 ? 2u
+                                                          : 0u;
+    const u32 d = (state_.seg[unsigned(SegReg::cs)].flags & 0x40u) ? 1u : 0u;
+    const u32 smm = state_.smm ? 1u : 0u;
+    return mode | (smm << 2) | (d << 3) | (u32(state_.seg[unsigned(SegReg::cs)].selector) << 4);
+}
+
+u32 Cpu::page_gen(u32 phys) const {
+    const u32 page = phys >> 12;
+    const PageGen& g = page_gen_[page & (kPageGenSlots - 1)];
+    return g.tag == page ? g.gen : 0;
+}
+
+void Cpu::bump_page_gen(u32 phys) {
+    const u32 page = phys >> 12;
+    PageGen& g = page_gen_[page & (kPageGenSlots - 1)];
+    if (g.tag == page) ++g.gen;
+    else { g.tag = page; g.gen = ++dcache_epoch_; }
+    if (g.gen == 0) g.gen = ++dcache_epoch_;
+    if (dcache_epoch_ == 0) dcache_epoch_ = 1;
+}
+
+void Cpu::invalidate_code(u32 phys, u32 size) {
+    if (size == 0) return;
+    u32 page = phys >> 12;
+    const u32 last = (phys + size - 1) >> 12;
+    for (;;) {
+        bump_page_gen(page << 12);
+        if (page == last) break;
+        ++page;
+    }
+}
+
+u16 Cpu::pack_prefixes() const {
+    u16 p = 0;
+    if (opsize32_) p |= 0x01;
+    if (addrsize32_) p |= 0x02;
+    if (rep_) p |= 0x04;
+    if (repne_) p |= 0x08;
+    if (lock_) p |= 0x10;
+    if (seg_override_) p |= 0x20 | (u16(u8(*seg_override_)) << 6); // 3 bits: es..gs
+    return p;
+}
+
+void Cpu::apply_prefixes(u16 p) {
+    opsize32_ = (p & 0x01) != 0;
+    addrsize32_ = (p & 0x02) != 0;
+    rep_ = (p & 0x04) != 0;
+    repne_ = (p & 0x08) != 0;
+    lock_ = (p & 0x10) != 0;
+    // The prefix bytes themselves are not re-parsed on a replay, so the
+    // "already seen" latches must be set to match the end of prefix decoding.
+    opsize_prefix_seen_ = true;
+    addrsize_prefix_seen_ = true;
+    if (p & 0x20) seg_override_ = SegReg((p >> 6) & 7);
+    else seg_override_.reset();
+}
+
+void Cpu::dcache_advance(int n) {
+    dcache_cur_ += u32(n);
+    instruction_bytes_ += unsigned(n);
+    const u32 mask = state_.mode == CpuMode::protected_mode ? 0xffffffffu : 0xffffu;
+    const u32 off = state_.eip & mask;
+    state_.eip = (state_.eip & ~mask) | ((off + u32(n)) & mask);
+}
+
+void Cpu::dcache_begin() {
+    dcache_replay_ = false;
+    dcache_record_ = false;
+    dcache_cur_ = 0;
+    dcache_mrm_idx_ = 0;
+    if (!dcache_lookup_enabled_) return; // disabled: exact pre-cache execution path
+    const auto& cs = state_.seg[unsigned(SegReg::cs)];
+    const u32 mask = state_.mode == CpuMode::protected_mode ? 0xffffffffu : 0xffffu;
+    const u32 off = state_.eip & mask;
+    // The first fetch checks the code limit before touching the page tables;
+    // replicate that order here so the same fault is delivered as #GP.
+    if (state_.mode == CpuMode::protected_mode && off > cs.limit) exception_gp(0);
+    const u32 lin = cs.base + off;
+    // Key on the bus-level physical address: the A20 gate changes which
+    // memory the bytes come from, so mask it exactly like the bus does.
+    const u32 phys = translate(lin, false) & (state_.a20 ? 0xffffffffu : ~(1u << 20));
+    const u32 ctx = dcache_context();
+    // Direct-mapped slot.  phys alone spreads adjacent instructions over
+    // distinct slots; the context term re-scatters aliased code (same bytes
+    // executed in different modes/segments).
+    const u32 idx = (phys ^ (ctx * 0x9e3779b1u)) & (kDecodeCacheSlots - 1);
+    {
+        const DecodeCacheEntry& e = dcache_[idx];
+        if (dcache_lookup_enabled_ && e.phys0 == phys && e.ctx == ctx && e.cs_limit == cs.limit && e.len != 0 &&
+            e.gen0 == page_gen(e.phys0) &&
+            (e.page_count == 1 || e.gen1 == page_gen(e.phys1))) {
+            // Cache hit: execute from the recorded decode.
+            pending_ = e;
+            dcache_replay_ = true;
+            dcache_cur_ = e.opcode_ofs;
+            apply_prefixes(e.prefixes);
+            last_opcode_ = e.opcode;
+            instruction_bytes_ = e.opcode_ofs;
+            // Replay starts at the opcode byte, so the prefix bytes before
+            // it must be accounted for in EIP now (fetch8 does not touch
+            // them again).  Each prefix byte costs 2 cycles like any other
+            // fetched byte: execute_one() adds them on the decode path, and
+            // the replay must keep the instruction's cycle count identical.
+            cycles_ += 2 * int(e.opcode_ofs);
+            state_.eip = (state_.eip & ~mask) | ((off + e.opcode_ofs) & mask);
+            ++dcache_hits_;
+            return;
+        }
+    }
+    // Cache miss: decode and record this execution.
+    pending_ = DecodeCacheEntry{};
+    pending_.phys0 = phys;
+    pending_.gen0 = page_gen(phys);
+    pending_.page_count = 1;
+    pending_.ctx = ctx;
+    pending_.cs_limit = cs.limit;
+    dcache_record_ = true;
+    ++dcache_misses_;
+}
+
+void Cpu::dcache_commit() {
+    if (!dcache_record_) return;
+    dcache_record_ = false;
+    if (pending_.len == 0) return;
+    const u32 idx = (pending_.phys0 ^ (pending_.ctx * 0x9e3779b1u)) & (kDecodeCacheSlots - 1);
+    dcache_[idx] = pending_;
 }
 
 void Cpu::reset_segments_real() {
@@ -375,6 +529,24 @@ void Cpu::raise_exception(int vector, u32 error, bool has_error) {
 }
 
 u8 Cpu::fetch8() {
+    if (dcache_replay_) {
+        if (dcache_cur_ >= pending_.len) {
+            // The replay diverged from the recorded decode (should not
+            // happen); fall back to a plain memory fetch at the current EIP.
+            logf(LogLevel::warn, "cpu", "decode cache: replay overran the recorded instruction");
+            dcache_replay_ = false;
+            dcache_record_ = false;
+        } else {
+            // Replay: the byte stream was captured at decode time; no guest
+            // memory access and no per-byte limit checks are needed.
+            const u8 v = pending_.bytes[dcache_cur_++];
+            const u32 mask = state_.mode == CpuMode::protected_mode ? 0xffffffffu : 0xffffu;
+            const u32 off = state_.eip & mask;
+            state_.eip = (state_.eip & ~mask) | ((off + 1) & mask);
+            ++instruction_bytes_;
+            return v;
+        }
+    }
     if (instruction_bytes_ == 15) exception_gp(0);
     ++instruction_bytes_;
     const auto& cs = state_.seg[unsigned(SegReg::cs)];
@@ -386,12 +558,45 @@ u8 Cpu::fetch8() {
     const u32 off = state_.eip & mask;
     if (state_.mode == CpuMode::protected_mode && off > cs.limit) { exception_gp(0); }
     const u32 lin = cs.base + off;
+    if (dcache_record_) {
+        // Record: capture the byte and the physical pages it spans.  The
+        // page generations are latched before the instruction executes, so a
+        // self-modifying write inside this very instruction invalidates the
+        // entry when it is committed.  The address is A20-masked, matching
+        // the bus-level location the byte is actually read from.
+        const u32 phys = translate(lin, false) & (state_.a20 ? 0xffffffffu : ~(1u << 20));
+        if (pending_.page_count == 1 && (phys >> 12) != (pending_.phys0 >> 12)) {
+            pending_.phys1 = phys;
+            pending_.gen1 = page_gen(phys);
+            pending_.page_count = 2;
+        }
+        const u8 v = bus_.read8(phys);
+        pending_.bytes[pending_.len++] = v;
+        state_.eip = (state_.eip & ~mask) | ((off + 1) & mask);
+        return v;
+    }
     const u8 v = read_linear8(lin);
     state_.eip = (state_.eip & ~mask) | ((off + 1) & mask);
     return v;
 }
-u16 Cpu::fetch16() { const u16 a = fetch8(); return a | (u16(fetch8()) << 8); }
-u32 Cpu::fetch32() { const u32 a = fetch16(); return a | (u32(fetch16()) << 16); }
+u16 Cpu::fetch16() {
+    if (dcache_replay_) {
+        const u16 v = le16(pending_.bytes + dcache_cur_);
+        dcache_advance(2);
+        return v;
+    }
+    const u16 a = fetch8();
+    return a | (u16(fetch8()) << 8);
+}
+u32 Cpu::fetch32() {
+    if (dcache_replay_) {
+        const u32 v = le32(pending_.bytes + dcache_cur_);
+        dcache_advance(4);
+        return v;
+    }
+    const u32 a = fetch16();
+    return a | (u32(fetch16()) << 16);
+}
 u16 Cpu::fetch_imm16() { return fetch16(); }
 u32 Cpu::fetch_imm() { return opsize32_ ? fetch32() : fetch16(); }
 i32 Cpu::fetch_simm() {
@@ -462,6 +667,64 @@ u32 Cpu::modrm_offset_16(u8 rm) {
 }
 
 ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
+    // Replay: rebuild the operand from the template captured at decode time
+    // plus the current register values; the ModRM/SIB/displacement bytes
+    // themselves are skipped without re-parsing.
+    if (dcache_replay_ && dcache_mrm_idx_ < pending_.mrm_count) {
+        const ModRmTemplate& t = pending_.mrm[dcache_mrm_idx_++];
+        dcache_advance(int(t.byte_len));
+        ModRm m;
+        m.raw = t.raw;
+        m.mod = t.mod;
+        m.reg_field = t.reg_field;
+        m.rm = t.rm;
+        if (lock_) {
+            const u32 op = last_opcode_;
+            const bool group1 = op == 0x80 || op == 0x81 || op == 0x82 || op == 0x83;
+            const bool group3 = op == 0xf6 || op == 0xf7;
+            const bool group45 = op == 0xfe || op == 0xff;
+            if (m.mod == 3 || (group1 && m.reg_field == 7) ||
+                (group3 && m.reg_field != 2 && m.reg_field != 3) ||
+                (group45 && m.reg_field > 1) ||
+                (op == 0x0fba && m.reg_field < 5) ||
+                (op == 0x0fc7 && m.reg_field != 1)) raise_exception(6);
+        }
+        m.size = operand_size;
+        m.address_size = t.addr_size;
+        m.segment = SegReg(t.segment);
+        m.esp_base = t.esp_base != 0;
+        if (t.is_register) {
+            m.is_register = true;
+            m.offset = t.rm;
+            return m;
+        }
+        m.is_register = false;
+        u32 off;
+        if (t.addr_size == 2) {
+            off = modrm_offset_16(t.rm);
+            if (t.mod == 0 && t.rm == 6) {
+                off = t.disp; // [disp16]: no base, pure 16-bit displacement
+            } else if (t.mod == 1 || t.mod == 2) {
+                off = (off + t.disp) & 0xffffu;
+            }
+        } else {
+            u32 idx = 0;
+            if (t.index_reg != 0xff) idx = state_.gpr[t.index_reg] << t.scale;
+            off = t.disp + idx;
+            if (t.base_reg != 0xff) off += state_.gpr[t.base_reg];
+        }
+        m.offset = off;
+        const auto& seg = state_.seg[unsigned(m.segment)];
+        m.linear = seg.base + off;
+        if (check_limit && state_.mode == CpuMode::protected_mode &&
+            segment_limit_fault(seg, off, u32(operand_size))) {
+            exception_gp(seg.selector & ~3u);
+        }
+        return m;
+    }
+    const u32 rec_start = dcache_record_ ? pending_.len : 0;
+    u8 base_reg = 0xff, index_reg = 0xff, scale = 0;
+    u32 disp = 0;
     ModRm m;
     m.raw = fetch8();
     m.mod = m.raw >> 6;
@@ -484,57 +747,83 @@ ModRm Cpu::decode_modrm_raw(int operand_size, bool check_limit) {
     if (m.mod == 3) {
         m.is_register = true;
         m.offset = m.rm;
-        return m;
-    }
-    m.is_register = false;
-    u32 off = 0;
-    SegReg default_seg = SegReg::ds;
-    if (m.address_size == 2) {
-        off = modrm_offset_16(m.rm);
-        if (m.rm == 2 || m.rm == 3 || m.rm == 6) default_seg = SegReg::ss;
-        if (m.mod == 0 && m.rm == 6) {
-            off = fetch16();
-            default_seg = SegReg::ds;
-        } else if (m.mod == 1) {
-            off = (off + u32(i32(i8(fetch8())))) & 0xffffu;
-        } else if (m.mod == 2) {
-            off = (off + u32(fetch16())) & 0xffffu;
-        }
     } else {
-        if (m.rm == 4) {
-            const u8 sib = fetch8();
-            const u8 scale = sib >> 6;
-            const u8 index = (sib >> 3) & 7;
-            const u8 base = sib & 7;
-            u32 idx = (index == 4) ? 0 : state_.gpr[index];
-            idx <<= scale;
-            if (base == 5 && m.mod == 0) {
-                off = fetch32() + idx;
+        m.is_register = false;
+        u32 off = 0;
+        SegReg default_seg = SegReg::ds;
+        if (m.address_size == 2) {
+            off = modrm_offset_16(m.rm);
+            if (m.rm == 2 || m.rm == 3 || m.rm == 6) default_seg = SegReg::ss;
+            if (m.mod == 0 && m.rm == 6) {
+                disp = fetch16();
+                off = disp;
+                default_seg = SegReg::ds;
+            } else if (m.mod == 1) {
+                disp = u32(i32(i8(fetch8())));
+                off = (off + disp) & 0xffffu;
+            } else if (m.mod == 2) {
+                disp = fetch16();
+                off = (off + disp) & 0xffffu;
+            }
+        } else {
+            if (m.rm == 4) {
+                const u8 sib = fetch8();
+                scale = sib >> 6;
+                index_reg = (sib >> 3) & 7;
+                if (index_reg == 4) index_reg = 0xff; // no index
+                base_reg = sib & 7;
+                u32 idx = (index_reg == 0xff) ? 0 : state_.gpr[index_reg];
+                idx <<= scale;
+                if (base_reg == 5 && m.mod == 0) {
+                    base_reg = 0xff; // no base
+                    disp = fetch32();
+                    off = disp + idx;
+                    default_seg = SegReg::ds;
+                } else {
+                    off = state_.gpr[base_reg] + idx;
+                    default_seg = (base_reg == 4 || base_reg == 5) ? SegReg::ss : SegReg::ds;
+                    if (base_reg == 4) m.esp_base = true; // POP r/m needs the post-increment address
+                    if (m.mod == 1) { disp = u32(i32(i8(fetch8()))); off += disp; }
+                    else if (m.mod == 2) { disp = fetch32(); off += disp; }
+                }
+            } else if (m.rm == 5 && m.mod == 0) {
+                base_reg = 0xff; // no base
+                disp = fetch32();
+                off = disp;
                 default_seg = SegReg::ds;
             } else {
-                off = state_.gpr[base] + idx;
-                default_seg = (base == 4 || base == 5) ? SegReg::ss : SegReg::ds;
-                if (base == 4) m.esp_base = true;
-                if (m.mod == 1) off += u32(i32(i8(fetch8())));
-                else if (m.mod == 2) off += fetch32();
+                base_reg = m.rm;
+                off = state_.gpr[m.rm];
+                default_seg = (m.rm == 4 || m.rm == 5) ? SegReg::ss : SegReg::ds;
+                if (m.mod == 1) { disp = u32(i32(i8(fetch8()))); off += disp; }
+                else if (m.mod == 2) { disp = fetch32(); off += disp; }
             }
-        } else if (m.rm == 5 && m.mod == 0) {
-            off = fetch32();
-            default_seg = SegReg::ds;
-        } else {
-            off = state_.gpr[m.rm];
-            default_seg = (m.rm == 4 || m.rm == 5) ? SegReg::ss : SegReg::ds;
-            if (m.mod == 1) off += u32(i32(i8(fetch8())));
-            else if (m.mod == 2) off += fetch32();
+        }
+        m.segment = seg_override_.value_or(default_seg);
+        m.offset = off;
+        const auto& seg = state_.seg[unsigned(m.segment)];
+        m.linear = seg.base + off;
+        if (check_limit && state_.mode == CpuMode::protected_mode &&
+            segment_limit_fault(seg, off, u32(operand_size))) {
+            exception_gp(seg.selector & ~3u);
         }
     }
-    m.segment = seg_override_.value_or(default_seg);
-    m.offset = off;
-    const auto& seg = state_.seg[unsigned(m.segment)];
-    m.linear = seg.base + off;
-    if (check_limit && state_.mode == CpuMode::protected_mode &&
-        segment_limit_fault(seg, off, u32(operand_size))) {
-        exception_gp(seg.selector & ~3u);
+    if (dcache_record_ && pending_.mrm_count < 2) {
+        ModRmTemplate t;
+        t.raw = m.raw;
+        t.mod = m.mod;
+        t.reg_field = m.reg_field;
+        t.rm = m.rm;
+        t.is_register = m.is_register ? 1 : 0;
+        t.byte_len = u8(pending_.len - rec_start);
+        t.segment = u8(m.segment);
+        t.addr_size = u8(m.address_size);
+        t.base_reg = base_reg;
+        t.index_reg = index_reg;
+        t.scale = scale;
+        t.esp_base = m.esp_base ? 1 : 0;
+        t.disp = disp;
+        pending_.mrm[pending_.mrm_count++] = t;
     }
     return m;
 }
@@ -1599,6 +1888,7 @@ void Cpu::step() {
     } else {
         bool completed = false;
         try {
+            dcache_begin();
             execute_one();
             completed = true;
         } catch (const CpuException& e) {
@@ -1609,6 +1899,7 @@ void Cpu::step() {
             state_.shutdown = true;
         }
         if (completed) {
+            dcache_commit();
             u32 dbg = debug_pending_;
             debug_pending_ = 0;
             if (trace_tf) dbg |= 0x4000u; // DR6.BS
@@ -1656,6 +1947,15 @@ void Cpu::run_cycles(u64 cycles) {
 void Cpu::execute_one() {
     const u8 op = fetch8();
     last_opcode_ = op;
+    if (dcache_record_) {
+        // The prefix recursion enters execute_one() once per prefix byte; the
+        // final call (the opcode itself) overwrites the snapshot, so the
+        // entry records the position of the first non-prefix byte and the
+        // prefix state that was in effect when it was fetched.
+        pending_.opcode = op;
+        pending_.opcode_ofs = u8(pending_.len - 1);
+        pending_.prefixes = pack_prefixes();
+    }
     cycles_ += 2;
     if (lock_) {
         const bool prefix = op == 0x66 || op == 0x67 || op == 0xf0 || op == 0xf2 || op == 0xf3 ||

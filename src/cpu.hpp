@@ -111,6 +111,49 @@ struct ModRm {
     bool esp_base = false;
 };
 
+// ---------------------------------------------------------------------------
+// Decode cache.  The interpreter is split into two phases:
+//   * decode  - the first execution at a physical address captures the
+//               instruction bytes and its decoded form (length, prefix state,
+//               opcode, the static ModRM template);
+//   * execute - later executions at the same address replay the cached decode
+//               without fetching instruction bytes from guest memory and
+//               without re-parsing ModRM/SIB/displacement bytes.
+// Entries are keyed by the physical address of the first byte (aliased
+// addresses share one entry) plus a context tag.  CPU memory writes bump a
+// per-page generation so self-modifying code is re-decoded; a page remap
+// (CR3/paging change) naturally misses because the key changes.
+
+// Static (register-value independent) part of a decoded ModRM operand.
+struct ModRmTemplate {
+    u8 raw = 0;
+    u8 mod = 0, reg_field = 0, rm = 0;
+    u8 is_register = 0;
+    u8 byte_len = 0;   // bytes consumed: 1 (+SIB) (+disp)
+    u8 segment = 0;    // final segment choice (override or default)
+    u8 addr_size = 2;
+    u8 base_reg = 0xff;  // register index; 0xff = none (incl. SIB index==4)
+    u8 index_reg = 0xff; // 0xff = none
+    u8 scale = 0;
+    u8 esp_base = 0;     // effective address is based on ESP (POP r/m rule)
+    u32 disp = 0;        // raw displacement (disp8 sign-extended, else raw)
+};
+
+struct DecodeCacheEntry {
+    u32 phys0 = 0, phys1 = 0; // physical page(s) spanned by the instruction
+    u32 gen0 = 0, gen1 = 0;   // page generations at decode time
+    u32 ctx = 0;              // context tag: mode | SMM | CS.D | CS selector
+    u32 cs_limit = 0;         // CS limit the fetch limit checks ran against
+    u8 len = 0;               // instruction length in bytes
+    u8 opcode_ofs = 0;        // byte offset of the first opcode byte
+    u8 opcode = 0;
+    u16 prefixes = 0;         // packed prefix state (segment index in bits 6-8)
+    u8 mrm_count = 0;         // recorded ModRM templates (0..2)
+    u8 page_count = 0;        // 1 or 2 pages spanned
+    ModRmTemplate mrm[2];
+    u8 bytes[15];             // captured instruction bytes
+};
+
 class Cpu {
     friend class StateCodec;
 public:
@@ -134,6 +177,10 @@ public:
     void resume_smm();
     [[nodiscard]] bool in_smm() const { return state_.smm; }
     void set_interrupt_ack(InterruptAck ack) { irq_ack_ = std::move(ack); }
+    // A20 state as seen by the decode cache: the cache key is the bus-level
+    // (gate-masked) physical address, so aliased writes above the gate
+    // invalidate entries fetched through the other alias.
+    void set_a20(bool enabled) { state_.a20 = enabled; }
     // Cached PIC INT output.  The PIC calls this when a line, the IMR or an
     // EOI changes the request state; the interpreter then avoids the
     // acknowledge() call on every instruction.
@@ -223,6 +270,18 @@ public:
     void flush_tlb(bool preserve_global = false);
     void invalidate_tlb_page(u32 linear);
     [[nodiscard]] u32 translate_slow(u32 linear, bool write, bool supervisor);
+
+    // Decode cache control.
+    void flush_decode_cache();
+    // Disables the decode cache entirely (lookup, recording and replay) for
+    // benchmarks and diagnostics: execution is exactly the pre-cache path.
+    void set_dcache_enabled(bool v) { dcache_lookup_enabled_ = v; }
+    // External memory writes (DMA and other bus masters) invalidate cached
+    // decodes for the written physical range.
+    void invalidate_code(u32 phys, u32 size);
+    [[nodiscard]] u64 dcache_hits() const { return dcache_hits_; }
+    [[nodiscard]] u64 dcache_misses() const { return dcache_misses_; }
+    [[nodiscard]] u32 dcache_slots() const { return kDecodeCacheSlots; }
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
     void deliver_interrupt(int vector, bool software = false);
@@ -460,6 +519,38 @@ private:
     std::array<u32, 1024> tlb_phys_{};
     std::array<u32, 1024> tlb_leaf_{};
     std::array<u8, 1024> tlb_flags_{};
+
+    // --- Decode cache ---------------------------------------------------
+    // Heap-allocated so that a Cpu (and thus a Machine) stays small enough
+    // for the default Windows 1 MiB stack.
+    static constexpr u32 kDecodeCacheSlots = 8192;
+    static constexpr u32 kPageGenSlots = 16384;
+    struct PageGen {
+        u32 tag = 0; // physical page
+        u32 gen = 0; // generation, bumped on every write to the page
+    };
+    std::unique_ptr<DecodeCacheEntry[]> dcache_;
+    std::unique_ptr<PageGen[]> page_gen_;
+    u32 dcache_epoch_ = 1;
+    u64 dcache_hits_ = 0;
+    u64 dcache_misses_ = 0;
+    bool dcache_lookup_enabled_ = true;
+    // One in-flight instruction: the entry being recorded on a miss, the
+    // entry being replayed on a hit.
+    DecodeCacheEntry pending_{};
+    bool dcache_replay_ = false;
+    bool dcache_record_ = false;
+    u32 dcache_cur_ = 0;    // replay cursor into pending_.bytes
+    u8 dcache_mrm_idx_ = 0; // next ModRM template to consume on replay
+
+    void dcache_begin();
+    void dcache_commit();
+    void dcache_advance(int n);
+    [[nodiscard]] u32 dcache_context() const;
+    [[nodiscard]] u32 page_gen(u32 phys) const;
+    void bump_page_gen(u32 phys);
+    [[nodiscard]] u16 pack_prefixes() const;
+    void apply_prefixes(u16 p);
 };
 
 } // namespace oldbox

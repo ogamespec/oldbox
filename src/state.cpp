@@ -136,6 +136,7 @@ public:
         if (has_audio) throw Error("save state contains unsupported audio data");
         if (m.audio_) m.audio_->reset();
         m.cpu_.flush_tlb();
+        m.cpu_.flush_decode_cache(); // decoded instructions belong to the old RAM image
         if (m.smbus_pci_) {
             m.smbus_pci_->remap();
             m.smbus_pci_->remap_pm();

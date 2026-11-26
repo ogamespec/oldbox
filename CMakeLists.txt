@@ -112,7 +112,7 @@ endif()
 
 if(OLDBOX_BUILD_TESTS)
     enable_testing()
-    add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_audit.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_io.cpp tests/test_voodoo.cpp
+    add_executable(oldbox_tests tests/test_main.cpp tests/test_cpu.cpp tests/test_cpu_audit.cpp tests/test_cpu_instructions.cpp tests/test_cpu_modes.cpp tests/test_cpu_system.cpp tests/test_cpu_fpu.cpp tests/test_cpu_dcache.cpp tests/test_io.cpp tests/test_voodoo.cpp
         tests/test_s3.cpp tests/test_audio.cpp tests/test_audio_config.cpp tests/test_opl_timing.cpp tests/test_opl_envelope.cpp tests/test_storage.cpp tests/test_devices.cpp
         tests/test_chipset.cpp
         tests/test_keyboard.cpp tests/test_machine.cpp tests/test_console.cpp tests/test_perf.cpp

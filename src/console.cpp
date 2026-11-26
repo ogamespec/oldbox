@@ -170,6 +170,7 @@ constexpr CommandDoc kDocs[] = {
     {"quicksave", "quicksave", "save to oldbox-quicksave.state"},
     {"quickload", "quickload", "restore oldbox-quicksave.state"},
     {"perf", "perf [report|reset|on|off]", "performance counters (F3 opens the panel)"},
+    {"dcache", "dcache [stats|flush]", "CPU decode cache statistics or flush"},
     {"pause", "pause", "stop advancing emulated time"},
     {"resume", "resume", "resume emulation"},
     {"step", "step [SECONDS]", "advance emulation while paused"},
@@ -346,6 +347,7 @@ bool CommandConsole::execute(const std::string& line) {
         else if (cmd == "text" || cmd == "screen") text_dump(args);
         else if (cmd == "cmos") cmos_command(args);
         else if (cmd == "perf" || cmd == "profile") perf_command(args);
+        else if (cmd == "dcache") dcache_command(args);
         else if (cmd == "pause") {
             paused_ = true;
             emit("emulation paused ('resume' continues, 'step' advances one slice)");
@@ -837,6 +839,27 @@ void CommandConsole::perf_command(const std::vector<std::string>& args) {
     } else {
         throw Error(std::format("unknown perf action '{}' (report, reset, on, off)", args[1]));
     }
+}
+
+void CommandConsole::dcache_command(const std::vector<std::string>& args) {
+    const std::string op = args.size() > 1 ? lower_ascii(args[1]) : "stats";
+    Cpu& cpu = machine_.cpu();
+    if (op == "flush" || op == "clear") {
+        cpu.flush_decode_cache();
+        emit("decode cache flushed (hit/miss counters reset)");
+        return;
+    }
+    if (op != "stats" && op != "show" && op != "status")
+        throw Error(std::format("unknown dcache action '{}' (stats, flush)", args[1]));
+    const u64 hits = cpu.dcache_hits();
+    const u64 misses = cpu.dcache_misses();
+    const u64 total = hits + misses;
+    emit(std::format("decode cache: {} hits, {} misses ({:.1f}% hit), {} slots, {} bytes/entry",
+                     hits, misses, total ? 100.0 * double(hits) / double(total) : 0.0,
+                     cpu.dcache_slots(), sizeof(DecodeCacheEntry)));
+    if (total)
+        emit("a hit executes from the cached decode (no instruction fetch, no ModRM re-parse); "
+             "a miss decodes and records the instruction");
 }
 
 } // namespace oldbox
