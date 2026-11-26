@@ -75,6 +75,46 @@ TEST(dcache_bench_freedos_boot) {
     std::printf("BENCH freedos: end-to-end speedup %.2fx\n", t_off / t_on);
 }
 
+// Opt-in benchmark (OLDBOX_BENCH=1): the cache machinery measured inside the
+// real FreeDOS boot (BIOS POST + DOS, MMIO ROM fetches, shadow RAM, device
+// traffic): ticks per hit operation vs ticks per decode operation.
+TEST(dcache_bench_freedos_machinery) {
+    if (!std::getenv("OLDBOX_BENCH")) {
+        std::printf("[ SKIP ] dcache FreeDOS machinery benchmark (set OLDBOX_BENCH=1)\n");
+        return;
+    }
+    const std::string bios = find_asset("assets/bios/EP-ZXA.bin");
+    const std::string floppy = find_asset("assets/floppy/freedos1440.img");
+    const std::string vga = find_asset("assets/vga/S3Trio64_1_14-04.bin");
+    if (bios.empty() || floppy.empty()) {
+        std::printf("[ SKIP ] dcache FreeDOS machinery benchmark: assets missing\n");
+        return;
+    }
+    SystemConfig cfg;
+    cfg.firmware.bios_path = bios;
+    cfg.firmware.vga_bios_path = vga;
+    cfg.storage.floppy_path = floppy;
+    cfg.headless = true;
+    cfg.no_sdl_audio = true;
+    cfg.audio.enabled = false;
+    cfg.video.voodoo_enabled = false;
+    Machine machine(cfg);
+    machine.cpu().dbg_reset_ticks();
+    machine.cpu().dbg_profile(true);
+    machine.run_slice(36.0);
+    machine.cpu().dbg_profile(false);
+    const u64 hc = machine.cpu().dbg_hit_count(), ht = machine.cpu().dbg_hit_ticks();
+    const u64 dc = machine.cpu().dbg_decode_count(), dt = machine.cpu().dbg_decode_ticks();
+    const double hit_per = hc ? double(ht) / double(hc) : 0.0;
+    const double dec_per = dc ? double(dt) / double(dc) : 0.0;
+    std::printf("BENCH freedos machinery: hit op   %6.1f ticks (%llu ops)\n", hit_per,
+                (unsigned long long)hc);
+    std::printf("BENCH freedos machinery: decode op %6.1f ticks (%llu ops)\n", dec_per,
+                (unsigned long long)dc);
+    std::printf("BENCH freedos machinery: decode/hit ratio %.2fx\n",
+                hit_per > 0.0 ? dec_per / hit_per : 0.0);
+}
+
 // End-to-end firmware test: the reference Award image boots the FreeDOS floppy
 // and the shell reaches its command prompt.  This is the regression that caught
 // the ADC/SBB carry bug in the UPX decompressor; it is skipped when the

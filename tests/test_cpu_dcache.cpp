@@ -93,6 +93,79 @@ TEST(dcache_bench_cpu_loop) {
                 (unsigned long long)h_on, (unsigned long long)m_on);
     std::printf("BENCH cpu-loop(mem): cache off %8.2f MIPS\n", mips_off);
     std::printf("BENCH cpu-loop(mem): speedup %.2fx\n", mips_on / mips_off);
+    const double dt_ns = (double(t_off) - double(t_on)) / double(n); // decode extra per instruction
+    std::printf("BENCH cpu-loop(mem): decode extra per instruction %.2f ns\n", dt_ns);
+}
+
+// Opt-in benchmark (OLDBOX_BENCH=1): measures the cache machinery itself.
+// The hit operation (lookup + replay) and the decode operation (fetch +
+// parse + record + commit) are counted in rdtsc ticks, so their ratio is
+// frequency-independent.  The decode side is forced with a self-modifying
+// loop: every iteration writes the code page, so each instruction re-decodes.
+TEST(dcache_bench_machinery) {
+    if (!std::getenv("OLDBOX_BENCH")) {
+        std::printf("[ SKIP ] dcache machinery benchmark (set OLDBOX_BENCH=1)\n");
+        return;
+    }
+    auto emit_hit_loop = [](CpuHarness& h) {
+        // 0x1000: 26 8B 07 = mov ax, es:[bx]
+        // 0x1003: 03 47 02 = add ax, [bx+2]
+        // 0x1006: 83 C3 04 = add bx, 4
+        // 0x1009: 39 CB    = cmp bx, cx
+        // 0x100B: 75 F3    = jne 0x1000
+        h.emit(0x26); h.emit(0x8b); h.emit(0x07);
+        h.emit(0x03); h.emit(0x47); h.emit(0x02);
+        h.emit(0x83); h.emit(0xc3); h.emit(0x04);
+        h.emit(0x39); h.emit(0xcb);
+        h.emit(0x75); h.emit(0xf3);
+    };
+    double hit_per = 0.0;
+    {
+        CpuHarness h;
+        h.reset_real();
+        h.state().seg[0].base = 0x20000;
+        h.state().seg[0].selector = 0x2000;
+        emit_hit_loop(h);
+        h.cpu.state().eip = 0x1000;
+        h.set_r16(3, 0);
+        h.set_r16(1, 1);
+        for (int i = 0; i < 200'000; ++i) h.cpu.step(); // warm-up
+        h.cpu.state().eip = 0x1000;
+        h.set_r16(3, 0);
+        h.cpu.dbg_reset_ticks();
+        h.cpu.dbg_profile(true);
+        for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        h.cpu.dbg_profile(false);
+        const u64 hc = h.cpu.dbg_hit_count(), ht = h.cpu.dbg_hit_ticks();
+        const u64 lt = h.cpu.dbg_lookup_ticks();
+        const double replay_per = hc ? double(ht) / double(hc) : 0.0;
+        const double look_per = hc ? double(lt) / double(hc) : 0.0;
+        hit_per = replay_per + look_per;
+        std::printf("BENCH machinery: lookup op %6.1f ticks/instr\n", look_per);
+        std::printf("BENCH machinery: replay op %6.1f ticks/instr\n", replay_per);
+        std::printf("BENCH machinery: hit op   %6.1f ticks/instr (%llu ops)\n",
+                    hit_per, (unsigned long long)hc);
+    }
+    {
+        CpuHarness h;
+        h.reset_real();
+        // 0x1000: C6 06 10 10 90 = mov byte [0x1010], 0x90 (writes the code
+        //         page, so every iteration re-decodes)
+        // 0x1006: EB F8          = jmp 0x1000
+        h.emit(0xc6); h.emit(0x06); h.emit16(0x1010); h.emit(0x90);
+        h.emit(0xeb); h.emit(0xf8);
+        h.cpu.state().eip = 0x1000;
+        h.cpu.dbg_reset_ticks();
+        h.cpu.dbg_profile(true);
+        for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        h.cpu.dbg_profile(false);
+        const u64 dc = h.cpu.dbg_decode_count(), dt = h.cpu.dbg_decode_ticks();
+        const double dec_per = dc ? double(dt) / double(dc) : 0.0;
+        std::printf("BENCH machinery: decode op %6.1f ticks/instr (%llu ops)\n",
+                    dec_per, (unsigned long long)dc);
+        std::printf("BENCH machinery: decode/hit ratio %.2fx\n",
+                    hit_per > 0.0 ? dec_per / hit_per : 0.0);
+    }
 }
 
 // Long 32-bit instructions (SIB + disp32): the fetch cost per instruction is

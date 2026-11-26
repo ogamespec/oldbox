@@ -6,9 +6,22 @@
 #include <functional>
 #include <deque>
 
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
+
 namespace oldbox {
 
 class Cpu;
+
+// TEMP-BENCH: timestamp source for the decode-cache profiling counters.
+[[nodiscard]] inline u64 dbg_ticks() {
+#ifdef _MSC_VER
+    return __rdtsc();
+#else
+    return 0;
+#endif
+}
 
 enum : u32 {
     CF = 1u << 0,  PF = 1u << 2,  AF = 1u << 4,  ZF = 1u << 6,
@@ -44,6 +57,18 @@ struct FpuReg {
     long double value = 0.0L;
     bool empty = true;
 };
+
+[[nodiscard]] inline bool segment_limit_fault(const Segment& sg, u32 offset, u32 size) {
+    if (size == 0) size = 1;
+    const bool code = (sg.access & 0x18) == 0x18;
+    const bool data = (sg.access & 0x10) && !code;
+    const u64 end = u64(offset) + size - 1;
+    if (data && (sg.access & 0x04)) {
+        const u32 max = (sg.flags & 0x40) ? 0xffffffffu : 0xffffu;
+        return offset <= sg.limit || end > max;
+    }
+    return end > sg.limit;
+}
 
 struct CpuState {
     u32 gpr[8]{};       // eax, ecx, edx, ebx, esp, ebp, esi, edi
@@ -282,6 +307,14 @@ public:
     [[nodiscard]] u64 dcache_hits() const { return dcache_hits_; }
     [[nodiscard]] u64 dcache_misses() const { return dcache_misses_; }
     [[nodiscard]] u32 dcache_slots() const { return dcache_slots_; }
+    // TEMP-BENCH: hit/decode machinery tick counters.
+    [[nodiscard]] u64 dbg_hit_ticks() const { return dbg_hit_ticks_; }
+    [[nodiscard]] u64 dbg_decode_ticks() const { return dbg_decode_ticks_; }
+    [[nodiscard]] u64 dbg_lookup_ticks() const { return dbg_lookup_ticks_; }
+    [[nodiscard]] u64 dbg_hit_count() const { return dbg_hit_count_; }
+    [[nodiscard]] u64 dbg_decode_count() const { return dbg_decode_count_; }
+    void dbg_reset_ticks() { dbg_hit_ticks_ = dbg_decode_ticks_ = dbg_lookup_ticks_ = dbg_hit_count_ = dbg_decode_count_ = 0; }
+    void dbg_profile(bool v) { dbg_prof_ = v; }
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
     void deliver_interrupt(int vector, bool software = false);
@@ -393,9 +426,11 @@ private:
     u16 opcode_cs_ = 0;
     unsigned instruction_bytes_ = 0;
     int cycles_ = 0;
-    u8 fetch8();
-    u16 fetch16();
-    u32 fetch32();
+    // EIP mask for the current instruction (0xffff in real/V86, all ones in
+    // protected mode); hoisted so the replayed fetch path needs no per-byte
+    // mode test.
+    u32 dcache_mask_ = 0;
+    u8 fetch8_cold();
     u16 fetch_imm16();
     u32 fetch_imm();
     i32 fetch_simm();
@@ -404,7 +439,121 @@ private:
     u8 default_address_size() const;
     int opsize() const { return opsize32_ ? 4 : 2; }
 
-    ModRm decode_modrm(int operand_size, bool check_limit = true);
+    // Replayed byte fetch: the hottest per-instruction code on a cache hit.
+    // Defined in-class so it inlines into the opcode handlers instead of
+    // paying a function call per consumed byte; the cold memory path is
+    // fetch8_cold() in cpu.cpp.
+    [[nodiscard]] u8 fetch8_replay() {
+        u64 t0 = 0;
+        if (dbg_prof_) t0 = dbg_ticks();
+        const u8 v = dcache_hit_->bytes[dcache_cur_++];
+        const u32 off = state_.eip & dcache_mask_;
+        state_.eip = (state_.eip & ~dcache_mask_) | ((off + 1) & dcache_mask_);
+        if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
+        return v;
+    }
+    [[nodiscard]] u8 fetch8() {
+        if (dcache_replay_) {
+            if (dcache_cur_ >= dcache_hit_->len) {
+                // The replay diverged from the recorded decode (should not
+                // happen); fall back to a plain memory fetch.
+                logf(LogLevel::warn, "cpu", "decode cache: replay overran the recorded instruction");
+                dcache_replay_ = false;
+                dcache_record_ = false;
+                return fetch8_cold();
+            }
+            return fetch8_replay();
+        }
+        return fetch8_cold();
+    }
+    [[nodiscard]] u16 fetch16() {
+        if (dcache_replay_) {
+            const u16 v = le16(dcache_hit_->bytes + dcache_cur_);
+            dcache_advance(2);
+            return v;
+        }
+        const u16 a = fetch8();
+        return a | (u16(fetch8()) << 8);
+    }
+    [[nodiscard]] u32 fetch32() {
+        if (dcache_replay_) {
+            const u32 v = le32(dcache_hit_->bytes + dcache_cur_);
+            dcache_advance(4);
+            return v;
+        }
+        const u32 a = fetch16();
+        return a | (u32(fetch16()) << 16);
+    }
+    void dcache_advance(int n) {
+        dcache_cur_ += u32(n);
+        instruction_bytes_ += unsigned(n);
+        const u32 off = state_.eip & dcache_mask_;
+        state_.eip = (state_.eip & ~dcache_mask_) | ((off + u32(n)) & dcache_mask_);
+    }
+
+    ModRm decode_modrm(int operand_size, bool check_limit = true) {
+        // Replay: rebuild the operand from the template captured at decode
+        // time plus the current register values; the ModRM/SIB/displacement
+        // bytes themselves are skipped without re-parsing.  Inlined so a hit
+        // does not pay a call for the operand decode.
+        if (dcache_replay_ && dcache_mrm_idx_ < dcache_hit_->mrm_count) {
+            u64 t0 = 0;
+            if (dbg_prof_) t0 = dbg_ticks();
+            const ModRmTemplate& t = dcache_hit_->mrm[dcache_mrm_idx_++];
+            dcache_advance(int(t.byte_len));
+            ModRm m;
+            m.raw = t.raw;
+            m.mod = t.mod;
+            m.reg_field = t.reg_field;
+            m.rm = t.rm;
+            if (lock_) {
+                const u32 op = last_opcode_;
+                const bool group1 = op == 0x80 || op == 0x81 || op == 0x82 || op == 0x83;
+                const bool group3 = op == 0xf6 || op == 0xf7;
+                const bool group45 = op == 0xfe || op == 0xff;
+                if (m.mod == 3 || (group1 && m.reg_field == 7) ||
+                    (group3 && m.reg_field != 2 && m.reg_field != 3) ||
+                    (group45 && m.reg_field > 1) ||
+                    (op == 0x0fba && m.reg_field < 5) ||
+                    (op == 0x0fc7 && m.reg_field != 1)) raise_exception(6);
+            }
+            m.size = operand_size;
+            m.address_size = t.addr_size;
+            m.segment = SegReg(t.segment);
+            m.esp_base = t.esp_base != 0;
+            if (t.is_register) {
+                m.is_register = true;
+                m.offset = t.rm;
+                if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
+                return m;
+            }
+            m.is_register = false;
+            u32 off;
+            if (t.addr_size == 2) {
+                off = modrm_offset_16(t.rm);
+                if (t.mod == 0 && t.rm == 6) {
+                    off = t.disp; // [disp16]: no base, pure 16-bit displacement
+                } else if (t.mod == 1 || t.mod == 2) {
+                    off = (off + t.disp) & 0xffffu;
+                }
+            } else {
+                u32 idx = 0;
+                if (t.index_reg != 0xff) idx = state_.gpr[t.index_reg] << t.scale;
+                off = t.disp + idx;
+                if (t.base_reg != 0xff) off += state_.gpr[t.base_reg];
+            }
+            m.offset = off;
+            const auto& seg = state_.seg[unsigned(m.segment)];
+            m.linear = seg.base + off;
+            if (check_limit && state_.mode == CpuMode::protected_mode &&
+                segment_limit_fault(seg, off, u32(operand_size))) {
+                exception_gp(seg.selector & ~3u);
+            }
+            if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
+            return m;
+        }
+        return decode_modrm_raw(operand_size, check_limit);
+    }
     ModRm decode_modrm_raw(int operand_size, bool check_limit = true);
     u32 modrm_offset_16(u8 rm);
     [[nodiscard]] u32 seg_base(SegReg s) const { return state_.seg[unsigned(s)].base; }
@@ -541,16 +690,26 @@ private:
     u64 dcache_misses_ = 0;
     bool dcache_lookup_enabled_ = true;
     // One in-flight instruction: the entry being recorded on a miss, the
-    // entry being replayed on a hit.
+    // entry being replayed on a hit.  A hit points straight into the cache
+    // array (no per-instruction copy); flush_decode_cache() preserves the
+    // in-flight slot so a mid-instruction flush cannot corrupt the replay.
     DecodeCacheEntry pending_{};
+    const DecodeCacheEntry* dcache_hit_ = nullptr;
     bool dcache_replay_ = false;
     bool dcache_record_ = false;
-    u32 dcache_cur_ = 0;    // replay cursor into pending_.bytes
+    u32 dcache_cur_ = 0;    // replay cursor into the hit entry's bytes
     u8 dcache_mrm_idx_ = 0; // next ModRM template to consume on replay
 
     void dcache_begin();
     void dcache_commit();
-    void dcache_advance(int n);
+    // TEMP-BENCH: per-operation tick accounting (hit machinery vs decode
+    // machinery), enabled only while dbg_prof_ is set so the hot path pays a
+    // single predictable branch per counted block.  Read by the benchmarks.
+    u64 dbg_hit_ticks_ = 0, dbg_decode_ticks_ = 0;
+    u64 dbg_lookup_ticks_ = 0; // hit branch of dcache_begin only
+    u64 dbg_hit_count_ = 0, dbg_decode_count_ = 0;
+    u64 dbg_t0_ = 0;
+    bool dbg_prof_ = false;
     [[nodiscard]] u32 dcache_context() const;
     [[nodiscard]] u32 page_gen(u32 phys) const;
     void bump_page_gen(u32 phys);
