@@ -1,6 +1,7 @@
 #include "cpu.hpp"
 #include "cpu_exception.hpp"
 #include <algorithm>
+#include <bit>
 #include <cstdio>
 #include <cstring>
 #include <limits>
@@ -12,12 +13,25 @@ namespace {
     if (size == 2) return v & 0xffffu;
     return v;
 }
+[[nodiscard]] u32 next_pow2(u32 v) {
+    u32 p = 1;
+    while (p < v) p <<= 1;
+    return p;
+}
 }
 
 Cpu::Cpu(Bus& bus, u32 mhz, bool deschutes)
-    : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes),
-      dcache_(std::make_unique<DecodeCacheEntry[]>(kDecodeCacheSlots)),
-      page_gen_(std::make_unique<PageGen[]>(kPageGenSlots)) {
+    : bus_(bus), mhz_(mhz), tsc_mhz_(mhz), deschutes_(deschutes) {
+    // The decode cache covers the whole guest RAM: one slot per 4 KiB
+    // physical page, so a cached decode can exist for every page at once.
+    // A 64 MiB machine gets 16K slots (~1.3 MiB), a 512 MiB one 128K slots
+    // (~10 MiB).  The page-generation table mirrors that granularity.
+    const u32 pages = (bus_.ram_size() + (page_size - 1)) / page_size;
+    dcache_slots_ = std::max(kMinDecodeCacheSlots, next_pow2(pages));
+    dcache_shift_ = 32 - u32(std::bit_width(dcache_slots_ - 1));
+    page_gen_slots_ = std::max(16384u, next_pow2(pages));
+    dcache_ = std::make_unique<DecodeCacheEntry[]>(dcache_slots_);
+    page_gen_ = std::make_unique<PageGen[]>(page_gen_slots_);
     tlb_tag_.fill(0xffffffffu);
     tlb_phys_.fill(0);
     tlb_flags_.fill(0);
@@ -81,8 +95,8 @@ void Cpu::flush_decode_cache() {
     // so a flush triggered mid-instruction (A20 toggled from an OUT) cannot
     // corrupt execution.  Its entry is then unreachable because the reset
     // generation table never matches the recorded generations.
-    std::fill_n(dcache_.get(), kDecodeCacheSlots, DecodeCacheEntry{});
-    std::fill_n(page_gen_.get(), kPageGenSlots, PageGen{});
+    std::fill_n(dcache_.get(), dcache_slots_, DecodeCacheEntry{});
+    std::fill_n(page_gen_.get(), page_gen_slots_, PageGen{});
     dcache_epoch_ = 1;
     dcache_hits_ = 0;
     dcache_misses_ = 0;
@@ -101,13 +115,13 @@ u32 Cpu::dcache_context() const {
 
 u32 Cpu::page_gen(u32 phys) const {
     const u32 page = phys >> 12;
-    const PageGen& g = page_gen_[page & (kPageGenSlots - 1)];
+    const PageGen& g = page_gen_[page & (page_gen_slots_ - 1)];
     return g.tag == page ? g.gen : 0;
 }
 
 void Cpu::bump_page_gen(u32 phys) {
     const u32 page = phys >> 12;
-    PageGen& g = page_gen_[page & (kPageGenSlots - 1)];
+    PageGen& g = page_gen_[page & (page_gen_slots_ - 1)];
     if (g.tag == page) ++g.gen;
     else { g.tag = page; g.gen = ++dcache_epoch_; }
     if (g.gen == 0) g.gen = ++dcache_epoch_;
@@ -175,10 +189,11 @@ void Cpu::dcache_begin() {
     // memory the bytes come from, so mask it exactly like the bus does.
     const u32 phys = translate(lin, false) & (state_.a20 ? 0xffffffffu : ~(1u << 20));
     const u32 ctx = dcache_context();
-    // Direct-mapped slot.  phys alone spreads adjacent instructions over
-    // distinct slots; the context term re-scatters aliased code (same bytes
-    // executed in different modes/segments).
-    const u32 idx = (phys ^ (ctx * 0x9e3779b1u)) & (kDecodeCacheSlots - 1);
+    // Direct-mapped slot from a multiplicative hash.  Adjacent addresses land
+    // in adjacent-ish slots, page-aligned code (protected-mode segment bases)
+    // spreads over the whole table, and the context term separates aliased
+    // code (same bytes executed in different modes/segments).
+    const u32 idx = ((phys * 0x9e3779b1u) ^ (ctx * 0x85ebca6bu)) >> dcache_shift_;
     {
         const DecodeCacheEntry& e = dcache_[idx];
         if (dcache_lookup_enabled_ && e.phys0 == phys && e.ctx == ctx && e.cs_limit == cs.limit && e.len != 0 &&
@@ -217,7 +232,7 @@ void Cpu::dcache_commit() {
     if (!dcache_record_) return;
     dcache_record_ = false;
     if (pending_.len == 0) return;
-    const u32 idx = (pending_.phys0 ^ (pending_.ctx * 0x9e3779b1u)) & (kDecodeCacheSlots - 1);
+    const u32 idx = ((pending_.phys0 * 0x9e3779b1u) ^ (pending_.ctx * 0x85ebca6bu)) >> dcache_shift_;
     dcache_[idx] = pending_;
 }
 

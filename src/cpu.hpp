@@ -281,7 +281,7 @@ public:
     void invalidate_code(u32 phys, u32 size);
     [[nodiscard]] u64 dcache_hits() const { return dcache_hits_; }
     [[nodiscard]] u64 dcache_misses() const { return dcache_misses_; }
-    [[nodiscard]] u32 dcache_slots() const { return kDecodeCacheSlots; }
+    [[nodiscard]] u32 dcache_slots() const { return dcache_slots_; }
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
     void deliver_interrupt(int vector, bool software = false);
@@ -522,15 +522,20 @@ private:
 
     // --- Decode cache ---------------------------------------------------
     // Heap-allocated so that a Cpu (and thus a Machine) stays small enough
-    // for the default Windows 1 MiB stack.
-    static constexpr u32 kDecodeCacheSlots = 8192;
-    static constexpr u32 kPageGenSlots = 16384;
+    // for the default Windows 1 MiB stack.  Sized to cover the whole guest
+    // RAM: one slot per 4 KiB physical page (minimum 8192 slots), so every
+    // page of guest memory can hold a cached decode simultaneously; the
+    // page-generation table tracks the same granularity.
+    static constexpr u32 kMinDecodeCacheSlots = 8192;
     struct PageGen {
         u32 tag = 0; // physical page
         u32 gen = 0; // generation, bumped on every write to the page
     };
     std::unique_ptr<DecodeCacheEntry[]> dcache_;
     std::unique_ptr<PageGen[]> page_gen_;
+    u32 dcache_slots_ = 0;   // power of two, >= kMinDecodeCacheSlots
+    u32 dcache_shift_ = 0;   // 32 - log2(dcache_slots_)
+    u32 page_gen_slots_ = 0; // power of two
     u32 dcache_epoch_ = 1;
     u64 dcache_hits_ = 0;
     u64 dcache_misses_ = 0;
