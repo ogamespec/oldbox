@@ -120,6 +120,7 @@ TEST(dcache_bench_machinery) {
         h.emit(0x75); h.emit(0xf3);
     };
     double hit_per = 0.0;
+    double hit_ns = 0.0;
     {
         CpuHarness h;
         h.reset_real();
@@ -134,17 +135,21 @@ TEST(dcache_bench_machinery) {
         h.set_r16(3, 0);
         h.cpu.dbg_reset_ticks();
         h.cpu.dbg_profile(true);
+        const u64 w0 = bench_now_ns();
         for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        const u64 w1 = bench_now_ns();
         h.cpu.dbg_profile(false);
         const u64 hc = h.cpu.dbg_hit_count(), ht = h.cpu.dbg_hit_ticks();
         const u64 lt = h.cpu.dbg_lookup_ticks();
         const double replay_per = hc ? double(ht) / double(hc) : 0.0;
         const double look_per = hc ? double(lt) / double(hc) : 0.0;
         hit_per = replay_per + look_per;
+        hit_ns = double(w1 - w0) / 100'000'000.0;
         std::printf("BENCH machinery: lookup op %6.1f ticks/instr\n", look_per);
         std::printf("BENCH machinery: replay op %6.1f ticks/instr\n", replay_per);
-        std::printf("BENCH machinery: hit op   %6.1f ticks/instr (%llu ops)\n",
-                    hit_per, (unsigned long long)hc);
+        std::printf("BENCH machinery: hit op   %6.1f ticks/instr (%llu ops), full instr %6.2f ns\n",
+                    hit_per, (unsigned long long)hc, hit_ns);
+        (void)w1;
     }
     {
         CpuHarness h;
@@ -157,14 +162,18 @@ TEST(dcache_bench_machinery) {
         h.cpu.state().eip = 0x1000;
         h.cpu.dbg_reset_ticks();
         h.cpu.dbg_profile(true);
+        const u64 w0 = bench_now_ns();
         for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        const u64 w1 = bench_now_ns();
         h.cpu.dbg_profile(false);
         const u64 dc = h.cpu.dbg_decode_count(), dt = h.cpu.dbg_decode_ticks();
         const double dec_per = dc ? double(dt) / double(dc) : 0.0;
-        std::printf("BENCH machinery: decode op %6.1f ticks/instr (%llu ops)\n",
-                    dec_per, (unsigned long long)dc);
-        std::printf("BENCH machinery: decode/hit ratio %.2fx\n",
-                    hit_per > 0.0 ? dec_per / hit_per : 0.0);
+        const double miss_ns = double(w1 - w0) / 100'000'000.0;
+        std::printf("BENCH machinery: decode op %6.1f ticks/instr (%llu ops), full instr %6.2f ns\n",
+                    dec_per, (unsigned long long)dc, miss_ns);
+        std::printf("BENCH machinery: decode/hit ratio %.2fx (machinery), full instr %.2fx\n",
+                    hit_per > 0.0 ? dec_per / hit_per : 0.0,
+                    hit_ns > 0.0 ? miss_ns / hit_ns : 0.0);
     }
 }
 

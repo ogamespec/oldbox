@@ -238,8 +238,392 @@ void Cpu::dcache_commit() {
     dcache_record_ = false;
     if (pending_.len == 0) return;
     const u32 idx = (pending_.phys0 ^ (pending_.phys0 >> dcache_shift_) ^ pending_.ctx) & (dcache_slots_ - 1);
+    pending_.lean_tag = dcache_lean_tag(pending_);
     dcache_[idx] = pending_;
     if (dbg_prof_) dbg_decode_ticks_ += dbg_ticks() - t0;
+}
+
+// Classifies an opcode for the lean (fully pre-parsed) execution path, or 0
+// when the instruction must go through the generic replay.
+u8 Cpu::dcache_lean_tag(const DecodeCacheEntry& e) const {
+    const u8 op = e.opcode;
+    if (op <= 0x3b && (op & 7u) <= 3u) return 1;                  // ALU r/m
+    if (op <= 0x3d && ((op & 7u) == 4u || (op & 7u) == 5u)) return 2; // ALU acc,imm
+    if (op >= 0x40 && op <= 0x4f) return 3;                      // inc/dec reg
+    if (op >= 0x50 && op <= 0x57) return 4;                      // push reg
+    if (op >= 0x58 && op <= 0x5f) return 5;                      // pop reg
+    if (op >= 0x70 && op <= 0x7f) return 6;                      // jcc rel8
+    if (op >= 0x80 && op <= 0x83) return 7;                      // group 1
+    if (op == 0x84 || op == 0x85) return 8;                      // test r/m
+    if (op >= 0x88 && op <= 0x8b) return 9;                      // mov r/m
+    if (op == 0x90) return 10;                                   // nop
+    if (op >= 0x91 && op <= 0x97) return 11;                     // xchg eax,reg
+    if (op >= 0xb0 && op <= 0xb7) return 12;                     // mov r8,imm8
+    if (op >= 0xb8 && op <= 0xbf) return 13;                     // mov r,imm
+    if (op == 0xc3) return 14;                                   // ret near
+    if (op == 0x8d) return 15;                                   // lea
+    if (op >= 0xa0 && op <= 0xa3) return 16;                     // mov moffs
+    if (op == 0xa8 || op == 0xa9) return 17;                     // test acc,imm
+    if (op == 0xc7) return 18;                                   // mov r/m,imm
+    if (op == 0xeb) return 19;                                   // jmp rel8
+    if (op == 0xe9) return 20;                                   // jmp rel
+    if (op == 0xe8) return 21;                                   // call rel
+    if (op == 0xcc) return 22;                                   // int3
+    if (op == 0xcd) return 23;                                   // int imm8
+    if (op == 0xf6 || op == 0xf7) return 24;                     // group 3
+    if (op == 0xfe) return 25;                                   // group 4
+    if (op == 0xff) return 26;                                   // group 5
+    return 0;
+}
+
+// Hot-subset execution straight from the decoded entry: no byte fetches, no
+// ModRM re-parse, no opcode switch.  The operand templates and immediate
+// slots were captured at decode time; the semantics of each block below are
+// copied verbatim from the matching execute_one() cases.
+void Cpu::dcache_lean_execute() {
+    const DecodeCacheEntry& e = *dcache_hit_;
+    const u8 op = e.opcode;
+    u64 t0 = 0;
+    if (dbg_prof_) t0 = dbg_ticks();
+    last_opcode_ = op;
+    cycles_ += 2;
+    if (lock_) {
+        const bool alu_memory = op <= 0x31 && (op & 7) <= 1;
+        if (!alu_memory && op != 0x80 && op != 0x81 && op != 0x82 && op != 0x83)
+            raise_exception(6);
+    }
+    auto ea = [&](const ModRmTemplate& t) -> u32 {
+        if (t.addr_size == 2) {
+            u32 off = modrm_offset_16(t.rm);
+            if (t.mod == 0 && t.rm == 6) off = t.disp;
+            else if (t.mod == 1 || t.mod == 2) off = (off + t.disp) & 0xffffu;
+            return off;
+        }
+        u32 idx = 0;
+        if (t.index_reg != 0xff) idx = state_.gpr[t.index_reg] << t.scale;
+        u32 off = t.disp + idx;
+        if (t.base_reg != 0xff) off += state_.gpr[t.base_reg];
+        return off;
+    };
+    auto rm_read = [&](const ModRmTemplate& t, int size) -> u32 {
+        if (t.is_register) return read_reg_index(t.rm, size);
+        return read_mem(ea(t), size, SegReg(t.segment));
+    };
+    auto rm_write = [&](const ModRmTemplate& t, u32 v, int size) {
+        if (t.is_register) write_reg_index(t.rm, v, size);
+        else write_mem(ea(t), v, size, SegReg(t.segment));
+    };
+    auto imm_of = [&](u8 slot, int size) -> u32 {
+        return e.imm_size[slot] == 4 ? e.imm[slot] : (e.imm[slot] & 0xffffu);
+    };
+    (void)imm_of;
+    switch (e.lean_tag) {
+    case 1: { // ALU r/m, 0x00-0x3B
+        const int kind = op >> 3;
+        const int size = (op & 1) ? opsize() : 1;
+        const bool rm_dest = (op & 2) == 0;
+        const ModRmTemplate& t = e.mrm[0];
+        u32 a, b;
+        if (rm_dest) { a = rm_read(t, size); b = read_reg_index(t.reg_field, size); }
+        else { a = read_reg_index(t.reg_field, size); b = rm_read(t, size); }
+        u32 r = 0;
+        switch (kind) {
+        case 0: r = a + b; set_add(a, b, r, size); break;
+        case 1: r = a | b; set_logic(r, size); break;
+        case 2: { const u32 c = get_flag(CF) ? 1u : 0u; r = a + b + c; set_add(a, b, r, size, c); break; }
+        case 3: { const u32 c = get_flag(CF) ? 1u : 0u; r = a - b - c; set_sub(a, b, r, size, c); break; }
+        case 4: r = a & b; set_logic(r, size); break;
+        case 5: r = a - b; set_sub(a, b, r, size); break;
+        case 6: r = a ^ b; set_logic(r, size); break;
+        default: r = a - b; set_sub(a, b, r, size); break;
+        }
+        if (kind != 7) {
+            if (rm_dest) rm_write(t, r, size);
+            else write_reg_index(t.reg_field, r, size);
+        }
+        break;
+    }
+    case 2: { // ALU acc,imm
+        const int kind = op >> 3;
+        const int size = (op & 1) ? opsize() : 1;
+        const u32 imm = size == 1 ? e.bytes[e.len - 1]
+                                  : (e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu));
+        const u32 a = size == 1 ? reg8(0) : (size == 2 ? reg16(0) : state_.gpr[0]);
+        u32 r = 0;
+        switch (kind) {
+        case 0: r = a + imm; set_add(a, imm, r, size); break;
+        case 1: r = a | imm; set_logic(r, size); break;
+        case 2: { const u32 c = get_flag(CF) ? 1u : 0u; r = a + imm + c; set_add(a, imm, r, size, c); break; }
+        case 3: { const u32 c = get_flag(CF) ? 1u : 0u; r = a - imm - c; set_sub(a, imm, r, size, c); break; }
+        case 4: r = a & imm; set_logic(r, size); break;
+        case 5: r = a - imm; set_sub(a, imm, r, size); break;
+        case 6: r = a ^ imm; set_logic(r, size); break;
+        default: r = a - imm; set_sub(a, imm, r, size); break;
+        }
+        if (kind != 7) {
+            if (size == 1) set_reg8(0, u8(r)); else if (size == 2) set_reg16(0, u16(r)); else set_reg(0, r);
+        }
+        break;
+    }
+    case 3: { // inc/dec reg
+        const int i = op & 7;
+        const int size = opsize();
+        const bool inc = op < 0x48;
+        const u32 a = read_reg_index(i, size);
+        const u32 r = inc ? a + 1 : a - 1;
+        set_incdec(a, r, size, inc);
+        write_reg_index(i, r, size);
+        break;
+    }
+    case 4: // push reg
+        push_value(read_reg_index(op & 7, opsize()), opsize());
+        break;
+    case 5: // pop reg
+        write_reg_index(op & 7, pop_value(opsize()), opsize());
+        break;
+    case 6: { // jcc rel8
+        const i8 disp = i8(e.bytes[e.len - 1]);
+        if (cond(op & 15)) state_.eip = near_ip(state_.eip + u32(i32(disp)));
+        break;
+    }
+    case 7: { // group 1: 0x80-0x83
+        const ModRmTemplate& t = e.mrm[0];
+        const int size = (op == 0x80 || op == 0x82) ? 1 : opsize();
+        u32 imm;
+        if (op == 0x83) imm = u32(i32(i8(e.bytes[e.len - 1])));
+        else if (size == 1) imm = e.bytes[e.len - 1];
+        else imm = e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu);
+        const u32 a = rm_read(t, size);
+        u32 r = 0;
+        switch (t.reg_field) {
+        case 0: r = a + imm; set_add(a, imm, r, size); break;
+        case 1: r = a | imm; set_logic(r, size); break;
+        case 2: { const u32 c = get_flag(CF) ? 1u : 0u; r = a + imm + c; set_add(a, imm, r, size, c); break; }
+        case 3: { const u32 c = get_flag(CF) ? 1u : 0u; r = a - imm - c; set_sub(a, imm, r, size, c); break; }
+        case 4: r = a & imm; set_logic(r, size); break;
+        case 5: r = a - imm; set_sub(a, imm, r, size); break;
+        case 6: r = a ^ imm; set_logic(r, size); break;
+        default: r = a - imm; set_sub(a, imm, r, size); break;
+        }
+        if (t.reg_field != 7) rm_write(t, r, size);
+        break;
+    }
+    case 8: { // test r/m
+        const int size = (op & 1) ? opsize() : 1;
+        const ModRmTemplate& t = e.mrm[0];
+        set_logic(rm_read(t, size) & read_reg_index(t.reg_field, size), size);
+        break;
+    }
+    case 9: { // mov r/m
+        const int size = (op & 1) ? opsize() : 1;
+        const ModRmTemplate& t = e.mrm[0];
+        if (op & 2) write_reg_index(t.reg_field, rm_read(t, size), size); // 8A/8B
+        else rm_write(t, read_reg_index(t.reg_field, size), size);        // 88/89
+        break;
+    }
+    case 10: // nop
+        break;
+    case 11: { // xchg eax,reg
+        const int i = op & 7;
+        const int size = opsize();
+        u32 a = read_reg_index(0, size), b = read_reg_index(i, size);
+        write_reg_index(0, b, size);
+        write_reg_index(i, a, size);
+        break;
+    }
+    case 12: // mov r8,imm8
+        set_reg8(op & 7, e.bytes[e.len - 1]);
+        break;
+    case 13: { // mov r,imm
+        const int size = opsize();
+        write_reg_index(op & 7, e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu), size);
+        break;
+    }
+    case 14: { // ret near
+        const u32 target = read_mem(stack_pointer(), opsize(), SegReg::ss);
+        trace_control("RET", target, stack_pointer());
+        state_.eip = pop_value(opsize());
+        break;
+    }
+    case 15: { // lea
+        const ModRmTemplate& t = e.mrm[0];
+        if (t.is_register) raise_exception(6);
+        write_reg_index(t.reg_field, ea(t), opsize());
+        break;
+    }
+    case 16: { // mov moffs (0xA0-0xA3)
+        const int size = (op & 1) ? opsize() : 1;
+        const int asz = addrsize32_ ? 4 : 2;
+        const u32 off = asz == 4 ? le32(e.bytes + e.len - 4) : le16(e.bytes + e.len - 2);
+        const SegReg s = seg_override_.value_or(SegReg::ds);
+        if (op < 0xa2) {
+            const u32 v = read_mem(off, size, s);
+            if (size == 1) set_reg8(0, u8(v)); else if (size == 2) set_reg16(0, u16(v)); else set_reg(0, v);
+        } else {
+            const u32 v = size == 1 ? reg8(0) : (size == 2 ? reg16(0) : state_.gpr[0]);
+            write_mem(off, v, size, s);
+        }
+        break;
+    }
+    case 17: { // test acc,imm
+        const int size = (op & 1) ? opsize() : 1;
+        const u32 imm = size == 1 ? e.bytes[e.len - 1]
+                                  : (e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu));
+        const u32 a = size == 1 ? reg8(0) : (size == 2 ? reg16(0) : state_.gpr[0]);
+        set_logic(a & imm, size);
+        break;
+    }
+    case 18: { // mov r/m,imm (C7)
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        if (t.reg_field != 0) raise_exception(6);
+        const u32 imm = e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu);
+        rm_write(t, imm, size);
+        break;
+    }
+    case 19: { // jmp rel8
+        const i8 rel = i8(e.bytes[e.len - 1]);
+        const u32 target = near_ip(state_.eip + u32(i32(rel)));
+        trace_control("JMP", target);
+        state_.eip = target;
+        break;
+    }
+    case 20: { // jmp rel
+        const i32 rel = e.imm_size[0] == 4 ? i32(e.imm[0]) : i32(i16(u16(e.imm[0])));
+        const u32 target = near_ip(state_.eip + u32(rel));
+        trace_control("JMP", target);
+        state_.eip = target;
+        break;
+    }
+    case 21: { // call rel
+        const i32 rel = e.imm_size[0] == 4 ? i32(e.imm[0]) : i32(i16(u16(e.imm[0])));
+        const u32 target = near_ip(state_.eip + u32(rel));
+        trace_control("CALL", target, stack_pointer());
+        push_value(state_.eip, opsize());
+        state_.eip = target;
+        break;
+    }
+    case 22: // int3
+        trace_control("INT3", 0, stack_pointer());
+        software_interrupt(3);
+        break;
+    case 23: { // int imm8
+        const u8 v = e.bytes[e.len - 1];
+        trace_control("INT", v, stack_pointer());
+        software_interrupt(v);
+        break;
+    }
+    case 24: { // group 3 (F6/F7)
+        const bool is8 = op == 0xf6;
+        const int size = is8 ? 1 : opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 a = rm_read(t, size);
+        const u32 mask = size_mask(size);
+        switch (t.reg_field) {
+        case 0: case 1: {
+            const u32 imm = is8 ? e.bytes[e.len - 1]
+                                : (e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu));
+            set_logic(a & imm, size);
+            break;
+        }
+        case 2: rm_write(t, ~a, size); break;
+        case 3: { const u32 r = (0 - a) & mask; set_sub(0, a, r, size); rm_write(t, r, size); break; }
+        case 4: {
+            if (size == 1) { const u16 r = u16(u32(reg8(0)) * (a & 0xffu)); set_reg16(0, r); set_flag(CF, (r & 0xff00u) != 0); set_flag(OF, (r & 0xff00u) != 0); }
+            else if (size == 2) { const u32 r = u32(reg16(0)) * (a & 0xffffu); set_reg16(0, u16(r)); set_reg16(2, u16(r >> 16)); set_flag(CF, (r >> 16) != 0); set_flag(OF, (r >> 16) != 0); }
+            else { const u64 r = u64(state_.gpr[0]) * a; state_.gpr[0] = u32(r); state_.gpr[2] = u32(r >> 32); set_flag(CF, (r >> 32) != 0); set_flag(OF, (r >> 32) != 0); }
+            break;
+        }
+        case 5: {
+            if (size == 1) { const i16 r = i16(i8(reg8(0))) * i16(i8(u8(a))); set_reg16(0, u16(r)); set_flag(CF, r != i16(i8(u8(r)))); set_flag(OF, r != i16(i8(u8(r)))); }
+            else if (size == 2) { const i32 r = i32(i16(reg16(0))) * i32(i16(u16(a))); set_reg16(0, u16(r)); set_reg16(2, u16(u32(r) >> 16)); set_flag(CF, r != i32(i16(u16(r)))); set_flag(OF, r != i32(i16(u16(r)))); }
+            else { const i64 r = i64(i32(state_.gpr[0])) * i64(i32(a)); state_.gpr[0] = u32(r); state_.gpr[2] = u32(u64(r) >> 32); set_flag(CF, r != i64(i32(u32(r)))); set_flag(OF, r != i64(i32(u32(r)))); }
+            break;
+        }
+        case 6: {
+            if (a == 0) raise_exception(0);
+            if (size == 1) { const u16 dividend = reg16(0); const u16 q = dividend / (a & 0xffu); const u16 rem = dividend % (a & 0xffu); if (q > 0xff) raise_exception(0); set_reg8(0, u8(q)); set_reg8(4, u8(rem)); }
+            else if (size == 2) { const u32 dividend = (u32(reg16(2)) << 16) | reg16(0); const u32 q = dividend / (a & 0xffffu); const u32 rem = dividend % (a & 0xffffu); if (q > 0xffff) raise_exception(0); set_reg16(0, u16(q)); set_reg16(2, u16(rem)); }
+            else { const u64 dividend = (u64(state_.gpr[2]) << 32) | state_.gpr[0]; const u64 q = dividend / a; if (q > 0xffffffffull) raise_exception(0); const u64 rem = dividend % a; state_.gpr[0] = u32(q); state_.gpr[2] = u32(rem); }
+            break;
+        }
+        default: {
+            if (a == 0) raise_exception(0);
+            if (size == 1) { const i16 dividend = i16(reg16(0)); const i16 q = dividend / i16(i8(u8(a))); const i16 rem = dividend % i16(i8(u8(a))); if (q > 127 || q < -128) raise_exception(0); set_reg8(0, u8(q)); set_reg8(4, u8(rem)); }
+            else if (size == 2) {
+                const i32 dividend = i32((u32(reg16(2)) << 16) | reg16(0));
+                const i32 divisor = i32(i16(u16(a)));
+                if (dividend == std::numeric_limits<i32>::min() && divisor == -1) raise_exception(0);
+                const i32 q = dividend / divisor; const i32 rem = dividend % divisor;
+                if (q > 32767 || q < -32768) raise_exception(0);
+                set_reg16(0, u16(q)); set_reg16(2, u16(rem));
+            } else {
+                const i64 dividend = i64((u64(state_.gpr[2]) << 32) | state_.gpr[0]);
+                const i64 divisor = i64(i32(a));
+                if (dividend == std::numeric_limits<i64>::min() && divisor == -1) raise_exception(0);
+                const i64 q = dividend / divisor; const i64 rem = dividend % divisor;
+                if (q > std::numeric_limits<i32>::max() || q < std::numeric_limits<i32>::min()) raise_exception(0);
+                state_.gpr[0] = u32(q); state_.gpr[2] = u32(rem);
+            }
+            break;
+        }
+        }
+        break;
+    }
+    case 25: { // group 4 (FE)
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 a = rm_read(t, 1);
+        if (t.reg_field == 0) { const u32 r = a + 1; set_incdec(a, r, 1, true); rm_write(t, r, 1); }
+        else if (t.reg_field == 1) { const u32 r = a - 1; set_incdec(a, r, 1, false); rm_write(t, r, 1); }
+        else raise_exception(6);
+        break;
+    }
+    case 26: { // group 5 (FF)
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        switch (t.reg_field) {
+        case 0: { const u32 a = rm_read(t, size); const u32 r = a + 1; set_incdec(a, r, size, true); rm_write(t, r, size); break; }
+        case 1: { const u32 a = rm_read(t, size); const u32 r = a - 1; set_incdec(a, r, size, false); rm_write(t, r, size); break; }
+        case 2: {
+            const u32 target = rm_read(t, size) & (size == 2 ? 0xffffu : 0xffffffffu);
+            trace_control("CALLI", target, stack_pointer());
+            push_value(state_.eip, size);
+            state_.eip = target;
+            break;
+        }
+        case 3: {
+            if (t.is_register) exception_gp(0);
+            const u32 off = ea(t);
+            const u32 foff = read_mem(off, size, SegReg(t.segment));
+            const u16 sel = u16(read_mem(off + u32(size), 2, SegReg(t.segment)));
+            trace_control("CALLF", foff, stack_pointer());
+            do_far_call(sel, foff, size);
+            break;
+        }
+        case 4: {
+            const u32 target = rm_read(t, size) & (size == 2 ? 0xffffu : 0xffffffffu);
+            trace_control("JMPI", target);
+            state_.eip = target;
+            break;
+        }
+        case 5: {
+            if (t.is_register) exception_gp(0);
+            const u32 off = ea(t);
+            const u32 foff = read_mem(off, size, SegReg(t.segment));
+            const u16 sel = u16(read_mem(off + u32(size), 2, SegReg(t.segment)));
+            trace_control("JMPF", foff);
+            do_far_jump(sel, foff);
+            break;
+        }
+        case 6: push_value(rm_read(t, size), size); break;
+        default: raise_exception(6); break;
+        }
+        break;
+    }
+    default:
+        break;
+    }
+    if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
 }
 
 void Cpu::reset_segments_real() {
@@ -1801,7 +2185,8 @@ void Cpu::step() {
         bool completed = false;
         try {
             dcache_begin();
-            execute_one();
+            if (dcache_hit_ && dcache_hit_->lean_tag) dcache_lean_execute();
+            else execute_one();
             completed = true;
         } catch (const CpuException& e) {
             handle_exception(e.vector, e.error, e.has_error);

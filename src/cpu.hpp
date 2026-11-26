@@ -181,6 +181,7 @@ struct DecodeCacheEntry {
     u8 imm_count = 0;
     u8 imm_size[3] = {};      // 2 or 4 bytes per slot
     u32 imm[3] = {};
+    u8 lean_tag = 0;           // 0 = generic replay, else a lean handler id
     u8 bytes[15];             // captured instruction bytes
 };
 
@@ -751,6 +752,8 @@ private:
 
     void dcache_begin();
     void dcache_commit();
+    void dcache_lean_execute(); // hot-subset execution straight from the entry
+    [[nodiscard]] u8 dcache_lean_tag(const DecodeCacheEntry& e) const;
     // TEMP-BENCH: per-operation tick accounting (hit machinery vs decode
     // machinery), enabled only while dbg_prof_ is set so the hot path pays a
     // single predictable branch per counted block.  Read by the benchmarks.
