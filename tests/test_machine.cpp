@@ -105,12 +105,15 @@ TEST(dcache_bench_freedos_machinery) {
     machine.cpu().dbg_profile(false);
     const u64 hc = machine.cpu().dbg_hit_count(), ht = machine.cpu().dbg_hit_ticks();
     const u64 dc = machine.cpu().dbg_decode_count(), dt = machine.cpu().dbg_decode_ticks();
+    const u64 lt = machine.cpu().dbg_lookup_ticks(), lp = machine.cpu().dbg_lean_pro_ticks();
+    const u64 dm = machine.cpu().dbg_dec_mach_ticks();
     const double hit_per = hc ? double(ht) / double(hc) : 0.0;
     const double dec_per = dc ? double(dt) / double(dc) : 0.0;
-    std::printf("BENCH freedos machinery: hit op   %6.1f ticks (%llu ops)\n", hit_per,
+    std::printf("BENCH freedos machinery: hit span %6.1f ticks (lookup %5.1f + dispatch %5.1f) (%llu ops)\n",
+                hit_per, hc ? double(lt) / double(hc) : 0.0, hc ? double(lp) / double(hc) : 0.0,
                 (unsigned long long)hc);
-    std::printf("BENCH freedos machinery: decode op %6.1f ticks (%llu ops)\n", dec_per,
-                (unsigned long long)dc);
+    std::printf("BENCH freedos machinery: decode span %6.1f ticks (machinery %5.1f) (%llu ops)\n",
+                dec_per, dc ? double(dm) / double(dc) : 0.0, (unsigned long long)dc);
     std::printf("BENCH freedos machinery: decode/hit ratio %.2fx\n",
                 hit_per > 0.0 ? dec_per / hit_per : 0.0);
 }
