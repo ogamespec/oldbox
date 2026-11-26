@@ -283,6 +283,15 @@ u8 Cpu::dcache_lean_tag(const DecodeCacheEntry& e) const {
     if (op == 0xd4) return 34;                                   // aam
     if (op == 0xd5) return 35;                                   // aad
     if (op == 0x86 || op == 0x87) return 36;                     // xchg r/m
+    if (op == 0x68) return 37;                                   // push imm
+    if (op == 0x6a) return 38;                                   // push imm8
+    if (op == 0x60 || op == 0x61) return 39;                     // pusha/popa
+    if (op == 0x69 || op == 0x6b) return 47;                     // imul r,r/m,imm
+    if (op >= 0xe0 && op <= 0xe3) return 48;                     // loop/jcxz
+    if (op == 0x9c || op == 0x9d) return 49;                     // pushf/popf
+    if (op == 0x98 || op == 0x99) return 50;                     // cbw/cwd/cdq
+    if (op == 0x9e || op == 0x9f) return 51;                     // sahf/lahf
+    if (op == 0xd7) return 52;                                   // xlat
     if (op == 0x0f) {
         const u8 op2 = e.bytes[e.opcode_ofs + 1];
         const bool locked = (e.prefixes & 0x10) != 0;
@@ -865,6 +874,106 @@ void Cpu::dcache_lean_execute() {
             set_flag(ZF, false);
             if (size == 1) set_reg8(0, u8(dst)); else if (size == 2) set_reg16(0, u16(dst)); else state_.gpr[0] = dst;
         }
+        break;
+    }
+    case 37: // push imm (0x68)
+        push_value(e.imm_size[0] == 4 ? e.imm[0] : (e.imm[0] & 0xffffu), opsize());
+        break;
+    case 38: // push imm8 (0x6A)
+        push_value(u32(i32(i8(e.bytes[e.len - 1]))), opsize());
+        break;
+    case 39: { // pusha/popa (0x60/0x61)
+        const int size = opsize();
+        if (op == 0x60) {
+            const u32 sp = stack_pointer();
+            for (int i = 0; i < 8; ++i) {
+                if (i == 4) push_value(sp, size);
+                else push_value(read_reg_index(i, size), size);
+            }
+        } else {
+            for (int i = 7; i >= 0; --i) {
+                const u32 v = pop_value(size);
+                if (i != 4) write_reg_index(i, v, size);
+            }
+        }
+        break;
+    }
+    case 47: { // imul r,r/m,imm (0x69/0x6B)
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 a = rm_read(t, opsize());
+        const i32 b = op == 0x69
+                          ? (opsize32_ ? i32(le32(e.bytes + e.len - 4)) : i32(i16(le16(e.bytes + e.len - 2))))
+                          : i32(i8(e.bytes[e.len - 1]));
+        const i64 r = (opsize32_ ? i64(i32(a)) : i64(i16(u16(a)))) * b;
+        write_reg_index(t.reg_field, u32(r), opsize());
+        const bool ov = r != (opsize32_ ? i64(i32(u32(r))) : i64(i16(u16(r))));
+        set_flag(CF, ov); set_flag(OF, ov);
+        break;
+    }
+    case 48: { // loop/jcxz (0xE0-0xE3)
+        const i8 d = i8(e.bytes[e.len - 1]);
+        const u32 c0 = addrsize32_ ? state_.gpr[1] : (state_.gpr[1] & 0xffffu);
+        if (op != 0xe3) {
+            const u32 c = c0 - 1;
+            if (addrsize32_) state_.gpr[1] = c; else set_reg16(1, u16(c));
+            const bool take = op == 0xe2 ? (c != 0) : (op == 0xe1 ? (c != 0 && get_flag(ZF)) : (c != 0 && !get_flag(ZF)));
+            if (take) state_.eip = loop_ip(state_.eip + u32(i32(d)));
+        } else {
+            if (c0 == 0) state_.eip = loop_ip(state_.eip + u32(i32(d)));
+        }
+        break;
+    }
+    case 49: { // pushf/popf (0x9C/0x9D)
+        if (op == 0x9c) {
+            if (state_.mode == CpuMode::virtual86 && ((state_.eflags >> 12) & 3u) != 3u)
+                raise_exception(13, 0, true);
+            push_value(state_.eflags & (opsize32_ ? 0x00fcffffu : 0x0000ffffu), opsize());
+        } else {
+            if (state_.mode == CpuMode::virtual86 && ((state_.eflags >> 12) & 3u) != 3u)
+                raise_exception(13, 0, true);
+            const u32 f = pop_value(opsize());
+            if (state_.mode == CpuMode::virtual86) {
+                if (opsize32_) {
+                    const u32 mask = 0x00fcffffu & ~u32(IOPL | VIF | VIP);
+                    state_.eflags = (state_.eflags & ~mask) | (f & mask) | 2u;
+                } else {
+                    const u32 mask = 0x0000ffffu & ~u32(IOPL);
+                    state_.eflags = (state_.eflags & ~mask) | (f & mask) | 2u;
+                }
+            } else if (opsize32_) {
+                u32 mask = 0x00fcffffu & ~u32(VIF | VIP | VM);
+                state_.eflags &= ~(VIF | VIP);
+                if (state_.mode == CpuMode::real) mask &= ~VM;
+                if (cpl() != 0) mask &= ~IOPL;
+                if (cpl() > int((state_.eflags >> 12) & 3)) mask &= ~IF;
+                state_.eflags = (f & mask) | (state_.eflags & ~mask) | 2u;
+            } else {
+                u32 mask = 0x0000ffffu;
+                if (cpl() != 0) mask &= ~IOPL;
+                if (cpl() > int((state_.eflags >> 12) & 3)) mask &= ~IF;
+                state_.eflags = (state_.eflags & ~mask) | (f & mask) | 2u;
+            }
+            update_mode_from_cr0();
+        }
+        break;
+    }
+    case 50: // cbw/cwd/cdq (0x98/0x99)
+        if (op == 0x98) {
+            if (opsize32_) set_reg(0, u32(i32(i16(u16(state_.gpr[0])))));
+            else set_reg16(0, u16(i8(u8(state_.gpr[0]))));
+        } else {
+            if (opsize32_) state_.gpr[2] = (state_.gpr[0] & 0x80000000u) ? 0xffffffffu : 0;
+            else set_reg16(2, (reg16(0) & 0x8000u) ? 0xffffu : 0);
+        }
+        break;
+    case 51: // sahf/lahf (0x9E/0x9F)
+        if (op == 0x9e) state_.eflags = (state_.eflags & ~0xd5u) | (u32(reg8(4)) & 0xd5u);
+        else set_reg8(4, u8(state_.eflags & 0xd5u));
+        break;
+    case 52: { // xlat (0xD7)
+        const u8 al = reg8(0);
+        const u32 off = ((addrsize32_ ? state_.gpr[3] : reg16(3)) + al) & (addrsize32_ ? 0xffffffffu : 0xffffu);
+        set_reg8(0, u8(read_mem(off, 1, seg_override_.value_or(SegReg::ds))));
         break;
     }
     default:
