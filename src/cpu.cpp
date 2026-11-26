@@ -178,6 +178,7 @@ void Cpu::dcache_begin() {
     dcache_hit_ = nullptr;
     dcache_cur_ = 0;
     dcache_mrm_idx_ = 0;
+    dcache_imm_idx_ = 0;
     if (!dcache_lookup_enabled_) return; // disabled: exact pre-cache execution path
     u64 t0 = 0;
     if (dbg_prof_) t0 = dbg_ticks();
@@ -203,20 +204,17 @@ void Cpu::dcache_begin() {
         e.gen0 == page_gen(e.phys0) &&
         (e.page_count == 1 || e.gen1 == page_gen(e.phys1))) {
         // Cache hit: execute from the recorded decode, pointing straight
-        // into the cache array (no per-instruction copy).
+        // into the cache array (no per-instruction copy).  EIP advances over
+        // the whole instruction at once: the replayed fetches are pure
+        // buffer reads, and relative branches computed by the handlers as
+        // eip+disp still resolve against the instruction end, exactly as on
+        // the decode path.
         dcache_hit_ = &e;
         dcache_replay_ = true;
         dcache_cur_ = e.opcode_ofs;
         if (e.prefixes) apply_prefixes(e.prefixes);
-        if (e.opcode_ofs) {
-            // Replay starts at the opcode byte, so the prefix bytes before
-            // it must be accounted for in EIP now (fetch8 does not touch
-            // them again).  Each prefix byte costs 2 cycles like any other
-            // fetched byte: execute_one() adds them on the decode path, and
-            // the replay must keep the instruction's cycle count identical.
-            cycles_ += 2 * int(e.opcode_ofs);
-            state_.eip = (state_.eip & ~dcache_mask_) | ((off + e.opcode_ofs) & dcache_mask_);
-        }
+        state_.eip = (state_.eip & ~dcache_mask_) | ((off + e.len) & dcache_mask_);
+        if (e.opcode_ofs) cycles_ += 2 * int(e.opcode_ofs);
         ++dcache_hits_;
         if (dbg_prof_) { dbg_lookup_ticks_ += dbg_ticks() - t0; ++dbg_hit_count_; }
         return;
@@ -572,12 +570,6 @@ u8 Cpu::fetch8_cold() {
     const u8 v = read_linear8(lin);
     state_.eip = (state_.eip & ~mask) | ((off + 1) & mask);
     return v;
-}
-u16 Cpu::fetch_imm16() { return fetch16(); }
-u32 Cpu::fetch_imm() { return opsize32_ ? fetch32() : fetch16(); }
-i32 Cpu::fetch_simm() {
-    if (opsize32_) return i32(fetch32());
-    return i32(i16(fetch16()));
 }
 
 void Cpu::clear_prefixes() {

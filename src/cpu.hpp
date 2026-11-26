@@ -176,6 +176,11 @@ struct DecodeCacheEntry {
     u8 mrm_count = 0;         // recorded ModRM templates (0..2)
     u8 page_count = 0;        // 1 or 2 pages spanned
     ModRmTemplate mrm[2];
+    // Pre-parsed immediate operands in consumption order: a hit reads the
+    // values straight from these slots instead of walking the byte cursor.
+    u8 imm_count = 0;
+    u8 imm_size[3] = {};      // 2 or 4 bytes per slot
+    u32 imm[3] = {};
     u8 bytes[15];             // captured instruction bytes
 };
 
@@ -431,9 +436,6 @@ private:
     // mode test.
     u32 dcache_mask_ = 0;
     u8 fetch8_cold();
-    u16 fetch_imm16();
-    u32 fetch_imm();
-    i32 fetch_simm();
     void clear_prefixes();
     u8 default_operand_size() const;
     u8 default_address_size() const;
@@ -447,8 +449,6 @@ private:
         u64 t0 = 0;
         if (dbg_prof_) t0 = dbg_ticks();
         const u8 v = dcache_hit_->bytes[dcache_cur_++];
-        const u32 off = state_.eip & dcache_mask_;
-        state_.eip = (state_.eip & ~dcache_mask_) | ((off + 1) & dcache_mask_);
         if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
         return v;
     }
@@ -469,7 +469,7 @@ private:
     [[nodiscard]] u16 fetch16() {
         if (dcache_replay_) {
             const u16 v = le16(dcache_hit_->bytes + dcache_cur_);
-            dcache_advance(2);
+            dcache_cur_ += 2;
             return v;
         }
         const u16 a = fetch8();
@@ -478,18 +478,66 @@ private:
     [[nodiscard]] u32 fetch32() {
         if (dcache_replay_) {
             const u32 v = le32(dcache_hit_->bytes + dcache_cur_);
-            dcache_advance(4);
+            dcache_cur_ += 4;
             return v;
         }
         const u32 a = fetch16();
         return a | (u32(fetch16()) << 16);
     }
-    void dcache_advance(int n) {
-        dcache_cur_ += u32(n);
-        instruction_bytes_ += unsigned(n);
-        const u32 off = state_.eip & dcache_mask_;
-        state_.eip = (state_.eip & ~dcache_mask_) | ((off + u32(n)) & dcache_mask_);
+    [[nodiscard]] u16 fetch_imm16() {
+        if (dcache_record_) {
+            const u16 v = fetch16();
+            if (pending_.imm_count < 3) {
+                pending_.imm[pending_.imm_count] = v;
+                pending_.imm_size[pending_.imm_count] = 2;
+                ++pending_.imm_count;
+            }
+            return v;
+        }
+        if (dcache_replay_) {
+            const u8 i = dcache_imm_idx_++;
+            dcache_cur_ += dcache_hit_->imm_size[i];
+            return u16(dcache_hit_->imm[i]);
+        }
+        return fetch16();
     }
+    [[nodiscard]] u32 fetch_imm() {
+        if (dcache_record_) {
+            const u32 v = opsize32_ ? fetch32() : fetch16();
+            if (pending_.imm_count < 3) {
+                pending_.imm[pending_.imm_count] = v;
+                pending_.imm_size[pending_.imm_count] = u8(opsize32_ ? 4 : 2);
+                ++pending_.imm_count;
+            }
+            return v;
+        }
+        if (dcache_replay_) {
+            const u8 i = dcache_imm_idx_++;
+            dcache_cur_ += dcache_hit_->imm_size[i];
+            const u32 v = dcache_hit_->imm[i];
+            return dcache_hit_->imm_size[i] == 4 ? v : (v & 0xffffu);
+        }
+        return opsize32_ ? fetch32() : fetch16();
+    }
+    [[nodiscard]] i32 fetch_simm() {
+        if (dcache_record_) {
+            const i32 v = opsize32_ ? i32(fetch32()) : i32(i16(fetch16()));
+            if (pending_.imm_count < 3) {
+                pending_.imm[pending_.imm_count] = u32(v);
+                pending_.imm_size[pending_.imm_count] = u8(opsize32_ ? 4 : 2);
+                ++pending_.imm_count;
+            }
+            return v;
+        }
+        if (dcache_replay_) {
+            const u8 i = dcache_imm_idx_++;
+            dcache_cur_ += dcache_hit_->imm_size[i];
+            const u32 v = dcache_hit_->imm[i];
+            return dcache_hit_->imm_size[i] == 4 ? i32(v) : i32(i16(u16(v)));
+        }
+        return opsize32_ ? i32(fetch32()) : i32(i16(fetch16()));
+    }
+    void dcache_advance(int n) { dcache_cur_ += u32(n); }
 
     ModRm decode_modrm(int operand_size, bool check_limit = true) {
         // Replay: rebuild the operand from the template captured at decode
@@ -697,8 +745,9 @@ private:
     const DecodeCacheEntry* dcache_hit_ = nullptr;
     bool dcache_replay_ = false;
     bool dcache_record_ = false;
-    u32 dcache_cur_ = 0;    // replay cursor into the hit entry's bytes
-    u8 dcache_mrm_idx_ = 0; // next ModRM template to consume on replay
+    u32 dcache_cur_ = 0;     // replay cursor into the hit entry's bytes
+    u8 dcache_mrm_idx_ = 0;  // next ModRM template to consume on replay
+    u8 dcache_imm_idx_ = 0;  // next pre-parsed immediate slot on replay
 
     void dcache_begin();
     void dcache_commit();
