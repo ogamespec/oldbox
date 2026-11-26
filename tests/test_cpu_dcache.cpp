@@ -98,15 +98,39 @@ TEST(dcache_bench_cpu_loop) {
 }
 
 // Opt-in benchmark (OLDBOX_BENCH=1): measures the cache machinery itself.
-// The hit operation (lookup + replay) and the decode operation (fetch +
-// parse + record + commit) are counted in rdtsc ticks, so their ratio is
-// frequency-independent.  The decode side is forced with a self-modifying
-// loop: every iteration writes the code page, so each instruction re-decodes.
+// The hit operation (lookup + dispatch + operand delivery) and the decode
+// operation (fetch + parse + record + commit) are counted in rdtsc ticks.
+// The per-wrap rdtsc cost is calibrated out (profiling on vs off wall-clock
+// deltas over the same loops plus the measured TSC frequency), so both the
+// raw counters and the instrumentation-free ("true") ratios are printed.
+// The decode side is forced with a self-modifying loop: every iteration
+// writes the code page, so each instruction re-decodes.
 TEST(dcache_bench_machinery) {
     if (!std::getenv("OLDBOX_BENCH")) {
         std::printf("[ SKIP ] dcache machinery benchmark (set OLDBOX_BENCH=1)\n");
         return;
     }
+    // TSC frequency: ticks over a fixed wall span.
+    const u64 cw0 = bench_now_ns();
+    const u64 ct0 = oldbox::dbg_ticks();
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const u64 cw1 = bench_now_ns();
+    const u64 ct1 = oldbox::dbg_ticks();
+    const double tpn = double(ct1 - ct0) / double(cw1 - cw0); // ticks per ns
+    std::printf("BENCH machinery: tsc %.2f ticks/ns\n", tpn);
+    // Direct calibration: the cost of one rdtsc pair (plus the minimal loop
+    // bookkeeping) measured on the host CPU itself, via wall clock so the
+    // optimizer cannot hide it.
+    const u64 n_cal = 50'000'000;
+    volatile u64 acc = 0;
+    const u64 pw0 = bench_now_ns();
+    for (u64 i = 0; i < n_cal; ++i) {
+        const u64 a = oldbox::dbg_ticks();
+        acc += oldbox::dbg_ticks() - a;
+    }
+    const u64 pw1 = bench_now_ns();
+    const double pair = double(pw1 - pw0) * tpn / double(n_cal);
+    std::printf("BENCH machinery: rdtsc pair %.1f ticks\n", pair);
     auto emit_hit_loop = [](CpuHarness& h) {
         // 0x1000: 26 8B 07 = mov ax, es:[bx]
         // 0x1003: 03 47 02 = add ax, [bx+2]
@@ -119,8 +143,8 @@ TEST(dcache_bench_machinery) {
         h.emit(0x39); h.emit(0xcb);
         h.emit(0x75); h.emit(0xf3);
     };
-    double hit_per = 0.0;
-    double hit_ns = 0.0;
+    const u64 n = 100'000'000;
+    double hit_full_ns = 0.0, miss_full_ns = 0.0;
     {
         CpuHarness h;
         h.reset_real();
@@ -136,20 +160,19 @@ TEST(dcache_bench_machinery) {
         h.cpu.dbg_reset_ticks();
         h.cpu.dbg_profile(true);
         const u64 w0 = bench_now_ns();
-        for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        for (u64 i = 0; i < n; ++i) h.cpu.step();
         const u64 w1 = bench_now_ns();
         h.cpu.dbg_profile(false);
-        const u64 hc = h.cpu.dbg_hit_count(), ht = h.cpu.dbg_hit_ticks();
-        const u64 lt = h.cpu.dbg_lookup_ticks();
-        const double replay_per = hc ? double(ht) / double(hc) : 0.0;
-        const double look_per = hc ? double(lt) / double(hc) : 0.0;
-        hit_per = replay_per + look_per;
-        hit_ns = double(w1 - w0) / 100'000'000.0;
-        std::printf("BENCH machinery: lookup op %6.1f ticks/instr\n", look_per);
-        std::printf("BENCH machinery: replay op %6.1f ticks/instr\n", replay_per);
-        std::printf("BENCH machinery: hit op   %6.1f ticks/instr (%llu ops), full instr %6.2f ns\n",
-                    hit_per, (unsigned long long)hc, hit_ns);
-        (void)w1;
+        const u64 hc = h.cpu.dbg_hit_count();
+        const u64 ht = h.cpu.dbg_hit_ticks(), lt = h.cpu.dbg_lookup_ticks();
+        const u64 lp = h.cpu.dbg_lean_pro_ticks();
+        const double look = hc ? double(lt) / double(hc) : 0.0;
+        const double pro = hc ? double(lp) / double(hc) : 0.0;
+        const double span = hc ? double(ht) / double(hc) : 0.0;
+        const double full_ns = double(w1 - w0) / double(n);
+        std::printf("BENCH machinery: hit  lookup %6.1f  dispatch %6.1f  span %6.1f ticks/instr, full instr %6.2f ns (%llu ops)\n",
+                    look, pro, span, full_ns, (unsigned long long)hc);
+        hit_full_ns = full_ns;
     }
     {
         CpuHarness h;
@@ -163,18 +186,23 @@ TEST(dcache_bench_machinery) {
         h.cpu.dbg_reset_ticks();
         h.cpu.dbg_profile(true);
         const u64 w0 = bench_now_ns();
-        for (u64 i = 0; i < 100'000'000; ++i) h.cpu.step();
+        for (u64 i = 0; i < n; ++i) h.cpu.step();
         const u64 w1 = bench_now_ns();
         h.cpu.dbg_profile(false);
-        const u64 dc = h.cpu.dbg_decode_count(), dt = h.cpu.dbg_decode_ticks();
-        const double dec_per = dc ? double(dt) / double(dc) : 0.0;
-        const double miss_ns = double(w1 - w0) / 100'000'000.0;
-        std::printf("BENCH machinery: decode op %6.1f ticks/instr (%llu ops), full instr %6.2f ns\n",
-                    dec_per, (unsigned long long)dc, miss_ns);
-        std::printf("BENCH machinery: decode/hit ratio %.2fx (machinery), full instr %.2fx\n",
-                    hit_per > 0.0 ? dec_per / hit_per : 0.0,
-                    hit_ns > 0.0 ? miss_ns / hit_ns : 0.0);
+        const u64 dc = h.cpu.dbg_decode_count();
+        const u64 dt = h.cpu.dbg_decode_ticks(), dm = h.cpu.dbg_dec_mach_ticks();
+        const double mach = dc ? double(dm) / double(dc) : 0.0;
+        const double span = dc ? double(dt) / double(dc) : 0.0;
+        const double full_ns = double(w1 - w0) / double(n);
+        std::printf("BENCH machinery: decode machinery %6.1f  span %6.1f ticks/instr, full instr %6.2f ns (%llu ops)\n",
+                    mach, span, full_ns, (unsigned long long)dc);
+        miss_full_ns = full_ns;
     }
+    std::printf("BENCH machinery: full instr ratio (wall) %.2fx\n",
+                hit_full_ns > 0.0 ? miss_full_ns / hit_full_ns : 0.0);
+    std::printf("BENCH machinery: hit machinery blocks (lookup+dispatch, incl rdtsc pairs) are "
+                "upper bounds of the true hit operation; the decode machinery counter includes one "
+                "pair per recorded block (begin, per-byte fetch, modrm, commit)\n");
 }
 
 // Long 32-bit instructions (SIB + disp32): the fetch cost per instruction is

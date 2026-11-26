@@ -316,9 +316,13 @@ public:
     [[nodiscard]] u64 dbg_hit_ticks() const { return dbg_hit_ticks_; }
     [[nodiscard]] u64 dbg_decode_ticks() const { return dbg_decode_ticks_; }
     [[nodiscard]] u64 dbg_lookup_ticks() const { return dbg_lookup_ticks_; }
+    [[nodiscard]] u64 dbg_dec_mach_ticks() const { return dbg_dec_mach_ticks_; }
+    [[nodiscard]] u64 dbg_lean_pro_ticks() const { return dbg_lean_pro_ticks_; }
     [[nodiscard]] u64 dbg_hit_count() const { return dbg_hit_count_; }
     [[nodiscard]] u64 dbg_decode_count() const { return dbg_decode_count_; }
-    void dbg_reset_ticks() { dbg_hit_ticks_ = dbg_decode_ticks_ = dbg_lookup_ticks_ = dbg_hit_count_ = dbg_decode_count_ = 0; }
+    [[nodiscard]] u64 dbg_wrap_hit() const { return dbg_wrap_hit_; }
+    [[nodiscard]] u64 dbg_wrap_dec() const { return dbg_wrap_dec_; }
+    void dbg_reset_ticks() { dbg_hit_ticks_ = dbg_decode_ticks_ = dbg_lookup_ticks_ = dbg_dec_mach_ticks_ = dbg_lean_pro_ticks_ = dbg_hit_count_ = dbg_decode_count_ = dbg_wrap_hit_ = dbg_wrap_dec_ = 0; }
     void dbg_profile(bool v) { dbg_prof_ = v; }
 
     void raise_exception(int vector, u32 error = 0, bool has_error = false);
@@ -446,11 +450,7 @@ private:
     // paying a function call per consumed byte; the cold memory path is
     // fetch8_cold() in cpu.cpp.
     [[nodiscard]] u8 fetch8_replay() {
-        u64 t0 = 0;
-        if (dbg_prof_) t0 = dbg_ticks();
-        const u8 v = dcache_hit_->bytes[dcache_cur_++];
-        if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
-        return v;
+        return dcache_hit_->bytes[dcache_cur_++];
     }
     [[nodiscard]] u8 fetch8() {
         if (dcache_replay_) {
@@ -545,8 +545,6 @@ private:
         // bytes themselves are skipped without re-parsing.  Inlined so a hit
         // does not pay a call for the operand decode.
         if (dcache_replay_ && dcache_mrm_idx_ < dcache_hit_->mrm_count) {
-            u64 t0 = 0;
-            if (dbg_prof_) t0 = dbg_ticks();
             const ModRmTemplate& t = dcache_hit_->mrm[dcache_mrm_idx_++];
             dcache_advance(int(t.byte_len));
             ModRm m;
@@ -572,7 +570,6 @@ private:
             if (t.is_register) {
                 m.is_register = true;
                 m.offset = t.rm;
-                if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
                 return m;
             }
             m.is_register = false;
@@ -597,7 +594,6 @@ private:
                 segment_limit_fault(seg, off, u32(operand_size))) {
                 exception_gp(seg.selector & ~3u);
             }
-            if (dbg_prof_) dbg_hit_ticks_ += dbg_ticks() - t0;
             return m;
         }
         return decode_modrm_raw(operand_size, check_limit);
@@ -758,8 +754,11 @@ private:
     // single predictable branch per counted block.  Read by the benchmarks.
     u64 dbg_hit_ticks_ = 0, dbg_decode_ticks_ = 0;
     u64 dbg_lookup_ticks_ = 0; // hit branch of dcache_begin only
+    u64 dbg_dec_mach_ticks_ = 0; // decode machinery blocks (fetch/parse/record/commit)
+    u64 dbg_lean_pro_ticks_ = 0; // lean dispatch prologue
     u64 dbg_hit_count_ = 0, dbg_decode_count_ = 0;
-    u64 dbg_t0_ = 0;
+    u64 dbg_t0_ = 0, dbg_decode_t0_ = 0;
+    u64 dbg_wrap_hit_ = 0, dbg_wrap_dec_ = 0; // profiling wrap counts for calibration
     bool dbg_prof_ = false;
     [[nodiscard]] u32 dcache_context() const;
     [[nodiscard]] u32 page_gen(u32 phys) const;
