@@ -302,6 +302,12 @@ u8 Cpu::dcache_lean_tag(const DecodeCacheEntry& e) const {
         if ((op2 == 0xb6 || op2 == 0xb7 || op2 == 0xbe || op2 == 0xbf) && !locked) return 44; // movzx/movsx
         if (op2 >= 0xc8 && op2 <= 0xcf && !locked) return 45;    // bswap
         if ((op2 == 0xb0 || op2 == 0xb1)) return 46;             // cmpxchg (lock allowed)
+        if ((op2 == 0xa0 || op2 == 0xa1 || op2 == 0xa8 || op2 == 0xa9) && !locked) return 54; // push/pop fs/gs
+        if ((op2 == 0xa3 || op2 == 0xab || op2 == 0xb3 || op2 == 0xbb)) return 55; // bt family (lock allowed)
+        if ((op2 == 0xa4 || op2 == 0xa5 || op2 == 0xac || op2 == 0xad) && !locked) return 56; // shld/shrd
+        if ((op2 == 0x20 || op2 == 0x21) && !locked) return 57;  // mov r,cr/dr
+        if ((op2 == 0x22 || op2 == 0x23) && !locked) return 58;  // mov cr/dr,r
+        if (op2 == 0x31 && !locked) return 59;                   // rdtsc
     }
     return 0;
 }
@@ -319,7 +325,7 @@ void Cpu::dcache_lean_execute() {
     cycles_ += 2;
     if (lock_) {
         const bool alu_memory = op <= 0x31 && (op & 7) <= 1;
-        if (!alu_memory && op != 0x80 && op != 0x81 && op != 0x82 && op != 0x83 &&
+        if (!alu_memory && op != 0x0f && op != 0x80 && op != 0x81 && op != 0x82 && op != 0x83 &&
             op != 0x86 && op != 0x87 && op != 0xf6 && op != 0xf7 && op != 0xfe && op != 0xff)
             raise_exception(6);
     }
@@ -976,6 +982,166 @@ void Cpu::dcache_lean_execute() {
         set_reg8(0, u8(read_mem(off, 1, seg_override_.value_or(SegReg::ds))));
         break;
     }
+    case 54: { // 0F push/pop fs/gs
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const SegReg s = (op2 == 0xa0 || op2 == 0xa1) ? SegReg::fs : SegReg::gs;
+        if (op2 & 1) load_segment(s, u16(pop_value(opsize())));
+        else push_value(state_.seg[unsigned(s)].selector, opsize());
+        break;
+    }
+    case 55: { // 0F BT/BTS/BTR/BTC
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 raw = read_reg_index(t.reg_field, size);
+        const i32 signed_offset = size == 2 ? i32(i16(u16(raw))) : i32(raw);
+        u32 bit;
+        u32 off_adj = 0;
+        if (t.is_register) {
+            bit = u32(signed_offset) % (u32(size) * 8u);
+        } else {
+            const i32 bits = i32(size) * 8;
+            i32 word = signed_offset / bits;
+            i32 rem = signed_offset % bits;
+            if (rem < 0) { rem += bits; --word; }
+            off_adj = u32(word) * u32(size);
+            bit = u32(rem);
+        }
+        u32 base_val;
+        if (t.is_register) base_val = read_reg_index(t.rm, size);
+        else base_val = read_mem(ea(t) + off_adj, size, SegReg(t.segment));
+        set_flag(CF, (base_val & (1u << bit)) != 0);
+        if (op2 == 0xab || op2 == 0xb3 || op2 == 0xbb) {
+            if (op2 == 0xab) base_val |= (1u << bit);
+            else if (op2 == 0xb3) base_val &= ~(1u << bit);
+            else base_val ^= (1u << bit);
+            if (t.is_register) write_reg_index(t.rm, base_val, size);
+            else write_mem(ea(t) + off_adj, base_val, size, SegReg(t.segment));
+        }
+        break;
+    }
+    case 56: { // 0F SHLD/SHRD
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        const int size = opsize();
+        const ModRmTemplate& t = e.mrm[0];
+        const u32 count = (op2 & 1) ? (state_.gpr[1] & 0x1f) : (e.bytes[e.len - 1] & 0x1f);
+        u32 dst = rm_read(t, size);
+        const u32 src = read_reg_index(t.reg_field, size);
+        const u32 mask = size_mask(size);
+        const int bits = size * 8;
+        if (count) {
+            if (count > u32(bits)) {
+                set_flag(CF, false);
+                set_szp(0, size);
+                rm_write(t, 0, size);
+            } else if (op2 == 0xa4 || op2 == 0xa5) {
+                u64 r;
+                if (count == u32(bits)) { r = src & mask; set_flag(CF, (dst & 1u) != 0); }
+                else {
+                    r = ((u64(dst) << count) | (u64(src) >> (bits - count))) & mask;
+                    set_flag(CF, ((dst >> (bits - count)) & 1) != 0);
+                }
+                set_szp(u32(r), size);
+                if (count == 1) set_flag(OF, ((dst ^ u32(r)) & sign_bit(size)) != 0);
+                rm_write(t, u32(r), size);
+            } else {
+                u64 r;
+                if (count == u32(bits)) { r = src & mask; set_flag(CF, (dst & sign_bit(size)) != 0); }
+                else {
+                    r = ((u64(dst) >> count) | (u64(src) << (bits - count))) & mask;
+                    set_flag(CF, ((dst >> (count - 1)) & 1) != 0);
+                }
+                set_szp(u32(r), size);
+                if (count == 1) set_flag(OF, ((dst ^ u32(r)) & sign_bit(size)) != 0);
+                rm_write(t, u32(r), size);
+            }
+        }
+        break;
+    }
+    case 57: { // 0F mov r,cr/dr
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        if (cpl() != 0) exception_gp(0);
+        const ModRmTemplate& t = e.mrm[0];
+        if (!t.is_register) exception_gp(0);
+        int cr = t.reg_field;
+        if (op2 == 0x21) {
+            if (cr == 4 || cr == 5) {
+                if (state_.cr4 & 0x8u) raise_exception(6); // CR4.DE
+                cr = cr == 4 ? 6 : 7;
+            }
+            if (state_.dr[7] & 0x2000u) {
+                state_.dr[6] |= 0x2000u;
+                state_.dr[7] &= ~0x2000u;
+                state_.eflags |= RF;
+                raise_exception(1);
+            }
+        }
+        u32 v = 0;
+        if (op2 == 0x20) {
+            switch (cr) {
+            case 0: v = state_.cr0; break;
+            case 2: v = state_.cr2; break;
+            case 3: v = state_.cr3; break;
+            case 4: v = state_.cr4; break;
+            default: exception_gp(0);
+            }
+        } else {
+            v = state_.dr[cr & 7];
+        }
+        write_reg_index(t.rm, v, 4);
+        break;
+    }
+    case 58: { // 0F mov cr/dr,r
+        cycles_ += 2;
+        const u8 op2 = e.bytes[e.opcode_ofs + 1];
+        if (cpl() != 0) exception_gp(0);
+        const ModRmTemplate& t = e.mrm[0];
+        if (!t.is_register) exception_gp(0);
+        const u32 v = read_reg_index(t.rm, 4);
+        int dr = t.reg_field;
+        if (op2 == 0x23) {
+            if (dr == 4 || dr == 5) {
+                if (state_.cr4 & 0x8u) raise_exception(6); // CR4.DE
+                dr = dr == 4 ? 6 : 7;
+            }
+            if (state_.dr[7] & 0x2000u) {
+                state_.dr[6] |= 0x2000u;
+                state_.dr[7] &= ~0x2000u;
+                state_.eflags |= RF;
+                raise_exception(1);
+            }
+        }
+        if (op2 == 0x22) {
+            switch (t.reg_field) {
+            case 0: {
+                const u32 old = state_.cr0;
+                if (!(v & 1u) && (v & 0x80000000u)) exception_gp(0); // PG requires PE
+                state_.cr0 = v;
+                if ((old ^ v) & 0x80000000u) flush_tlb();
+                update_mode_from_cr0();
+                if (!(state_.cr0 & 0x80000000u) && !(state_.eflags & VM) && (old & 1u) && !(v & 1u)) {
+                    state_.mode = CpuMode::real;
+                }
+                break;
+            }
+            case 2: state_.cr2 = v; break;
+            case 3: state_.cr3 = v; flush_tlb((state_.cr4 & 0x80u) != 0); break;
+            case 4: { const u32 old = state_.cr4; state_.cr4 = v; if ((old ^ v) & 0xb0u) flush_tlb(); break; }
+            default: exception_gp(0);
+            }
+        } else state_.dr[dr & 7] = v;
+        break;
+    }
+    case 59: // 0F rdtsc
+        cycles_ += 2;
+        check_tsc_privilege();
+        state_.gpr[0] = u32(state_.tsc);
+        state_.gpr[2] = u32(state_.tsc >> 32);
+        break;
     default:
         break;
     }
