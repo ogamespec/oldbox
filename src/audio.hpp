@@ -281,6 +281,15 @@ private:
     u32 dma_len_ = 0;
     u32 dma_pos_ = 0;
     double dma_phase_ = 0.0;
+    // DAC output uses linear interpolation between the two latest guest
+    // frames (see read_dma_frame) instead of a zero-order hold, which
+    // mirrored every guest band around its own Nyquist into the mix, plus a
+    // two-pole ~16 kHz low-pass emulating the SB16 DSP analog output stage.
+    i16 dma_prev_l_ = 0, dma_prev_r_ = 0;
+    i16 dma_cur_l_ = 0, dma_cur_r_ = 0;
+    float dac_lp1_l_ = 0.0f, dac_lp2_l_ = 0.0f;
+    float dac_lp1_r_ = 0.0f, dac_lp2_r_ = 0.0f;
+    float dac_lp_a_ = 0.8977f;  // one-pole coefficient at the internal rate
     u8 dma_adpcm_bits_ = 0;
     bool dma_adpcm_ref_ = false;
     u8 dma_adpcm_step_ = 16;
@@ -291,7 +300,6 @@ private:
     u32 dma_adpcm_acc_ = 0;
     u8 dma_adpcm_bits_left_ = 0;
     i16 direct_l_ = 0, direct_r_ = 0;
-    i16 last_dac_l_ = 0, last_dac_r_ = 0;
     bool direct_active_ = false;
     u32 sample_rate_ = 22050;
     u32 sample_counter_ = 0;
@@ -336,6 +344,15 @@ private:
     static constexpr u32 mix_block = 1024;
     std::array<i16, mix_block * 2> emu_scratch_{};
     std::array<i16, mix_block * 2> fm_scratch_{};
+    // The FM chip synthesizes at twice the internal rate; render_fm_block()
+    // decimates the oversampled chunk with a windowed-sinc FIR so synthesis
+    // harmonics near/above the 44.1 kHz Nyquist roll off like the real
+    // chip + analog output chain instead of folding back into the mix.
+    static constexpr u32 fm_fir_taps = 64;
+    std::array<i16, mix_block * 2 * 2> fm_os_scratch_{};
+    std::array<i16, size_t(fm_fir_taps) * 2> fm_os_hist_{};  // interleaved
+    u32 fm_os_pos_ = 0;   // oldest history entry
+    u64 fm_os_count_ = 0; // oversampled frames pushed, for the 2:1 stride
 
     // Cached CT1745 gains.  Recomputing six pow() calls plus tanh() for
     // every internal sample was the main cause of audio underruns.
@@ -366,6 +383,9 @@ private:
     void midi_feed(u8 byte);
     void midi_message(u8 status, u8 d1, u8 d2);
     void mix_internal(u32 frames);
+    // Renders `frames` internal FM frames: synthesizes 2x oversampled at the
+    // chip and decimates through the FIR into `out` (interleaved stereo).
+    void render_fm_block(u32 frames, i16* out);
     void advance_dma(u32 frames);
     void advance_fm(u64 frames);
     void pop_dac(i16& l, i16& r);
