@@ -158,9 +158,14 @@ private:
     float trem_att_ = 0.0f;        // attenuation units to add this sample
     float vib_mul_ = 1.0f;         // phase increment multiplier
 
-    // Shared rhythm noise source.
+    // Shared rhythm noise source.  The 23-bit LFSR runs at the model sample
+    // rate; a two-pole ~10 kHz low-pass then shapes the raw ±1 bit into the
+    // band the chip + card analog chain would pass (the real rhythm noise is
+    // gated by operator phases; only the coarse shaping is approximated).
     u32 noise_ = 0x1f123bb5u;
     float noise_sample_ = 0.0f;
+    float noise_lp1_ = 0.0f, noise_lp2_ = 0.0f;
+    float noise_lp_a_ = 0.5f;
 
     // Rhythm mode (register BDh).
     bool rhythm_ = false;

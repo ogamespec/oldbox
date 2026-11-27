@@ -142,6 +142,8 @@ void Opl3::reset() {
     four_op_ = 0;
     noise_ = 0x1f123bb5u;
     noise_sample_ = 0.0f;
+    noise_lp1_ = 0.0f;
+    noise_lp2_ = 0.0f;
     trem_phase_ = 0.0f;
     vib_phase_ = 0.0f;
     trem_lfo_ = 0.0f;
@@ -165,6 +167,12 @@ void Opl3::set_cpu_mhz(u32 mhz) {
 
 void Opl3::set_sample_rate(u32 hz) {
     sample_rate_ = std::clamp(hz, 8000u, 192000u);
+    // Rhythm noise shaping: two cascaded one-pole sections at ~10 kHz.  The
+    // raw LFSR bit is ±1 at the model sample rate; on a real card the noise
+    // reaches the speakers through operator gating and the analog output
+    // stage, so its energy above ~10-15 kHz is rolled off, not full-scale.
+    constexpr float kNoiseFcHz = 10000.0f;
+    noise_lp_a_ = 1.0f - std::exp(-2.0f * kTwoPi * kNoiseFcHz / float(sample_rate_));
     refresh_all();
 }
 
@@ -834,10 +842,15 @@ void Opl3::render(i16* out, u32 frames) {
         update_lfo();
 
         // The noise LFSR is a free-running 23-bit maximal sequence; one bit
-        // is taken per output sample and shared by the rhythm operators.
+        // is taken per output sample and shared by the rhythm operators.  A
+        // two-pole ~10 kHz low-pass shapes it into the band the real chip +
+        // analog chain pass (see set_sample_rate).
         const u32 feedback = ((noise_ >> 22) ^ (noise_ >> 17)) & 1u;
         noise_ = ((noise_ << 1) | feedback) & 0x7fffffu;
-        noise_sample_ = (noise_ & 1u) ? 1.0f : -1.0f;
+        const float raw = (noise_ & 1u) ? 1.0f : -1.0f;
+        noise_lp1_ += noise_lp_a_ * (raw - noise_lp1_);
+        noise_lp2_ += noise_lp_a_ * (noise_lp1_ - noise_lp2_);
+        noise_sample_ = noise_lp2_;
 
         for (Operator& op : ops_) update_envelope(op);
 

@@ -14,6 +14,8 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 
 namespace oldbox {
 namespace {
@@ -33,6 +35,31 @@ constexpr float kTwoPi = 6.283185307179586f;
     if (bytes == 0 || bits == 0) return 0;
     const u32 data_bytes = bytes - (reference ? 1u : 0u);
     return (reference ? 1u : 0u) + (data_bytes * 8u) / bits;
+}
+
+// 64-tap windowed-sinc low-pass for the 88.2 kHz -> 44.1 kHz FM decimation.
+// Cutoff 16.5 kHz: synthesis harmonics above the 44.1 kHz Nyquist are
+// attenuated before they can fold, and the 16-22 kHz range rolls off like
+// the real chip through the card's analog output stage.
+const std::array<float, 64>& fm_decim_fir() {
+    static const std::array<float, 64> table = [] {
+        std::array<float, 64> t{};
+        constexpr u32 kTaps = 64;
+        constexpr double kFc = 16500.0 / 88200.0;  // normalized cutoff
+        double sum = 0.0;
+        for (u32 i = 0; i < kTaps; ++i) {
+            const double x = double(i) - double(kTaps - 1) / 2.0;
+            const double sinc = x == 0.0 ? 2.0 * kFc
+                : std::sin(2.0 * kTwoPi * kFc * x) / (kTwoPi * x);
+            const double w = 0.54 - 0.46 *
+                std::cos(kTwoPi * double(i) / double(kTaps - 1));
+            t[i] = float(sinc * w);
+            sum += t[i];
+        }
+        for (float& v : t) v = float(v / sum);
+        return t;
+    }();
+    return table;
 }
 
 // Mixer level to linear gain.  The CT1745 uses 2 dB steps over 62 dB for
@@ -55,6 +82,9 @@ Awe64::Awe64(Bus& bus, Dma& dma, const AudioConfig& cfg, u32 cpu_mhz, IrqFn irq)
     bus_.map_io(cfg_.mpu_base, 2, this, "MPU-401");
     bus_.map_io(0x388, 4, this, "OPL3");
     opl3_.set_cpu_mhz(cpu_mhz_);
+    // FM synthesizes at twice the internal rate and is decimated by an FIR
+    // low-pass in render_fm_block(); see the fm_os_* members in audio.hpp.
+    opl3_.set_sample_rate(u32(kInternalRate) * 2);
     reset_mixer();
     reset();
     // The AWE64 Gold ROM dump is not available; use the 1 MiB E-mu GM
@@ -180,7 +210,13 @@ void Awe64::reset() {
     dma_adpcm_acc_ = 0;
     dma_adpcm_bits_left_ = 0;
     direct_l_ = direct_r_ = 0;
-    last_dac_l_ = last_dac_r_ = 0;
+    dma_prev_l_ = dma_prev_r_ = 0;
+    dma_cur_l_ = dma_cur_r_ = 0;
+    dac_lp1_l_ = dac_lp2_l_ = 0.0f;
+    dac_lp1_r_ = dac_lp2_r_ = 0.0f;
+    // Two cascaded one-pole sections at ~16 kHz (SB16 DSP analog output
+    // stage) over the internal 44.1 kHz DAC stream.
+    dac_lp_a_ = 1.0f - std::exp(-kTwoPi * 16000.0f / kInternalRate);
     direct_active_ = false;
     speaker_on_ = false;
     sb_uart_ = false;
@@ -202,6 +238,9 @@ void Awe64::reset() {
     midi_count_ = 0;
     midi_sysex_ = false;
     opl3_.reset();
+    fm_os_hist_.fill(0);
+    fm_os_pos_ = 0;
+    fm_os_count_ = 0;
     mix_ring_.fill(0);
     mix_generated_ = 0;
     mix_pos_ = 0.0;
@@ -477,7 +516,15 @@ void Awe64::dsp_execute() {
             const bool input = (cmd & 0x08) != 0;   // D3: A/D
             const bool auto_init = (cmd & 0x04) != 0; // D2: auto-init
             const u8 mode = p(0);
-            const u32 frames = (u32(p(1)) | (u32(p(2)) << 8)) + 1;
+            const u32 count = (u32(p(1)) | (u32(p(2)) << 8)) + 1;
+            // The transfer count is expressed in single-sample units: bytes
+            // for 8-bit, words for 16-bit, in total (not per channel), so a
+            // stereo block holds count/2 frames.  DMX (DOOM) programs 8-bit
+            // stereo with count 256 and refills 256 bytes per interrupt;
+            // counting frames made our interrupt fire every 512 bytes and the
+            // mixer permanently under-ran, replaying half the ring as stale
+            // init silence (audible as a garbled reverb on every effect).
+            const u32 frames = count / ((mode & 0x20) ? 2u : 1u);
             u8 flags = is16 ? 0x02 : 0x00;
             if (auto_init) flags |= 0x01;
             if (mode & 0x20) flags |= 0x04; // stereo
@@ -496,7 +543,6 @@ void Awe64::dsp_execute() {
 void Awe64::start_dma(u32 addr, u32 len, u8 mode) {
     direct_active_ = false;
     silence_samples_ = 0;
-    last_dac_l_ = last_dac_r_ = 0;
     if ((mode & 0x40) == 0) dma_adpcm_bits_ = 0;
     dma16_ = (mode & 0x02) != 0;
     dma_auto_ = (mode & 0x01) != 0;
@@ -519,6 +565,8 @@ void Awe64::start_dma(u32 addr, u32 len, u8 mode) {
     dma_len_ = len;
     dma_pos_ = 0;
     dma_phase_ = 0.0;
+    dma_prev_l_ = dma_prev_r_ = 0;
+    dma_cur_l_ = dma_cur_r_ = 0;
     dma_paused_ = false;
     dma_running_ = true;
     dma_exit_auto_ = false;
@@ -588,171 +636,203 @@ std::optional<u8> Awe64::fetch_dma_byte() {
 }
 
 void Awe64::read_dma_frame(i16& l, i16& r) {
-    l = last_dac_l_;
-    r = last_dac_r_;
+    l = 0;
+    r = 0;
     if (silence_samples_ > 0) {
         --silence_samples_;
         l = r = 0;
-        last_dac_l_ = last_dac_r_ = 0;
         if (silence_samples_ == 0 && silence_irq_) {
             silence_irq_ = false;
             raise_irq(0x01);
         }
-        return;
-    }
-    if (!dma_running_ || dma_paused_) {
+    } else if (!dma_running_ || dma_paused_) {
         l = direct_l_;
         r = direct_r_;
-        return;
-    }
+    } else {
+        dma_phase_ += double(sample_rate_) / double(kInternalRate);
+        if (dma_phase_ > 64.0) dma_phase_ = 64.0;
 
-    dma_phase_ += double(sample_rate_) / double(kInternalRate);
-    if (dma_phase_ > 64.0) dma_phase_ = 64.0;
+        while (dma_phase_ >= 1.0) {
+            dma_phase_ -= 1.0;
+            // Advance the interpolation window: the previously newest guest frame
+            // becomes the reference for the linear ramp (see the tail of this
+            // function).
+            dma_prev_l_ = dma_cur_l_;
+            dma_prev_r_ = dma_cur_r_;
 
-    while (dma_phase_ >= 1.0) {
-        dma_phase_ -= 1.0;
-
-        if (dma_record_) {
-            // No analog input is modelled; consume the programmed byte count
-            // and feed the PCM midpoint back to the DMA controller.
-            const u8 channels = dma_stereo_ ? 2 : 1;
-            if (dma16_) {
-                const u16 silence = dma_signed_ ? 0x0000u : 0x8000u;
-                for (u8 i = 0; i < channels; ++i) {
-                    if (dma_word_channel_) {
-                        dma_.write_word16(dma_channel_, silence);
-                    } else {
-                        dma_.write_byte(dma_channel_, u8(silence & 0xff));
-                        dma_.write_byte(dma_channel_, u8(silence >> 8));
-                    }
-                }
-            } else {
-                const u8 silence = dma_signed_ ? 0x00 : 0x80;
-                for (u8 i = 0; i < channels; ++i)
-                    dma_.write_byte(dma_channel_, silence);
-            }
-        } else if (dma_adpcm_bits_ != 0) {
-            const u8 bits = dma_adpcm_bits_;
-            bool have = true;
-            if (dma_adpcm_first_ && dma_adpcm_ref_) {
-                const auto byte = fetch_dma_byte();
-                if (!byte) {
-                    have = false;
-                } else {
-                    dma_adpcm_first_ = false;
-                    dma_adpcm_sample_ = (int(*byte) - 128) << 8;
-                    dma_adpcm_half_ = 0;
-                    dma_adpcm_acc_ = 0;
-                    dma_adpcm_bits_left_ = 0;
-                }
-            } else {
-                int nibble = 0;
-                if (bits == 4) {
-                    if (dma_adpcm_half_ == 0) {
-                        const auto byte = fetch_dma_byte();
-                        if (!byte) {
-                            have = false;
+            if (dma_record_) {
+                // No analog input is modelled; consume the programmed byte count
+                // and feed the PCM midpoint back to the DMA controller.
+                const u8 channels = dma_stereo_ ? 2 : 1;
+                if (dma16_) {
+                    const u16 silence = dma_signed_ ? 0x0000u : 0x8000u;
+                    for (u8 i = 0; i < channels; ++i) {
+                        if (dma_word_channel_) {
+                            dma_.write_word16(dma_channel_, silence);
                         } else {
-                            dma_adpcm_byte_ = *byte;
-                            nibble = dma_adpcm_byte_ & 0x0f;
-                            dma_adpcm_half_ = 1;
+                            dma_.write_byte(dma_channel_, u8(silence & 0xff));
+                            dma_.write_byte(dma_channel_, u8(silence >> 8));
                         }
-                    } else {
-                        nibble = (dma_adpcm_byte_ >> 4) & 0x0f;
-                        dma_adpcm_half_ = 0;
                     }
                 } else {
-                    // 2/3-bit Creative ADPCM packs samples LSB-first into a
-                    // continuous bit stream: 4 samples per byte for 2-bit and
-                    // 8 samples per 3 bytes for 3-bit data.
-                    while (dma_adpcm_bits_left_ < bits) {
-                        const auto byte = fetch_dma_byte();
-                        if (!byte) {
-                            have = false;
-                            break;
+                    const u8 silence = dma_signed_ ? 0x00 : 0x80;
+                    for (u8 i = 0; i < channels; ++i)
+                        dma_.write_byte(dma_channel_, silence);
+                }
+            } else if (dma_adpcm_bits_ != 0) {
+                const u8 bits = dma_adpcm_bits_;
+                bool have = true;
+                if (dma_adpcm_first_ && dma_adpcm_ref_) {
+                    const auto byte = fetch_dma_byte();
+                    if (!byte) {
+                        have = false;
+                    } else {
+                        dma_adpcm_first_ = false;
+                        dma_adpcm_sample_ = (int(*byte) - 128) << 8;
+                        dma_adpcm_half_ = 0;
+                        dma_adpcm_acc_ = 0;
+                        dma_adpcm_bits_left_ = 0;
+                    }
+                } else {
+                    int nibble = 0;
+                    if (bits == 4) {
+                        if (dma_adpcm_half_ == 0) {
+                            const auto byte = fetch_dma_byte();
+                            if (!byte) {
+                                have = false;
+                            } else {
+                                dma_adpcm_byte_ = *byte;
+                                nibble = dma_adpcm_byte_ & 0x0f;
+                                dma_adpcm_half_ = 1;
+                            }
+                        } else {
+                            nibble = (dma_adpcm_byte_ >> 4) & 0x0f;
+                            dma_adpcm_half_ = 0;
                         }
-                        dma_adpcm_acc_ |= u32(*byte) << dma_adpcm_bits_left_;
-                        dma_adpcm_bits_left_ += 8;
+                    } else {
+                        // 2/3-bit Creative ADPCM packs samples LSB-first into a
+                        // continuous bit stream: 4 samples per byte for 2-bit and
+                        // 8 samples per 3 bytes for 3-bit data.
+                        while (dma_adpcm_bits_left_ < bits) {
+                            const auto byte = fetch_dma_byte();
+                            if (!byte) {
+                                have = false;
+                                break;
+                            }
+                            dma_adpcm_acc_ |= u32(*byte) << dma_adpcm_bits_left_;
+                            dma_adpcm_bits_left_ += 8;
+                        }
+                        if (have) {
+                            const u32 mask = (1u << bits) - 1u;
+                            nibble = int(dma_adpcm_acc_ & mask);
+                            dma_adpcm_acc_ >>= bits;
+                            dma_adpcm_bits_left_ -= bits;
+                        }
                     }
                     if (have) {
-                        const u32 mask = (1u << bits) - 1u;
-                        nibble = int(dma_adpcm_acc_ & mask);
-                        dma_adpcm_acc_ >>= bits;
-                        dma_adpcm_bits_left_ -= bits;
+                        const int sign = nibble & (1 << (bits - 1));
+                        const int mag = nibble & ((1 << (bits - 1)) - 1);
+                        const int delta = mag * int(dma_adpcm_step_);
+                        dma_adpcm_sample_ += sign ? -delta : delta;
+                        dma_adpcm_sample_ = std::clamp(dma_adpcm_sample_, -32768, 32767);
+                        if (mag >= ((1 << (bits - 1)) - 1))
+                            dma_adpcm_step_ = u8(std::min(4096, int(dma_adpcm_step_) + int(dma_adpcm_step_) / 4));
+                        else
+                            dma_adpcm_step_ = u8(std::max(8, int(dma_adpcm_step_) - int(dma_adpcm_step_) / 8));
                     }
                 }
-                if (have) {
-                    const int sign = nibble & (1 << (bits - 1));
-                    const int mag = nibble & ((1 << (bits - 1)) - 1);
-                    const int delta = mag * int(dma_adpcm_step_);
-                    dma_adpcm_sample_ += sign ? -delta : delta;
-                    dma_adpcm_sample_ = std::clamp(dma_adpcm_sample_, -32768, 32767);
-                    if (mag >= ((1 << (bits - 1)) - 1))
-                        dma_adpcm_step_ = u8(std::min(4096, int(dma_adpcm_step_) + int(dma_adpcm_step_) / 4));
-                    else
-                        dma_adpcm_step_ = u8(std::max(8, int(dma_adpcm_step_) - int(dma_adpcm_step_) / 8));
-                }
+                dma_cur_l_ = dma_cur_r_ = have ? clamp_i16(float(dma_adpcm_sample_)) : i16(0);
+            } else if (dma16_) {
+                i16 left = 0, right = 0;
+                auto get16 = [&](i16& out) {
+                    std::optional<u16> raw;
+                    if (dma_word_channel_) {
+                        raw = fetch_dma_word();
+                    } else {
+                        const auto lo = fetch_dma_byte();
+                        const auto hi = fetch_dma_byte();
+                        if (lo && hi) raw = u16(*lo) | (u16(*hi) << 8);
+                    }
+                    if (!raw) {
+                        out = 0;
+                        return;
+                    }
+                    if (dma_signed_) out = i16(*raw);
+                    else out = i16(int(*raw) - 32768);
+                };
+                get16(left);
+                if (dma_stereo_) get16(right);
+                else right = left;
+                dma_cur_l_ = left;
+                dma_cur_r_ = right;
+            } else {
+                i16 left = 0, right = 0;
+                auto get8 = [&](i16& out) {
+                    const auto b = fetch_dma_byte();
+                    if (!b) {
+                        out = 0;
+                        return;
+                    }
+                    if (dma_signed_) out = i16(int(i8(*b)) << 8);
+                    else out = i16((int(*b) - 128) << 8);
+                };
+                get8(left);
+                if (dma_stereo_) get8(right);
+                else right = left;
+                dma_cur_l_ = left;
+                dma_cur_r_ = right;
             }
-            l = r = have ? clamp_i16(float(dma_adpcm_sample_)) : 0;
-        } else if (dma16_) {
-            i16 left = 0, right = 0;
-            auto get16 = [&](i16& out) {
-                std::optional<u16> raw;
-                if (dma_word_channel_) {
-                    raw = fetch_dma_word();
-                } else {
-                    const auto lo = fetch_dma_byte();
-                    const auto hi = fetch_dma_byte();
-                    if (lo && hi) raw = u16(*lo) | (u16(*hi) << 8);
-                }
-                if (!raw) {
-                    out = 0;
-                    return;
-                }
-                if (dma_signed_) out = i16(*raw);
-                else out = i16(int(*raw) - 32768);
-            };
-            get16(left);
-            if (dma_stereo_) get16(right);
-            else right = left;
-            l = left;
-            r = right;
-        } else {
-            i16 left = 0, right = 0;
-            auto get8 = [&](i16& out) {
-                const auto b = fetch_dma_byte();
-                if (!b) {
-                    out = 0;
-                    return;
-                }
-                if (dma_signed_) out = i16(int(i8(*b)) << 8);
-                else out = i16((int(*b) - 128) << 8);
-            };
-            get8(left);
-            if (dma_stereo_) get8(right);
-            else right = left;
-            l = left;
-            r = right;
-        }
 
-        // The 8237 terminal count and the DSP block boundary normally
-        // coincide; honour the DMA controller if it finishes first.
-        if (!dma_record_ && dma_adpcm_bits_ == 0 &&
-            dma_.terminal_count(dma_channel_) && dma_frames_left_ > 1) {
-            // ADPCM packs several output samples into one DMA byte, so its
-            // DSP block ends on the decoded frame count, not on the byte TC.
-            dma_frames_left_ = 1;
-        }
-        if (dma_frames_left_ > 0) {
-            --dma_frames_left_;
-            if (dma_frames_left_ == 0) {
-                dma_block_end();
-                break;
+            // The 8237 terminal count and the DSP block boundary normally
+            // coincide; honour the DMA controller if it finishes first.
+            if (!dma_record_ && dma_adpcm_bits_ == 0 &&
+                dma_.terminal_count(dma_channel_) && dma_frames_left_ > 1) {
+                // ADPCM packs several output samples into one DMA byte, so its
+                // DSP block ends on the decoded frame count, not on the byte TC.
+                dma_frames_left_ = 1;
+            }
+            if (dma_frames_left_ > 0) {
+                --dma_frames_left_;
+                if (dma_frames_left_ == 0) {
+                    dma_block_end();
+                    break;
+                }
             }
         }
+        // DAC output: linear interpolation between the two latest guest frames
+        // at the fractional clock position.  The old zero-order hold repeated
+        // each guest frame 44100/sample_rate times, which mirrors every guest
+        // band around its own Nyquist (an 11 kHz effect reappears at ~11 kHz)
+        // and reads as a harsh metallic ring.  Only the output values change:
+        // the number of DMA bytes consumed and the block/IRQ timing stay exact.
+        const float frac = float(dma_phase_);
+        l = clamp_i16(float(dma_prev_l_) +
+                      (float(dma_cur_l_) - float(dma_prev_l_)) * frac);
+        r = clamp_i16(float(dma_prev_r_) +
+                      (float(dma_cur_r_) - float(dma_prev_r_)) * frac);
+        // Optional raw stereo PCM capture of the DAC stream before the output
+        // low-pass, for audio debugging/regression comparisons:
+        // OLDBOX_DAC_DUMP=/path/to/capture.pcm (44100 Hz, S16LE, interlaced).
+        static std::FILE* dac_dump = [] {
+            if (const char* p = std::getenv("OLDBOX_DAC_DUMP")) return std::fopen(p, "wb");
+            return static_cast<std::FILE*>(nullptr);
+        }();
+        if (dac_dump) {
+            const i16 pair[2] = {l, r};
+            std::fwrite(pair, 2, 2, dac_dump);
+        }
+        // SB16 DSP analog output stage: a gentle ~16 kHz rolloff on the DMA
+        // playback stream.  Filtering lives on the frame-production path
+        // (this function runs from emulated time), so it cannot smear audio
+        // past the frames the sources actually produced.  The direct-DAC and
+        // silence-command paths stay exact per-sample.
+        dac_lp1_l_ += dac_lp_a_ * (float(l) - dac_lp1_l_);
+        dac_lp2_l_ += dac_lp_a_ * (dac_lp1_l_ - dac_lp2_l_);
+        dac_lp1_r_ += dac_lp_a_ * (float(r) - dac_lp1_r_);
+        dac_lp2_r_ += dac_lp_a_ * (dac_lp1_r_ - dac_lp2_r_);
+        l = clamp_i16(dac_lp2_l_);
+        r = clamp_i16(dac_lp2_r_);
     }
-    last_dac_l_ = l;
-    last_dac_r_ = r;
 }
 
 void Awe64::raise_irq(u8 source) {
@@ -967,12 +1047,43 @@ void Awe64::advance_dma(u32 frames) {
     }
 }
 
+void Awe64::render_fm_block(u32 frames, i16* out) {
+    // Synthesize at twice the internal rate, then decimate through the FIR.
+    // On a real card the YMF262 is clocked near 49.7 kHz and its output
+    // passes the analog low-pass of the SB chain; synthesizing directly at
+    // 44.1 kHz folded every harmonic above 22.05 kHz back into the audible
+    // band, which read as a harsh fizz over FM music (worst with the high
+    // feedback voices DOS drivers use).
+    opl3_.render(fm_os_scratch_.data(), frames * 2);
+    const std::array<float, 64>& taps = fm_decim_fir();
+    for (u32 i = 0; i < frames * 2; ++i) {
+        const u32 p = fm_os_pos_;
+        fm_os_hist_[size_t(p) * 2] = fm_os_scratch_[size_t(i) * 2];
+        fm_os_hist_[size_t(p) * 2 + 1] = fm_os_scratch_[size_t(i) * 2 + 1];
+        fm_os_pos_ = p + 1 == fm_fir_taps ? 0 : p + 1;
+        ++fm_os_count_;
+        // One output frame per two oversampled frames; the FIR window is
+        // consumed oldest-first with h[0] on the newest sample.
+        if ((fm_os_count_ & 1u) != 0) continue;
+        float l = 0.0f, r = 0.0f;
+        u32 idx = fm_os_pos_;
+        for (u32 t = 0; t < fm_fir_taps; ++t) {
+            const float w = taps[fm_fir_taps - 1u - t];
+            l += float(fm_os_hist_[size_t(idx) * 2]) * w;
+            r += float(fm_os_hist_[size_t(idx) * 2 + 1]) * w;
+            idx = idx + 1 == fm_fir_taps ? 0 : idx + 1;
+        }
+        out[size_t(i / 2) * 2] = clamp_i16(l);
+        out[size_t(i / 2) * 2 + 1] = clamp_i16(r);
+    }
+}
+
 void Awe64::advance_fm(u64 frames) {
     // Discard old queued audio when headless, but synthesize every elapsed
     // frame so envelopes, oscillators and LFOs never stop at the queue limit.
     while (frames) {
         const u32 n = u32(std::min<u64>(frames, mix_block));
-        opl3_.render(fm_scratch_.data(), n);
+        render_fm_block(n, fm_scratch_.data());
         for (u32 i = 0; i < n; ++i) {
             const u32 idx = u32(fm_written_ & (mix_ring_size - 1));
             fm_ring_[size_t(idx) * 2] = fm_scratch_[size_t(i) * 2];
@@ -1019,7 +1130,7 @@ void Awe64::mix_internal(u32 frames) {
     while (frames) {
         const u32 n = std::min(frames, mix_block);
         emu_.render(emu_scratch_.data(), n, 44100);
-        if (!dma_tick_clocked_) opl3_.render(fm_scratch_.data(), n);
+        if (!dma_tick_clocked_) render_fm_block(n, fm_scratch_.data());
         for (u32 i = 0; i < n; ++i) {
             i16 fm_l = fm_scratch_[size_t(i) * 2];
             i16 fm_r = fm_scratch_[size_t(i) * 2 + 1];
@@ -1150,8 +1261,9 @@ u8 Awe64::io_read8(u16 port) {
         case 0xa: return dsp_read();
         case 0xc: return (dsp_high_speed_ || reset_state_) ? 0xff : 0x7f;
         case 0xe: {
+            const bool had = dsp_out_pos_ < dsp_out_.size();
             clear_irq(0x01);
-            return dsp_out_pos_ < dsp_out_.size() ? 0xff : 0x7f;
+            return had ? 0xff : 0x7f;
         }
         case 0xf:
             clear_irq(0x02);
